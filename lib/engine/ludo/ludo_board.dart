@@ -91,8 +91,8 @@ class LudoBoard {
       GridPos(7, 9)
     ],
     LudoColor.blue: [
-      GridPos(13, 6), GridPos(12, 6), GridPos(11, 6), GridPos(10, 6),
-      GridPos(9, 6)
+      GridPos(13, 7), GridPos(12, 7), GridPos(11, 7), GridPos(10, 7),
+      GridPos(9, 7)
     ],
   };
 

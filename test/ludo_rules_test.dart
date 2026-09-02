@@ -199,7 +199,7 @@ void main() {
       expect(LudoBoard.coordFor(LudoColor.green, 51, 0, 1), const GridPos(1, 7));
       expect(
           LudoBoard.coordFor(LudoColor.yellow, 51, 0, 1), const GridPos(7, 13));
-      expect(LudoBoard.coordFor(LudoColor.blue, 51, 0, 1), const GridPos(13, 6));
+      expect(LudoBoard.coordFor(LudoColor.blue, 51, 0, 1), const GridPos(13, 7));
     });
   });
 }
