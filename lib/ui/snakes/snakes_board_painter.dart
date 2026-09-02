@@ -109,9 +109,10 @@ class SnakesBoardPainter extends CustomPainter {
       ..strokeWidth = cell * 0.07
       ..color = const Color(0xFF8B5A2B);
     for (final s in [-1.0, 1.0]) {
+      // Same perpendicular offset on BOTH ends -> two parallel rails.
       canvas.drawLine(
         a + p * (halfW * s) + u * (cell * 0.1),
-        b - p * (halfW * s) - u * (cell * 0.1),
+        b + p * (halfW * s) - u * (cell * 0.1),
         railPaint,
       );
     }

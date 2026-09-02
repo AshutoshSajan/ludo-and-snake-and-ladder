@@ -103,8 +103,8 @@ class LudoBoardPainter extends CustomPainter {
       }
     }
 
-    // Center: four triangles pointing in.
-    final c0 = cellRect(6, 6, size);
+    // Center: four triangles pointing in, spanning the 3x3 center block.
+    final c0 = Rect.fromLTWH(6 * cell, 6 * cell, cell * 3, cell * 3);
     final center = c0.center;
     final tl = c0.topLeft, tr = c0.topRight, bl = c0.bottomLeft, br = c0.bottomRight;
     void tri(Path path, LudoColor color) {
