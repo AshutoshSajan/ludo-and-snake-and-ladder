@@ -193,24 +193,17 @@ class LudoBoardPainter extends CustomPainter {
       ..close(), LudoColor.green);
   }
 
-  /// Draws the player name pill on the outer edge of the board arm that
-  /// this color's home column runs down: red bottom, green left,
-  /// yellow top, blue right. Text is rotated to read along the edge.
+  /// Draws the player name pill horizontally on the outer edge of the yard:
+  /// bottom players (red, blue) get it on the bottom, top players
+  /// (green, yellow) on the top. Never overlaps the pieces inside.
   void _drawNamePill(Canvas canvas, GridPos o, double cell, String name,
       Color color, LudoColor seat) {
-    Offset stripC;
-    double rotation = 0;
-    if (seat == LudoColor.red) {
-      stripC = Offset((o.col + 3) * cell, (o.row + 5.5) * cell);
-    } else if (seat == LudoColor.green) {
-      stripC = Offset((o.col + 0.5) * cell, (o.row + 3) * cell);
-      rotation = -math.pi / 2;
-    } else if (seat == LudoColor.yellow) {
-      stripC = Offset((o.col + 3) * cell, (o.row + 0.5) * cell);
-    } else {
-      stripC = Offset((o.col + 5.5) * cell, (o.row + 3) * cell);
-      rotation = math.pi / 2;
-    }
+    final atTop =
+        seat == LudoColor.green || seat == LudoColor.yellow;
+    final stripC = Offset(
+      (o.col + 3) * cell,
+      (o.row + (atTop ? 0.5 : 5.5)) * cell,
+    );
     final tp = TextPainter(
       text: TextSpan(
         text: name,
@@ -226,11 +219,10 @@ class LudoBoardPainter extends CustomPainter {
     )..layout();
     final thickness = cell * 0.84;
     final len = math.min(tp.width + cell * 0.5, cell * 4.7);
-    canvas.save();
-    canvas.translate(stripC.dx, stripC.dy);
-    canvas.rotate(rotation);
     final rect =
         Rect.fromCenter(center: Offset.zero, width: len, height: thickness);
+    canvas.save();
+    canvas.translate(stripC.dx, stripC.dy);
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, Radius.circular(thickness / 2)),
       Paint()..color = AppColors.ivory,

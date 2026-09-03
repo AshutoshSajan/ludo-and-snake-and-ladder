@@ -147,8 +147,18 @@ class LudoSession extends ChangeNotifier {
         sound.home();
         Haptics.medium();
       } else {
-        sound.move();
-        Haptics.light();
+        // Landed on a safe (star) cell?
+        final target = move.to;
+        final onSafe = target >= 0 &&
+            target <= 50 &&
+            LudoBoard.safeCells.contains(LudoBoard.absCell(player.color, target));
+        if (onSafe) {
+          sound.safe();
+          Haptics.light();
+        } else {
+          sound.move();
+          Haptics.light();
+        }
       }
       notifyListeners();
 

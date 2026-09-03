@@ -21,6 +21,7 @@ void main() {
   write('ladder', _arpeggio([523, 659, 784], 0.1));
   write('snake', _snakeHiss());
   write('home', _arpeggio([659, 988], 0.14));
+  write('safe', _arpeggio([784, 1175], 0.09));
   write('win', _arpeggio([523, 659, 784, 1047], 0.16, gap: 0.02));
   stdout.writeln('Sound effects generated in assets/sounds/');
 }
