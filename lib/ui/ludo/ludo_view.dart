@@ -80,17 +80,14 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     _animStep = 0;
     _stepStart = DateTime.now();
     if (anim != null) {
-      _animTimer = Timer.periodic(
-        Duration(milliseconds: anim.stepMs),
-        (t) {
-          if (!mounted) return t.cancel();
-          setState(() {
-            _animStep++;
-            _stepStart = DateTime.now();
-          });
-          if (_animStep >= anim.waypoints.length - 1) t.cancel();
-        },
-      );
+      _animTimer = Timer.periodic(Duration(milliseconds: anim.stepMs), (t) {
+        if (!mounted) return t.cancel();
+        setState(() {
+          _animStep++;
+          _stepStart = DateTime.now();
+        });
+        if (_animStep >= anim.waypoints.length - 1) t.cancel();
+      });
     }
     if (mounted) setState(() {});
   }
@@ -101,7 +98,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         .recordResults(GameKind.ludo, s.rankings);
     final names = [
       for (final id in s.rankings)
-        s.players.where((p) => p.id == id).firstOrNull?.name ?? 'Player'
+        s.players.where((p) => p.id == id).firstOrNull?.name ?? 'Player',
     ];
     if (!mounted) return;
     showDialog(
@@ -112,8 +109,11 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         rankedNames: names,
         onRematch: () {
           Navigator.of(context).pop(); // dialog
-          Navigator.of(context).pushReplacement(MaterialPageRoute(
-              builder: (_) => LudoGameView(seats: widget.seats)));
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => LudoGameView(seats: widget.seats),
+            ),
+          );
         },
         onHome: () {
           Navigator.of(context).pop(); // dialog
@@ -130,7 +130,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       if (s.phase == LudoPhase.awaitingMove &&
           !session.currentIsAI &&
           !session.isBusy)
-        for (final m in legalMoves(s)) m.tokenIndex
+        for (final m in legalMoves(s)) m.tokenIndex,
     };
 
     return Scaffold(
@@ -148,68 +148,73 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         child: Column(
           children: [
             Expanded(
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: LayoutBuilder(builder: (context, cons) {
-                    final boardSize = cons.biggest.width;
-                    final highlights = {
-                      for (final m in legalMoves(s))
-                        if (movable.isNotEmpty && m.to >= 0 && m.to <= 50)
-                          LudoBoard.absCell(s.currentPlayer.color, m.to)
-                    };
-                    final playerNames = {
-                      for (final p in s.players) p.color: p.name
-                    };
-                    // Rebuild every _fx tick: corner breathing glow, spinning
-                    // rings and the per-step hop bounce all live off this.
-                    return AnimatedBuilder(
-                      animation: _fx,
-                      builder: (context, _) {
-                        final pulse =
-                            0.5 + 0.5 * math.sin(_fx.value * 2 * math.pi);
-                        final spin = _fx.value * 2 * math.pi;
-                        final anim = session.activeAnim;
-                        final bounce = anim == null
-                            ? 0.0
-                            : (DateTime.now()
-                                    .difference(_stepStart)
-                                    .inMilliseconds /
-                                    anim.stepMs)
-                                .clamp(0.0, 1.0);
-                        return Stack(
-                          children: [
-                            CustomPaint(
-                              size: Size.square(boardSize),
-                              painter: LudoBoardPainter(
-                                highlightCells: highlights,
-                                playerNames: playerNames,
-                                activeColor: s.currentPlayer.color,
-                                pulse: pulse,
-                                repaint: _fx,
-                              ),
-                            ),
-                            LudoTokenLayer(
-                              state: s,
-                              boardSize: boardSize,
-                              movableTokenIndices: movable,
-                              onTapToken: session.tapToken,
-                              anim: anim,
-                              animStep: _animStep,
-                              currentPlayerIndex: s.currentPlayerIndex,
-                              spinAngle: spin,
-                              bounce: bounce,
-                            ),
-                            // One die per yard corner: everyone can reach
-                            // their own dice without blocking anyone's view.
-                            for (var i = 0; i < s.players.length; i++)
-                              _cornerDice(s, i, boardSize),
-                          ],
-                        );
-                      },
-                    );
-                  }),
-                ),
+              child: Stack(
+                children: [
+                  Center(
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: LayoutBuilder(
+                        builder: (context, cons) {
+                          final boardSize = cons.biggest.width;
+                          final highlights = {
+                            for (final m in legalMoves(s))
+                              if (movable.isNotEmpty && m.to >= 0 && m.to <= 50)
+                                LudoBoard.absCell(s.currentPlayer.color, m.to),
+                          };
+                          final playerNames = {
+                            for (final p in s.players) p.color: p.name,
+                          };
+                          // Rebuild every _fx tick: corner breathing glow, spinning
+                          // rings and the per-step hop bounce all live off this.
+                          return AnimatedBuilder(
+                            animation: _fx,
+                            builder: (context, _) {
+                              final pulse =
+                                  0.5 + 0.5 * math.sin(_fx.value * 2 * math.pi);
+                              final spin = _fx.value * 2 * math.pi;
+                              final anim = session.activeAnim;
+                              final bounce = anim == null
+                                  ? 0.0
+                                  : (DateTime.now()
+                                                .difference(_stepStart)
+                                                .inMilliseconds /
+                                            anim.stepMs)
+                                        .clamp(0.0, 1.0);
+                              return Stack(
+                                children: [
+                                  CustomPaint(
+                                    size: Size.square(boardSize),
+                                    painter: LudoBoardPainter(
+                                      highlightCells: highlights,
+                                      playerNames: playerNames,
+                                      activeColor: s.currentPlayer.color,
+                                      pulse: pulse,
+                                      repaint: _fx,
+                                    ),
+                                  ),
+                                  LudoTokenLayer(
+                                    state: s,
+                                    boardSize: boardSize,
+                                    movableTokenIndices: movable,
+                                    onTapToken: session.tapToken,
+                                    anim: anim,
+                                    animStep: _animStep,
+                                    currentPlayerIndex: s.currentPlayerIndex,
+                                    spinAngle: spin,
+                                    bounce: bounce,
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  // One die per player, pinned to the outer felt corners of the
+                  // play area — outside the board, never inside a player's yard.
+                  for (var i = 0; i < s.players.length; i++) _cornerDice(s, i),
+                ],
               ),
             ),
             _controls(s),
@@ -221,12 +226,14 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
 
   // -------------------------------------------------- per-corner dice HUD
 
-  /// One small die at each player's yard corner, so every human can reach
-  /// their own dice without blocking anyone else's view of the board.
-  Widget _cornerDice(LudoState s, int i, double boardSize) {
+  /// One small die pinned to each player's outer corner of the play area
+  /// (the felt margin around the board), so every human can reach their own
+  /// dice and none of them sit inside a player's yard.
+  Widget _cornerDice(LudoState s, int i) {
     final p = s.players[i];
     final isCurrent = i == s.currentPlayerIndex && !p.finished;
-    final canRoll = isCurrent &&
+    final canRoll =
+        isCurrent &&
         !session.currentIsAI &&
         s.phase == LudoPhase.awaitingRoll &&
         !session.isBusy;
@@ -239,13 +246,16 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     return Align(
       alignment: alignment,
       child: Padding(
-        padding: const EdgeInsets.all(6),
+        padding: const EdgeInsets.all(10),
         child: DiceWidget(
           value: isCurrent ? s.lastRoll : null,
           rolling: _diceRolling && isCurrent,
           enabled: canRoll,
           onTap: session.roll,
-          size: (boardSize * 0.10).clamp(36.0, 56.0),
+          size: (MediaQuery.sizeOf(context).shortestSide * 0.10).clamp(
+            38.0,
+            56.0,
+          ),
           accent: AppColors.ludo(p.color),
         ),
       ),
@@ -264,13 +274,14 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     };
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Text(subtitle,
-          style: const TextStyle(fontSize: 14, color: Colors.white70)),
+      child: Text(
+        subtitle,
+        style: const TextStyle(fontSize: 14, color: Colors.white70),
+      ),
     );
   }
 
   // ---------------------------------------------------------- pause menu
 
   void _showPauseMenu() => showLudoPauseMenu(context, ref, session);
-
 }
