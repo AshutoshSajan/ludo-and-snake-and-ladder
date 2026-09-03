@@ -57,8 +57,14 @@ class LudoTokenLayer extends StatelessWidget {
       for (var i = 0; i < tokens.length; i++) {
         final t = tokens[i];
         final off = _stackOffset(i, tokens.length, cell);
-        final center = LudoBoardPainter.cellCenter(
+        var center = LudoBoardPainter.cellCenter(
             cellPos.row, cellPos.col, Size.square(boardSize));
+        // Yard slots sit on cell centers (x.5); the white staging square is
+        // centered on the yard's grid intersection, so nudge yard tokens half
+        // a cell up-left to align the 2x2 grid evenly inside it.
+        if (t.pos == -1) {
+          center -= Offset(cell * 0.5, cell * 0.5);
+        }
         final playerIdx =
             state.players.indexWhere((p) => p.color == t.color);
         final canMove = state.phase == LudoPhase.awaitingMove &&
@@ -75,9 +81,7 @@ class LudoTokenLayer extends StatelessWidget {
             top: center.dy - cell * 0.44 + off.dy,
             child: GestureDetector(
               onTap: canMove ? () => onTapToken(t.index) : null,
-              child: _tokenStack(t, cell, canMove,
-                  isActivePlayer: playerIdx == currentPlayerIndex &&
-                      state.phase != LudoPhase.gameOver),
+              child: _tokenStack(t, cell, canMove),
             ),
           ),
         );
@@ -138,16 +142,16 @@ class LudoTokenLayer extends StatelessWidget {
         math.sin(ang) * cell * maxShift);
   }
 
-  /// Pawn with an optional spinning indicator ring sitting at its base.
-  Widget _tokenStack(LudoToken t, double cell, bool canMove,
-      {required bool isActivePlayer}) {
+  /// Pawn with a spinning indicator ring at its base — shown only when the
+  /// token is actually movable (tappable), never for idle pieces.
+  Widget _tokenStack(LudoToken t, double cell, bool canMove) {
     const pw = 0.60, ph = 0.88; // pawn width/height as a fraction of a cell
     final dot = SizedBox(
       width: cell * pw,
       height: cell * ph,
       child: _tokenDot(t, cell, canMove),
     );
-    if (!isActivePlayer) return dot;
+    if (!canMove) return dot;
     final ringSize = cell * pw * 1.55;
     return SizedBox(
       width: cell * pw,

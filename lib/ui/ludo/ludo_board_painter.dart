@@ -139,7 +139,7 @@ class LudoBoardPainter extends CustomPainter {
       final cells = LudoBoard.homeColumns[color]!;
       for (final p in cells) {
         final r = cellRect(p.row, p.col, size).deflate(0.6);
-        canvas.drawRect(r, Paint()..color = AppColors.ludo(color).withValues(alpha: 0.85));
+        canvas.drawRect(r, Paint()..color = AppColors.ludo(color));
         canvas.drawRect(r, line);
       }
     }
@@ -246,21 +246,24 @@ class LudoBoardPainter extends CustomPainter {
     canvas.restore();
   }
 
-  /// Solid triangular arrowhead at [c] pointing along [dir].
+  /// Simple flat arrow "→" at [c] pointing along [dir]: a straight shaft
+  /// with a V-shaped head, drawn as strokes.
   void _drawArrow(Canvas canvas, Offset c, Offset dir, double r, Color color) {
     final d = dir / dir.distance;
     final perp = Offset(-d.dy, d.dx);
-    final tip = c + d * r;
-    final b1 = c - d * (r * 0.5) + perp * (r * 0.85);
-    final b2 = c - d * (r * 0.5) - perp * (r * 0.85);
-    canvas.drawPath(
-      Path()
-        ..moveTo(tip.dx, tip.dy)
-        ..lineTo(b1.dx, b1.dy)
-        ..lineTo(b2.dx, b2.dy)
-        ..close(),
-      Paint()..color = color,
-    );
+    final tail = c - d * (r * 0.75);
+    final tip = c + d * (r * 0.75);
+    final headLen = r * 0.55;
+    final headSpread = r * 0.55;
+    final p = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = r * 0.28
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..color = color;
+    canvas.drawLine(tail, tip, p);
+    canvas.drawLine(tip, tip - d * headLen + perp * headSpread, p);
+    canvas.drawLine(tip, tip - d * headLen - perp * headSpread, p);
   }
 
   void _drawStar(Canvas canvas, Offset c, double r, Color color) {
