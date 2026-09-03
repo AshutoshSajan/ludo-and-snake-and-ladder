@@ -35,11 +35,21 @@ class MoveAnim {
     required this.tokenGid,
     required this.waypoints,
     required this.stepMs,
+    this.startInYard = false,
+    this.endInYard = false,
   });
 
   final int tokenGid;
   final List<GridPos> waypoints;
   final int stepMs;
+
+  /// True when the first waypoint is a yard staging slot (spawn move), so
+  /// the ghost's resting offset matches the settled yard token exactly.
+  final bool startInYard;
+
+  /// True when the last waypoint is the token's finished yard slot, so the
+  /// pawn walks straight into its own corner instead of the board center.
+  final bool endInYard;
 
   int get totalMs => waypoints.length * stepMs + 120;
 }
@@ -128,19 +138,27 @@ class LudoSession extends ChangeNotifier {
     final tokens = state.tokensOf(state.currentPlayerIndex);
     final token = tokens[move.tokenIndex];
 
-    // Waypoints: cell-by-cell along the path.
+    // Waypoints: cell-by-cell along the path. A finishing move (to == 56)
+    // walks straight into the token's own yard slot — never the board center —
+    // so the pawn ends in its own corner and stays there.
+    final endInYard = move.to == 56;
+    final startInYard = move.from == -1;
     final waypoints = <GridPos>[
       LudoBoard.coordFor(player.color, move.from, token.index, 4),
       if (move.from == -1)
         LudoBoard.coordFor(player.color, 0, token.index, 4)
       else
         for (var r = move.from + 1; r <= move.to; r++)
-          LudoBoard.coordFor(player.color, r, token.index, 4),
+          r == 56
+              ? LudoBoard.yardSlot(player.color, token.index)
+              : LudoBoard.coordFor(player.color, r, token.index, 4),
     ];
     activeAnim = MoveAnim(
       tokenGid: token.gid,
       waypoints: waypoints,
       stepMs: move.from == -1 ? 200 : 130,
+      startInYard: startInYard,
+      endInYard: endInYard,
     );
     // One tick per hop, synced to each step of the walk animation.
     final stepMs = activeAnim!.stepMs;

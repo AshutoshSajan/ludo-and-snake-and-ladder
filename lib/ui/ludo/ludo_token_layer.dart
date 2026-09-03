@@ -95,8 +95,14 @@ class LudoTokenLayer extends StatelessWidget {
     if (anim != null) {
       final step = animStep.clamp(0, anim!.waypoints.length - 1);
       final pos = anim!.waypoints[step];
-      final center = LudoBoardPainter.cellCenter(
+      // Yard-anchored endpoints (spawn hop / finishing move) rest at the same
+      // nudged spot as the settled yard token, so there is no visible slide
+      // when the ghost hands off to the real widget.
+      final yardAnchor = (step == 0 && anim!.startInYard) ||
+          (step == anim!.waypoints.length - 1 && anim!.endInYard);
+      var center = LudoBoardPainter.cellCenter(
           pos.row, pos.col, Size.square(boardSize));
+      if (yardAnchor) center -= Offset(cell * 0.5, cell * 0.5);
       final t = state.tokenByGid(anim!.tokenGid);
       final color = AppColors.ludo(t.color);
       // One-size-pulse per step: grows then shrinks across each hop.
@@ -149,9 +155,7 @@ class LudoTokenLayer extends StatelessWidget {
   /// Yard slot position for a finished token — the same slot it launched
   /// from, guaranteeing finished pieces never share a spot.
   static GridPos _finishedSlot(LudoColor color, int slot) {
-    final origin = LudoBoard.yardOrigin[color]!;
-    final off = LudoBoard.yardSlotOffsets[slot.clamp(0, 3)];
-    return GridPos(origin.row + off.row, origin.col + off.col);
+    return LudoBoard.yardSlot(color, slot);
   }
 
   /// Pawn with a spinning indicator ring at its base — shown only when the

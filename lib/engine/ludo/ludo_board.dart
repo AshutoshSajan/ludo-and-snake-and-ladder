@@ -129,16 +129,20 @@ class LudoBoard {
   /// Board coordinates for a token at relative position [r]
   /// (r must be 0..56; 56 maps to board center).
   static GridPos coordFor(LudoColor color, int r, int stackIndex, int stackSize) {
-    if (r == -1) {
-      final origin = yardOrigin[color]!;
-      final off = yardSlotOffsets[stackIndex.clamp(0, 3)];
-      return GridPos(origin.row + off.row, origin.col + off.col);
-    }
+    if (r == -1) return yardSlot(color, stackIndex);
     if (r == 56) return center;
     if (r <= 50) {
       return track[absCell(color, r)];
     }
     return homeColumns[color]![r - 51];
+  }
+
+  /// Yard staging slot for a token: its resting spot while waiting in base
+  /// and its permanent corner spot once it finishes (pos 56).
+  static GridPos yardSlot(LudoColor color, int tokenIndex) {
+    final origin = yardOrigin[color]!;
+    final off = yardSlotOffsets[tokenIndex.clamp(0, 3)];
+    return GridPos(origin.row + off.row, origin.col + off.col);
   }
 
   /// Human-readable cell name for debugging.
