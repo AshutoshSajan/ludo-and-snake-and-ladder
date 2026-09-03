@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,14 +27,21 @@ class LudoGameView extends ConsumerStatefulWidget {
   ConsumerState<LudoGameView> createState() => _LudoGameViewState();
 }
 
-class _LudoGameViewState extends ConsumerState<LudoGameView> {
+class _LudoGameViewState extends ConsumerState<LudoGameView>
+    with SingleTickerProviderStateMixin {
   late LudoSession session;
   int _animStep = 0;
   Timer? _animTimer;
+  late final AnimationController _fx;
+  DateTime _stepStart = DateTime.now();
 
   @override
   void initState() {
     super.initState();
+    _fx = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
     session = LudoSession(
       seats: widget.seats,
       profiles: ref.read(profilesProvider.notifier),
@@ -46,6 +54,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView> {
   @override
   void dispose() {
     _animTimer?.cancel();
+    _fx.dispose();
     session.removeListener(_onSessionChanged);
     session.dispose();
     super.dispose();
@@ -55,12 +64,16 @@ class _LudoGameViewState extends ConsumerState<LudoGameView> {
     final anim = session.activeAnim;
     _animTimer?.cancel();
     _animStep = 0;
+    _stepStart = DateTime.now();
     if (anim != null) {
       _animTimer = Timer.periodic(
         Duration(milliseconds: anim.stepMs),
         (t) {
           if (!mounted) return t.cancel();
-          setState(() => _animStep++);
+          setState(() {
+            _animStep++;
+            _stepStart = DateTime.now();
+          });
           if (_animStep >= anim.waypoints.length - 1) t.cancel();
         },
       );
@@ -127,29 +140,56 @@ class _LudoGameViewState extends ConsumerState<LudoGameView> {
                   aspectRatio: 1,
                   child: LayoutBuilder(builder: (context, cons) {
                     final boardSize = cons.biggest.width;
-                    return Stack(
-                      children: [
-                        CustomPaint(
-                          size: Size.square(boardSize),
-                          painter: LudoBoardPainter(highlightCells: {
-                            for (final m in legalMoves(s))
-                              if (movable.isNotEmpty &&
-                                  m.to >= 0 &&
-                                  m.to <= 50)
-                                LudoBoard.absCell(
-                                    s.currentPlayer.color, m.to)
-                          }),
-                        ),
-                        LudoTokenLayer(
-                          state: s,
-                          boardSize: boardSize,
-                          movableTokenIndices: movable,
-                          onTapToken: session.tapToken,
-                          anim: session.activeAnim,
-                          animStep: _animStep,
-                          currentPlayerIndex: s.currentPlayerIndex,
-                        ),
-                      ],
+                    final highlights = {
+                      for (final m in legalMoves(s))
+                        if (movable.isNotEmpty && m.to >= 0 && m.to <= 50)
+                          LudoBoard.absCell(s.currentPlayer.color, m.to)
+                    };
+                    final playerNames = {
+                      for (final p in s.players) p.color: p.name
+                    };
+                    // Rebuild every _fx tick: corner breathing glow, spinning
+                    // rings and the per-step hop bounce all live off this.
+                    return AnimatedBuilder(
+                      animation: _fx,
+                      builder: (context, _) {
+                        final pulse =
+                            0.5 + 0.5 * math.sin(_fx.value * 2 * math.pi);
+                        final spin = _fx.value * 2 * math.pi;
+                        final anim = session.activeAnim;
+                        final bounce = anim == null
+                            ? 0.0
+                            : (DateTime.now()
+                                    .difference(_stepStart)
+                                    .inMilliseconds /
+                                    anim.stepMs)
+                                .clamp(0.0, 1.0);
+                        return Stack(
+                          children: [
+                            CustomPaint(
+                              size: Size.square(boardSize),
+                              painter: LudoBoardPainter(
+                                highlightCells: highlights,
+                                playerNames: playerNames,
+                                activeColor: s.currentPlayer.color,
+                                pulse: pulse,
+                                repaint: _fx,
+                              ),
+                            ),
+                            LudoTokenLayer(
+                              state: s,
+                              boardSize: boardSize,
+                              movableTokenIndices: movable,
+                              onTapToken: session.tapToken,
+                              anim: anim,
+                              animStep: _animStep,
+                              currentPlayerIndex: s.currentPlayerIndex,
+                              spinAngle: spin,
+                              bounce: bounce,
+                            ),
+                          ],
+                        );
+                      },
                     );
                   }),
                 ),

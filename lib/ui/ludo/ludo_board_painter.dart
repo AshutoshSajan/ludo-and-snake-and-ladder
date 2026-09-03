@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 
 import '../../engine/ludo/ludo_board.dart';
@@ -9,8 +10,17 @@ import '../theme.dart';
 /// Paints the classic 15x15 Ludo board: ivory playing field, lacquered
 /// quadrant yards, colored home columns and a four-triangle center.
 class LudoBoardPainter extends CustomPainter {
-  LudoBoardPainter({this.highlightCells = const {}});
+  LudoBoardPainter({
+    this.highlightCells = const {},
+    this.playerNames = const {},
+    this.activeColor,
+    this.pulse = 0,
+    super.repaint,
+  });
   final Set<int> highlightCells; // absolute track indices
+  final Map<LudoColor, String> playerNames; // color -> seat name
+  final LudoColor? activeColor; // corner that breathes on their turn
+  final double pulse; // 0..1 phase of the breathing glow
 
   static const n = 15.0;
 
@@ -35,28 +45,66 @@ class LudoBoardPainter extends CustomPainter {
       bg,
     );
 
-    // Yards.
+    // Yards: lacquered quadrant + avatar well + name pill, Ludo-King style.
     for (final color in LudoColor.values) {
       final o = LudoBoard.yardOrigin[color]!;
-      final r = Rect.fromLTWH(o.col * cell, o.row * cell, cell * 6, cell * 6);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(r, Radius.circular(cell * 0.5)),
-        Paint()..color = AppColors.ludo(color),
-      );
+      final yard = Rect.fromLTWH(o.col * cell, o.row * cell, cell * 6, cell * 6);
+      final yardRRect =
+          RRect.fromRectAndRadius(yard, Radius.circular(cell * 0.5));
+      final base = AppColors.ludo(color);
+      final isActive = color == activeColor;
+      final isDimmed = activeColor != null && !isActive;
+      canvas.drawRRect(yardRRect, Paint()..color = base);
       // Inner well.
-      canvas.drawCircle(
-        Offset(o.col * cell + cell * 3, o.row * cell + cell * 3),
-        cell * 1.9,
-        Paint()..color = AppColors.ivory,
-      );
-      canvas.drawCircle(
-        Offset(o.col * cell + cell * 3, o.row * cell + cell * 3),
-        cell * 1.9,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = cell * 0.08
-          ..color = AppColors.ludo(color).withValues(alpha: 0.55),
-      );
+      final wellC = Offset(o.col * cell + cell * 3, o.row * cell + cell * 3);
+      canvas.drawCircle(wellC, cell * 1.9, Paint()..color = AppColors.ivory);
+      final name = playerNames[color];
+      if (name == null) {
+        // Empty seat: plain ringed well.
+        canvas.drawCircle(
+          wellC,
+          cell * 1.9,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = cell * 0.08
+            ..color = base.withValues(alpha: 0.55),
+        );
+      } else {
+        // Player avatar icon inside the well.
+        _drawAvatar(canvas, wellC, cell, base);
+        if (isActive) {
+          // Pulsing halo ring around the well.
+          canvas.drawCircle(
+            wellC,
+            cell * 2.0,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = cell * 0.12
+              ..color = Colors.white.withValues(alpha: 0.30 + 0.50 * pulse),
+          );
+        }
+        // Name pill along the bottom edge of the yard.
+        _drawNamePill(canvas, yard, name, base);
+      }
+      // Turn lighting: active corner glows bright, others are dimmed.
+      if (isDimmed) {
+        canvas.drawRRect(
+          yardRRect,
+          Paint()..color = Colors.black.withValues(alpha: 0.22),
+        );
+      } else if (isActive) {
+        canvas.drawRRect(
+          yardRRect,
+          Paint()..color = Colors.white.withValues(alpha: 0.04 + 0.08 * pulse),
+        );
+        canvas.drawRRect(
+          yardRRect,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = cell * 0.16
+            ..color = Colors.white.withValues(alpha: 0.35 + 0.55 * pulse),
+        );
+      }
     }
 
     // Track cells.
@@ -134,6 +182,63 @@ class LudoBoardPainter extends CustomPainter {
       ..close(), LudoColor.red);
   }
 
+  void _drawAvatar(Canvas canvas, Offset c, double cell, Color color) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(Icons.person.codePoint),
+        style: TextStyle(
+          fontFamily: Icons.person.fontFamily,
+          fontSize: cell * 2.1,
+          height: 1.0,
+          color: color,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(
+      canvas,
+      Offset(c.dx - tp.width / 2, c.dy - tp.height / 2 - cell * 0.12),
+    );
+  }
+
+  void _drawNamePill(Canvas canvas, Rect yard, String name, Color color) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: name,
+        style: TextStyle(
+          fontSize: yard.width * 0.14,
+          fontWeight: FontWeight.w800,
+          color: color,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+      ellipsis: '…',
+    )..layout();
+    final pillH = tp.height + yard.width * 0.09;
+    final pillW = math.min(tp.width + yard.width * 0.28, yard.width * 0.9);
+    final rect = Rect.fromCenter(
+      center: Offset(yard.center.dx, yard.bottom - pillH * 0.9),
+      width: pillW,
+      height: pillH,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, Radius.circular(pillH / 2)),
+      Paint()..color = AppColors.ivory,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, Radius.circular(pillH / 2)),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = color.withValues(alpha: 0.5),
+    );
+    tp.paint(
+      canvas,
+      Offset(rect.center.dx - tp.width / 2, rect.center.dy - tp.height / 2),
+    );
+  }
+
   void _drawStar(Canvas canvas, Offset c, double r, Color color) {
     final path = Path();
     for (var i = 0; i < 10; i++) {
@@ -149,5 +254,7 @@ class LudoBoardPainter extends CustomPainter {
   @override
   bool shouldRepaint(LudoBoardPainter old) =>
       old.highlightCells.length != highlightCells.length ||
-      !old.highlightCells.containsAll(highlightCells);
+      !old.highlightCells.containsAll(highlightCells) ||
+      old.activeColor != activeColor ||
+      !mapEquals(old.playerNames, playerNames);
 }
