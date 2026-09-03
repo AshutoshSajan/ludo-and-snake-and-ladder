@@ -1,8 +1,9 @@
 /// Static board geometry for the classic 15x15 Ludo board.
 ///
-/// Track cells are listed counter-clockwise (the classic play direction).
-/// Index 0 is Red's start cell, which sits directly beside Red's own yard.
-/// Start offsets: red 0, blue 13, yellow 26, green 39.
+/// Track cells are listed clockwise.
+/// Index 0 is the left-arm edge cell (8,0). Each color's start cell sits
+/// directly beside its own yard: red (13,6), green (6,1), yellow (1,8),
+/// blue (8,13). Start offsets: green 3, yellow 16, blue 29, red 42.
 library;
 
 import 'ludo_models.dart';
@@ -26,53 +27,56 @@ class GridPos {
 class LudoBoard {
   LudoBoard._();
 
-  /// 52 main-track cells counter-clockwise, starting at Red's start cell
-  /// (8,1) — the cell directly above Red's bottom-left yard.
+  /// 52 main-track cells clockwise, starting at the left-arm edge cell
+  /// (8,0). Direction: up the left arm, across the top, down the right
+  /// arm, along the bottom.
   static const List<GridPos> track = [
-    // Left arm, row 8, cols 1..5 (5 cells) — beside Red's yard.
-    GridPos(8, 1), GridPos(8, 2), GridPos(8, 3), GridPos(8, 4), GridPos(8, 5),
-    // Bottom arm, col 6, rows 9..14 (6 cells)
-    GridPos(9, 6), GridPos(10, 6), GridPos(11, 6), GridPos(12, 6),
-    GridPos(13, 6), GridPos(14, 6),
-    GridPos(14, 7),
-    // Bottom arm, col 8, rows 14..9 (6 cells)
-    GridPos(14, 8), GridPos(13, 8), GridPos(12, 8), GridPos(11, 8),
-    GridPos(10, 8), GridPos(9, 8),
-    // Right arm, row 8, cols 9..14 (6 cells)
-    GridPos(8, 9), GridPos(8, 10), GridPos(8, 11), GridPos(8, 12),
-    GridPos(8, 13), GridPos(8, 14),
-    GridPos(7, 14),
-    // Right arm, row 6, cols 14..9 (6 cells)
-    GridPos(6, 14), GridPos(6, 13), GridPos(6, 12), GridPos(6, 11),
-    GridPos(6, 10), GridPos(6, 9),
-    // Top arm, col 8, rows 5..0 (6 cells)
-    GridPos(5, 8), GridPos(4, 8), GridPos(3, 8), GridPos(2, 8), GridPos(1, 8),
-    GridPos(0, 8),
-    GridPos(0, 7),
-    // Top arm, col 6, rows 0..5 (6 cells)
-    GridPos(0, 6), GridPos(1, 6), GridPos(2, 6), GridPos(3, 6), GridPos(4, 6),
-    GridPos(5, 6),
-    // Left arm, row 6, cols 5..0 (6 cells)
-    GridPos(6, 5), GridPos(6, 4), GridPos(6, 3), GridPos(6, 2), GridPos(6, 1),
-    GridPos(6, 0),
-    GridPos(7, 0),
+    // Left arm going up: (8,0), (7,0), then row 6, cols 0..5 (6 cells).
     GridPos(8, 0),
+    GridPos(7, 0),
+    GridPos(6, 0), GridPos(6, 1), GridPos(6, 2), GridPos(6, 3),
+    GridPos(6, 4), GridPos(6, 5),
+    // Top arm, col 6, rows 5..0 (6 cells)
+    GridPos(5, 6), GridPos(4, 6), GridPos(3, 6), GridPos(2, 6),
+    GridPos(1, 6), GridPos(0, 6),
+    GridPos(0, 7),
+    // Top arm, col 8, rows 0..5 (6 cells)
+    GridPos(0, 8), GridPos(1, 8), GridPos(2, 8), GridPos(3, 8),
+    GridPos(4, 8), GridPos(5, 8),
+    // Right arm, row 6, cols 9..14 (6 cells)
+    GridPos(6, 9), GridPos(6, 10), GridPos(6, 11), GridPos(6, 12),
+    GridPos(6, 13), GridPos(6, 14),
+    GridPos(7, 14),
+    // Right arm, row 8, cols 14..9 (6 cells)
+    GridPos(8, 14), GridPos(8, 13), GridPos(8, 12), GridPos(8, 11),
+    GridPos(8, 10), GridPos(8, 9),
+    // Bottom arm, col 8, rows 9..14 (6 cells)
+    GridPos(9, 8), GridPos(10, 8), GridPos(11, 8), GridPos(12, 8),
+    GridPos(13, 8), GridPos(14, 8),
+    GridPos(14, 7),
+    // Bottom arm, col 6, rows 14..9 (6 cells)
+    GridPos(14, 6), GridPos(13, 6), GridPos(12, 6), GridPos(11, 6),
+    GridPos(10, 6), GridPos(9, 6),
+    // Left arm, row 8, cols 5..1 (5 cells)
+    GridPos(8, 5), GridPos(8, 4), GridPos(8, 3), GridPos(8, 2),
+    GridPos(8, 1),
   ];
 
   static const int trackLength = 52;
 
   /// Absolute main-track index where each color enters. Each start cell is
-  /// adjacent to that color's own yard: red (8,1), blue (13,8),
-  /// yellow (6,13), green (1,6).
+  /// adjacent to that color's own yard: green (6,1), yellow (1,8),
+  /// blue (8,13), red (13,6).
   static const Map<LudoColor, int> startIndex = {
-    LudoColor.red: 0,
-    LudoColor.blue: 13,
-    LudoColor.yellow: 26,
-    LudoColor.green: 39,
+    LudoColor.red: 42,
+    LudoColor.green: 3,
+    LudoColor.yellow: 16,
+    LudoColor.blue: 29,
   };
 
-  /// Star (safe) cells on the main track, in absolute track indices.
-  static const Set<int> safeCells = {0, 8, 13, 21, 26, 34, 39, 47};
+  /// Star (safe) cells on the main track, in absolute track indices
+  /// (each start cell plus the cell 8 steps ahead of it).
+  static const Set<int> safeCells = {3, 11, 16, 24, 29, 37, 42, 50};
 
   /// Turn order.
   static const List<LudoColor> colorOrder = [
@@ -82,21 +86,22 @@ class LudoBoard {
     LudoColor.blue,
   ];
 
-  /// Home column cells (r = 1..5 mapped to 51..55) per color.
+  /// Home column cells (r = 1..5 mapped to 51..55) per color. Each color
+  /// leaves the main track at the edge cell of its own arm and walks inward.
   static const Map<LudoColor, List<GridPos>> homeColumns = {
     LudoColor.red: [
-      GridPos(7, 1), GridPos(7, 2), GridPos(7, 3), GridPos(7, 4), GridPos(7, 5)
-    ],
-    LudoColor.green: [
-      GridPos(1, 7), GridPos(2, 7), GridPos(3, 7), GridPos(4, 7), GridPos(5, 7)
-    ],
-    LudoColor.yellow: [
-      GridPos(7, 13), GridPos(7, 12), GridPos(7, 11), GridPos(7, 10),
-      GridPos(7, 9)
-    ],
-    LudoColor.blue: [
       GridPos(13, 7), GridPos(12, 7), GridPos(11, 7), GridPos(10, 7),
       GridPos(9, 7)
+    ],
+    LudoColor.green: [
+      GridPos(7, 1), GridPos(7, 2), GridPos(7, 3), GridPos(7, 4), GridPos(7, 5)
+    ],
+    LudoColor.yellow: [
+      GridPos(1, 7), GridPos(2, 7), GridPos(3, 7), GridPos(4, 7), GridPos(5, 7)
+    ],
+    LudoColor.blue: [
+      GridPos(7, 13), GridPos(7, 12), GridPos(7, 11), GridPos(7, 10),
+      GridPos(7, 9)
     ],
   };
 
