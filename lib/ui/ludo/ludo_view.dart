@@ -252,9 +252,9 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
           rolling: _diceRolling && isCurrent,
           enabled: canRoll,
           onTap: session.roll,
-          size: (MediaQuery.sizeOf(context).shortestSide * 0.10).clamp(
-            38.0,
-            56.0,
+          size: (MediaQuery.sizeOf(context).shortestSide * 0.15).clamp(
+            60.0,
+            92.0,
           ),
           accent: AppColors.ludo(p.color),
         ),

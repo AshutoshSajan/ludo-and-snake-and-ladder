@@ -13,7 +13,7 @@ class DiceWidget extends StatefulWidget {
     required this.rolling,
     required this.enabled,
     required this.onTap,
-    this.size = 72,
+    this.size = 100,
     this.accent = AppColors.gold,
   });
 
@@ -39,8 +39,8 @@ class _DiceWidgetState extends State<DiceWidget>
     5: (math.pi / 2, 0.0),
     6: (math.pi, 0.0),
   };
-  static const double _tiltX = -0.30;
-  static const double _tiltY = 0.45;
+  static const double _tiltX = -0.20;
+  static const double _tiltY = 0.28;
   static const double _tau = 2 * math.pi;
   static const _rollDuration = Duration(milliseconds: 1100);
   static const _settleDuration = Duration(milliseconds: 520);
@@ -166,7 +166,7 @@ class _DiceWidgetState extends State<DiceWidget>
                       painter: _CubePainter(
                         ax: _ax,
                         by: _by,
-                        edge: widget.size * 0.55 * _scale,
+                        edge: widget.size * 0.68 * _scale,
                         accent: widget.accent,
                       ),
                     ),
@@ -190,11 +190,13 @@ class _V {
 }
 
 class _Face {
-  _Face(this.value, this.normal, this.corners, this.pips);
+  _Face(this.value, this.normal, this.corners, this.pips, this.uDir, this.vDir);
   final int value;
   final _V normal;
   final List<_V> corners;
   final List<_V> pips;
+  final _V uDir; // unit vector along the face's u axis
+  final _V vDir; // unit vector along the face's v axis
 }
 
 class _CubePainter extends CustomPainter {
@@ -220,6 +222,7 @@ class _CubePainter extends CustomPainter {
   };
 
   static const _shadeColor = Color(0xFFCDC5AE);
+  static const double _tau = 2 * math.pi;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -240,7 +243,7 @@ class _CubePainter extends CustomPainter {
 
     final cosA = math.cos(ax), sinA = math.sin(ax);
     final cosB = math.cos(by), sinB = math.sin(by);
-    final d = edge * 5.0; // camera distance for perspective
+    final d = edge * 10.0; // near-orthographic: side faces stay flat & clear
 
     // Rotate (Ry then Rx) and project. Larger z is closer to the viewer.
     (double, double, double) rot(_V p) {
@@ -264,7 +267,16 @@ class _CubePainter extends CustomPainter {
       final pips = [
         for (final p in _pips[value]!) o + u * p[0] + v * p[1],
       ];
-      faces.add(_Face(value, n, corners, pips));
+      final ul = u.x * u.x + u.y * u.y + u.z * u.z;
+      final vl = v.x * v.x + v.y * v.y + v.z * v.z;
+      faces.add(_Face(
+        value,
+        n,
+        corners,
+        pips,
+        _V(u.x / math.sqrt(ul), u.y / math.sqrt(ul), u.z / math.sqrt(ul)),
+        _V(v.x / math.sqrt(vl), v.y / math.sqrt(vl), v.z / math.sqrt(vl)),
+      ));
     }
 
     addFace(1, _V(0, 0, 1), _V(-h, -h, h), _V(2 * h, 0, 0), _V(0, 2 * h, 0));
@@ -304,9 +316,50 @@ class _CubePainter extends CustomPainter {
       canvas.drawPath(path, facePaint);
       canvas.drawPath(path, borderPaint);
 
-      final pipR = edge * 0.11;
+      final pipR = edge * 0.105;
       for (final p in f.pips) {
-        canvas.drawCircle(proj(rot(p)), pipR, pipPaint);
+        // Draw the pip as a true circle lying IN the face plane: sample the
+        // 3D circle around the pip center and project every point, so from
+        // any angle it reads as part of the surface, never floating above it.
+        final disc = Path();
+        const seg = 20;
+        for (var i = 0; i <= seg; i++) {
+          final a = _tau * i / seg;
+          final pt = p +
+              f.uDir * (math.cos(a) * pipR) +
+              f.vDir * (math.sin(a) * pipR);
+          final s = proj(rot(pt));
+          if (i == 0) {
+            disc.moveTo(s.dx, s.dy);
+          } else {
+            disc.lineTo(s.dx, s.dy);
+          }
+        }
+        disc.close();
+        canvas.drawPath(disc, pipPaint);
+
+        // Engraved depth: a smaller offset disc picking up face highlight.
+        final hi = Path();
+        final liftR = pipR * 0.55;
+        final liftOff = edge * 0.022;
+        for (var i = 0; i <= seg; i++) {
+          final a = _tau * i / seg;
+          final pt = p +
+              f.uDir * (math.cos(a) * liftR - liftOff) +
+              f.vDir * (math.sin(a) * liftR - liftOff);
+          final s = proj(rot(pt));
+          if (i == 0) {
+            hi.moveTo(s.dx, s.dy);
+          } else {
+            hi.lineTo(s.dx, s.dy);
+          }
+        }
+        hi.close();
+        canvas.drawPath(
+          hi,
+          Paint()
+            ..color = Color.lerp(pipPaint.color, AppColors.ivory, 0.45)!,
+        );
       }
     }
   }
