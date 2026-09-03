@@ -71,8 +71,8 @@ class LudoTokenLayer extends StatelessWidget {
             key: ValueKey('tok-${t.gid}'),
             duration: const Duration(milliseconds: 160),
             curve: Curves.easeOut,
-            left: center.dx - cell * 0.34 + off.dx,
-            top: center.dy - cell * 0.34 + off.dy,
+            left: center.dx - cell * 0.30 + off.dx,
+            top: center.dy - cell * 0.44 + off.dy,
             child: GestureDetector(
               onTap: canMove ? () => onTapToken(t.index) : null,
               child: _tokenStack(t, cell, canMove,
@@ -109,20 +109,15 @@ class LudoTokenLayer extends StatelessWidget {
                     size: cell * 1.08,
                     angle: spinAngle,
                     color: AppColors.gold),
-                Container(
-                  width: cell * 0.68,
-                  height: cell * 0.68,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: color,
-                    border: Border.all(color: Colors.white, width: 2),
-                    boxShadow: [
-                      BoxShadow(
-                        color: color.withValues(alpha: 0.6),
-                        blurRadius: 10,
-                        spreadRadius: 2,
-                      ),
-                    ],
+                SizedBox(
+                  width: cell * 0.62,
+                  height: cell * 0.90,
+                  child: CustomPaint(
+                    painter: _PawnPainter(
+                      color: color,
+                      outline: Colors.white,
+                      strokeWidth: 2,
+                    ),
                   ),
                 ),
               ],
@@ -146,24 +141,23 @@ class LudoTokenLayer extends StatelessWidget {
   /// Pawn with an optional spinning indicator ring sitting at its base.
   Widget _tokenStack(LudoToken t, double cell, bool canMove,
       {required bool isActivePlayer}) {
-    const dotSize = 0.68;
+    const pw = 0.60, ph = 0.88; // pawn width/height as a fraction of a cell
     final dot = SizedBox(
-      width: cell * dotSize,
-      height: cell * dotSize,
+      width: cell * pw,
+      height: cell * ph,
       child: _tokenDot(t, cell, canMove),
     );
     if (!isActivePlayer) return dot;
-    const ringGrow = 0.30;
-    final ringSize = cell * dotSize * (1 + ringGrow);
+    final ringSize = cell * pw * 1.55;
     return SizedBox(
-      width: cell * dotSize,
-      height: cell * dotSize,
+      width: cell * pw,
+      height: cell * ph,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           Positioned(
-            left: (cell * dotSize - ringSize) / 2,
-            top: (cell * dotSize - ringSize) / 2 + cell * 0.12,
+            left: (cell * pw - ringSize) / 2,
+            top: cell * ph - ringSize * 0.62,
             child: _SpinRing(
               size: ringSize,
               angle: spinAngle,
@@ -178,29 +172,12 @@ class LudoTokenLayer extends StatelessWidget {
 
   Widget _tokenDot(LudoToken t, double cell, bool canMove) {
     final color = AppColors.ludo(t.color);
-    return Container(
-      width: cell * 0.68,
-      height: cell * 0.68,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: 3,
-            offset: const Offset(0, 2),
-          ),
-          if (canMove)
-            BoxShadow(
-                color: AppColors.gold.withValues(alpha: 0.7), blurRadius: 8),
-        ],
-      ),
-      child: CustomPaint(
-        size: Size.square(cell * 0.68),
-        painter: _PawnPainter(
-          color: color,
-          outline: canMove ? AppColors.gold : Colors.black54,
-          strokeWidth: canMove ? 2.2 : 1.2,
-        ),
+    return CustomPaint(
+      size: Size(cell * 0.60, cell * 0.88),
+      painter: _PawnPainter(
+        color: color,
+        outline: canMove ? AppColors.gold : Colors.black54,
+        strokeWidth: canMove ? 2.2 : 1.2,
       ),
     );
   }
@@ -225,6 +202,16 @@ class _PawnPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
       ..color = outline;
+
+    // Ground shadow.
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(w / 2, h * 0.84),
+        width: w * 0.82,
+        height: h * 0.18,
+      ),
+      Paint()..color = Colors.black.withValues(alpha: 0.30),
+    );
 
     // Base oval.
     final baseRect = Rect.fromCenter(

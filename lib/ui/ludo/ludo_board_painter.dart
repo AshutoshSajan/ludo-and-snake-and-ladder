@@ -45,47 +45,32 @@ class LudoBoardPainter extends CustomPainter {
       bg,
     );
 
-    // Yards: lacquered quadrant + avatar well + name pill, Ludo-King style.
+    // Yards: lacquered quadrant + white square staging area, with the
+    // player name on the outer edge of the board arm (Ludo-King style).
     for (final color in LudoColor.values) {
       final o = LudoBoard.yardOrigin[color]!;
       final yard = Rect.fromLTWH(o.col * cell, o.row * cell, cell * 6, cell * 6);
       final yardRRect =
-          RRect.fromRectAndRadius(yard, Radius.circular(cell * 0.5));
+          RRect.fromRectAndRadius(yard, Radius.circular(cell * 0.35));
       final base = AppColors.ludo(color);
       final isActive = color == activeColor;
       final isDimmed = activeColor != null && !isActive;
       canvas.drawRRect(yardRRect, Paint()..color = base);
-      // Inner well.
-      final wellC = Offset(o.col * cell + cell * 3, o.row * cell + cell * 3);
-      canvas.drawCircle(wellC, cell * 1.9, Paint()..color = AppColors.ivory);
-      final name = playerNames[color];
-      if (name == null) {
-        // Empty seat: plain ringed well.
-        canvas.drawCircle(
-          wellC,
-          cell * 1.9,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = cell * 0.08
-            ..color = base.withValues(alpha: 0.55),
-        );
-      } else {
-        // Player avatar icon inside the well.
-        _drawAvatar(canvas, wellC, cell, base);
-        if (isActive) {
-          // Pulsing halo ring around the well.
-          canvas.drawCircle(
-            wellC,
-            cell * 2.0,
-            Paint()
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = cell * 0.12
-              ..color = Colors.white.withValues(alpha: 0.30 + 0.50 * pulse),
-          );
-        }
-        // Name pill along the bottom edge of the yard.
-        _drawNamePill(canvas, yard, name, base);
-      }
+
+      // Inner white square: staging area for the 4 pawns.
+      final inner = Rect.fromLTWH(
+          o.col * cell + cell, o.row * cell + cell, cell * 4, cell * 4);
+      final innerRRect =
+          RRect.fromRectAndRadius(inner, Radius.circular(cell * 0.3));
+      canvas.drawRRect(innerRRect, Paint()..color = AppColors.ivory);
+      canvas.drawRRect(
+        innerRRect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = cell * 0.07
+          ..color = base.withValues(alpha: 0.35),
+      );
+
       // Turn lighting: active corner glows bright, others are dimmed.
       if (isDimmed) {
         canvas.drawRRect(
@@ -98,12 +83,18 @@ class LudoBoardPainter extends CustomPainter {
           Paint()..color = Colors.white.withValues(alpha: 0.04 + 0.08 * pulse),
         );
         canvas.drawRRect(
-          yardRRect,
+          innerRRect,
           Paint()
             ..style = PaintingStyle.stroke
-            ..strokeWidth = cell * 0.16
+            ..strokeWidth = cell * 0.14
             ..color = Colors.white.withValues(alpha: 0.35 + 0.55 * pulse),
         );
+      }
+
+      // Name pill on the outer edge of this color's own arm.
+      final name = playerNames[color];
+      if (name != null) {
+        _drawNamePill(canvas, o, cell, name, base, color);
       }
     }
 
@@ -134,8 +125,10 @@ class LudoBoardPainter extends CustomPainter {
             ..strokeWidth = 3,
         );
       }
-      // Star safe cells (non-start).
-      if (i == 8 || i == 21 || i == 34 || i == 47) {
+      // Star safe cells (non-start): exactly 8 steps past each start cell,
+      // derived from the engine so they can never drift out of sync.
+      if (LudoBoard.safeCells.contains(i) &&
+          !LudoBoard.startIndex.containsValue(i)) {
         _drawStar(canvas, cellCenter(p.row, p.col, size), cell * 0.3,
             AppColors.ink.withValues(alpha: 0.7));
       }
@@ -151,7 +144,25 @@ class LudoBoardPainter extends CustomPainter {
       }
     }
 
+    // Entrance arrows: on the last main-track cell before each home column,
+    // pointing into the column, colored to match it.
+    for (final color in LudoColor.values) {
+      final from = LudoBoard.track[LudoBoard.absCell(color, 50)];
+      final to = LudoBoard.homeColumns[color]!.first;
+      final dir = Offset(
+          (to.col - from.col).toDouble(), (to.row - from.row).toDouble());
+      _drawArrow(
+        canvas,
+        cellCenter(from.row, from.col, size),
+        dir,
+        cell * 0.36,
+        AppColors.ludo(color),
+      );
+    }
+
     // Center: four triangles pointing in, spanning the 3x3 center block.
+    // Each triangle matches the color of the home column that feeds into it:
+    // green left arm, yellow top arm, blue right arm, red bottom arm.
     final c0 = Rect.fromLTWH(6 * cell, 6 * cell, cell * 3, cell * 3);
     final center = c0.center;
     final tl = c0.topLeft, tr = c0.topRight, bl = c0.bottomLeft, br = c0.bottomRight;
@@ -164,49 +175,47 @@ class LudoBoardPainter extends CustomPainter {
       ..moveTo(tl.dx, tl.dy)
       ..lineTo(tr.dx, tr.dy)
       ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.green);
+      ..close(), LudoColor.yellow);
     tri(Path()
       ..moveTo(tr.dx, tr.dy)
       ..lineTo(br.dx, br.dy)
       ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.yellow);
+      ..close(), LudoColor.blue);
     tri(Path()
       ..moveTo(br.dx, br.dy)
       ..lineTo(bl.dx, bl.dy)
       ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.blue);
+      ..close(), LudoColor.red);
     tri(Path()
       ..moveTo(bl.dx, bl.dy)
       ..lineTo(tl.dx, tl.dy)
       ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.red);
+      ..close(), LudoColor.green);
   }
 
-  void _drawAvatar(Canvas canvas, Offset c, double cell, Color color) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: String.fromCharCode(Icons.person.codePoint),
-        style: TextStyle(
-          fontFamily: Icons.person.fontFamily,
-          fontSize: cell * 2.1,
-          height: 1.0,
-          color: color,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(
-      canvas,
-      Offset(c.dx - tp.width / 2, c.dy - tp.height / 2 - cell * 0.12),
-    );
-  }
-
-  void _drawNamePill(Canvas canvas, Rect yard, String name, Color color) {
+  /// Draws the player name pill on the outer edge of the board arm that
+  /// this color's home column runs down: red bottom, green left,
+  /// yellow top, blue right. Text is rotated to read along the edge.
+  void _drawNamePill(Canvas canvas, GridPos o, double cell, String name,
+      Color color, LudoColor seat) {
+    Offset stripC;
+    double rotation = 0;
+    if (seat == LudoColor.red) {
+      stripC = Offset((o.col + 3) * cell, (o.row + 5.5) * cell);
+    } else if (seat == LudoColor.green) {
+      stripC = Offset((o.col + 0.5) * cell, (o.row + 3) * cell);
+      rotation = -math.pi / 2;
+    } else if (seat == LudoColor.yellow) {
+      stripC = Offset((o.col + 3) * cell, (o.row + 0.5) * cell);
+    } else {
+      stripC = Offset((o.col + 5.5) * cell, (o.row + 3) * cell);
+      rotation = math.pi / 2;
+    }
     final tp = TextPainter(
       text: TextSpan(
         text: name,
         style: TextStyle(
-          fontSize: yard.width * 0.14,
+          fontSize: cell * 0.52,
           fontWeight: FontWeight.w800,
           color: color,
         ),
@@ -215,27 +224,42 @@ class LudoBoardPainter extends CustomPainter {
       maxLines: 1,
       ellipsis: '…',
     )..layout();
-    final pillH = tp.height + yard.width * 0.09;
-    final pillW = math.min(tp.width + yard.width * 0.28, yard.width * 0.9);
-    final rect = Rect.fromCenter(
-      center: Offset(yard.center.dx, yard.bottom - pillH * 0.9),
-      width: pillW,
-      height: pillH,
-    );
+    final thickness = cell * 0.84;
+    final len = math.min(tp.width + cell * 0.5, cell * 4.7);
+    canvas.save();
+    canvas.translate(stripC.dx, stripC.dy);
+    canvas.rotate(rotation);
+    final rect =
+        Rect.fromCenter(center: Offset.zero, width: len, height: thickness);
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, Radius.circular(pillH / 2)),
+      RRect.fromRectAndRadius(rect, Radius.circular(thickness / 2)),
       Paint()..color = AppColors.ivory,
     );
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, Radius.circular(pillH / 2)),
+      RRect.fromRectAndRadius(rect, Radius.circular(thickness / 2)),
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2
         ..color = color.withValues(alpha: 0.5),
     );
-    tp.paint(
-      canvas,
-      Offset(rect.center.dx - tp.width / 2, rect.center.dy - tp.height / 2),
+    tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+    canvas.restore();
+  }
+
+  /// Solid triangular arrowhead at [c] pointing along [dir].
+  void _drawArrow(Canvas canvas, Offset c, Offset dir, double r, Color color) {
+    final d = dir / dir.distance;
+    final perp = Offset(-d.dy, d.dx);
+    final tip = c + d * r;
+    final b1 = c - d * (r * 0.5) + perp * (r * 0.85);
+    final b2 = c - d * (r * 0.5) - perp * (r * 0.85);
+    canvas.drawPath(
+      Path()
+        ..moveTo(tip.dx, tip.dy)
+        ..lineTo(b1.dx, b1.dy)
+        ..lineTo(b2.dx, b2.dy)
+        ..close(),
+      Paint()..color = color,
     );
   }
 
