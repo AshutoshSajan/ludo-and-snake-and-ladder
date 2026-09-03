@@ -23,6 +23,7 @@ void main() {
   write('home', _arpeggio([659, 988], 0.14));
   write('safe', _arpeggio([784, 1175], 0.09));
   write('win', _arpeggio([523, 659, 784, 1047], 0.16, gap: 0.02));
+  write('champion', _fanfare());
   stdout.writeln('Sound effects generated in assets/sounds/');
 }
 
@@ -58,6 +59,21 @@ List<double> _arpeggio(List<double> notes, double noteLen,
   for (final f in notes) {
     out.addAll(_tone(f, noteLen, decay: 9, gain: gain));
     out.addAll(List.filled((gap * sampleRate).round(), 0.0));
+  }
+  return out;
+}
+
+List<double> _fanfare() {
+  final out = _arpeggio([523.25, 659.25, 783.99, 1046.5], 0.12, gap: 0.01);
+  final n = (0.7 * sampleRate).round();
+  for (var i = 0; i < n; i++) {
+    final t = i / sampleRate;
+    final env = exp(-3 * t) * 0.5;
+    // Sustained major chord: root + third + fifth an octave up.
+    out.add((sin(2 * pi * 1046.5 * t) +
+            0.6 * sin(2 * pi * 1318.5 * t) +
+            0.4 * sin(2 * pi * 1568 * t)) *
+        env);
   }
   return out;
 }

@@ -28,29 +28,37 @@ class DiceWidget extends StatefulWidget {
   State<DiceWidget> createState() => _DiceWidgetState();
 }
 
-class _DiceWidgetState extends State<DiceWidget> {
+class _DiceWidgetState extends State<DiceWidget>
+    with SingleTickerProviderStateMixin {
   int _shuffle = 1;
   Timer? _timer;
+  late final AnimationController _tumble;
   final _rng = Random();
 
   @override
   void initState() {
     super.initState();
-    if (widget.rolling) _startShuffle();
+    _tumble = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    );
+    if (widget.rolling) _startRoll();
   }
 
   @override
   void didUpdateWidget(covariant DiceWidget old) {
     super.didUpdateWidget(old);
-    if (widget.rolling && !old.rolling) _startShuffle();
+    if (widget.rolling && !old.rolling) _startRoll();
     if (!widget.rolling) {
       _timer?.cancel();
+      _tumble.stop();
       if (widget.value != null) _shuffle = widget.value!;
     }
   }
 
-  void _startShuffle() {
+  void _startRoll() {
     _timer?.cancel();
+    _tumble.repeat();
     _timer = Timer.periodic(const Duration(milliseconds: 90), (t) {
       if (mounted) setState(() => _shuffle = _rng.nextInt(6) + 1);
     });
@@ -59,6 +67,7 @@ class _DiceWidgetState extends State<DiceWidget> {
   @override
   void dispose() {
     _timer?.cancel();
+    _tumble.dispose();
     super.dispose();
   }
 
@@ -69,20 +78,27 @@ class _DiceWidgetState extends State<DiceWidget> {
       label: 'Roll dice',
       child: GestureDetector(
         onTap: widget.enabled && !widget.rolling ? widget.onTap : null,
-        child: AnimatedBuilder(
-          animation: const AlwaysStoppedAnimation(0),
-          builder: (context, _) => AnimatedScale(
-            scale: widget.enabled && !widget.rolling ? 1.0 : 0.94,
-            duration: const Duration(milliseconds: 150),
-            child: TweenAnimationBuilder<double>(
-              tween: Tween(begin: 0, end: widget.rolling ? 1 : 0),
-              duration: const Duration(milliseconds: 120),
-              builder: (context, t, child) => Transform.rotate(
-                angle: widget.rolling ? t * 6 : 0,
+        child: AnimatedScale(
+          scale: widget.enabled && !widget.rolling ? 1.0 : 0.94,
+          duration: const Duration(milliseconds: 150),
+          child: AnimatedBuilder(
+            animation: _tumble,
+            builder: (context, child) {
+              // Static tilt so the die reads as 3D; while rolling it tumbles
+              // around both axes with perspective.
+              final a = _tumble.isAnimating ? _tumble.value * 2 * pi : 0.0;
+              final rotX = _tumble.isAnimating ? a : -0.42;
+              final rotY = _tumble.isAnimating ? a * 1.4 : 0.52;
+              return Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.identity()
+                  ..setEntry(3, 2, 0.0016) // perspective
+                  ..rotateX(rotX)
+                  ..rotateY(rotY),
                 child: child,
-              ),
-              child: _face(_shuffle),
-            ),
+              );
+            },
+            child: _face(_shuffle),
           ),
         ),
       ),

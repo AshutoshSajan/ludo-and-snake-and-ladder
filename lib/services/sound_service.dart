@@ -33,6 +33,7 @@ class SoundService {
   Future<void> home() => _play('home');
   Future<void> safe() => _play('safe');
   Future<void> win() => _play('win');
+  Future<void> champion() => _play('champion');
 
   void dispose() => _player.dispose();
 }

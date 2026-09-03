@@ -164,7 +164,7 @@ class LudoSession extends ChangeNotifier {
 
       if (state.phase == LudoPhase.gameOver) {
         _over = true;
-        sound.win();
+        sound.champion(); // special winner fanfare
         onGameOver(state);
         return;
       }

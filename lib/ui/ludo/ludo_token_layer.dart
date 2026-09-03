@@ -49,7 +49,11 @@ class LudoTokenLayer extends StatelessWidget {
     final grouped = <GridPos, List<LudoToken>>{};
     for (final t in state.tokens) {
       if (anim != null && t.gid == anim!.tokenGid) continue;
-      final key = LudoBoard.coordFor(t.color, t.pos, t.index % 4, 1);
+      // Finished tokens (pos == 56) rest in their own yard slot so each
+      // color's completed pieces stay in their own corner, never overlapping.
+      final key = t.pos == 56
+          ? _finishedSlot(t.color, t.index % 4)
+          : LudoBoard.coordFor(t.color, t.pos, t.index % 4, 1);
       grouped.putIfAbsent(key, () => []).add(t);
     }
 
@@ -62,7 +66,7 @@ class LudoTokenLayer extends StatelessWidget {
         // Yard slots sit on cell centers (x.5); the white staging square is
         // centered on the yard's grid intersection, so nudge yard tokens half
         // a cell up-left to align the 2x2 grid evenly inside it.
-        if (t.pos == -1) {
+        if (t.pos == -1 || t.pos == 56) {
           center -= Offset(cell * 0.5, cell * 0.5);
         }
         final playerIdx =
@@ -140,6 +144,14 @@ class LudoTokenLayer extends StatelessWidget {
     final ang = 2 * math.pi * i / total;
     return Offset(math.cos(ang) * cell * maxShift,
         math.sin(ang) * cell * maxShift);
+  }
+
+  /// Yard slot position for a finished token — the same slot it launched
+  /// from, guaranteeing finished pieces never share a spot.
+  static GridPos _finishedSlot(LudoColor color, int slot) {
+    final origin = LudoBoard.yardOrigin[color]!;
+    final off = LudoBoard.yardSlotOffsets[slot.clamp(0, 3)];
+    return GridPos(origin.row + off.row, origin.col + off.col);
   }
 
   /// Pawn with a spinning indicator ring at its base — shown only when the

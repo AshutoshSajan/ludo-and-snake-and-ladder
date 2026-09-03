@@ -32,6 +32,9 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   late LudoSession session;
   int _animStep = 0;
   Timer? _animTimer;
+  Timer? _diceTimer;
+  bool _diceRolling = false;
+  int? _lastSeenRoll;
   late final AnimationController _fx;
   DateTime _stepStart = DateTime.now();
 
@@ -54,6 +57,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   @override
   void dispose() {
     _animTimer?.cancel();
+    _diceTimer?.cancel();
     _fx.dispose();
     session.removeListener(_onSessionChanged);
     session.dispose();
@@ -61,6 +65,16 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _onSessionChanged() {
+    // Kick off the 3D dice tumble whenever a fresh roll appears.
+    final roll = session.state.lastRoll;
+    if (roll != null && roll != _lastSeenRoll) {
+      _lastSeenRoll = roll;
+      _diceTimer?.cancel();
+      _diceRolling = true;
+      _diceTimer = Timer(const Duration(milliseconds: 600), () {
+        if (mounted) setState(() => _diceRolling = false);
+      });
+    }
     final anim = session.activeAnim;
     _animTimer?.cancel();
     _animStep = 0;
@@ -133,7 +147,6 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       body: SafeArea(
         child: Column(
           children: [
-            _playerStrip(s),
             Expanded(
               child: Center(
                 child: AspectRatio(
@@ -187,6 +200,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                               spinAngle: spin,
                               bounce: bounce,
                             ),
+                            // One die per yard corner: everyone can reach
+                            // their own dice without blocking anyone's view.
+                            for (var i = 0; i < s.players.length; i++)
+                              _cornerDice(s, i, boardSize),
                           ],
                         );
                       },
@@ -202,61 +219,35 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     );
   }
 
-  // ------------------------------------------------------------------ HUD
+  // -------------------------------------------------- per-corner dice HUD
 
-  Widget _playerStrip(LudoState s) {
-    return SizedBox(
-      height: 64,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        itemCount: s.players.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, i) {
-          final p = s.players[i];
-          final isCurrent = i == s.currentPlayerIndex && !p.finished;
-          final homeCount = s.tokensOf(i).where((t) => t.isHome).length;
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: isCurrent
-                  ? AppColors.ludo(p.color).withValues(alpha: 0.85)
-                  : AppColors.feltLight,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isCurrent ? AppColors.gold : Colors.white24,
-                width: isCurrent ? 2 : 1,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(p.isAI ? Icons.smart_toy : Icons.person,
-                    size: 18,
-                    color: isCurrent ? Colors.white : Colors.white70),
-                const SizedBox(width: 6),
-                Text(p.name,
-                    style: TextStyle(
-                      color: isCurrent ? Colors.white : AppColors.ivory,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    )),
-                if (p.finished)
-                  const Padding(
-                    padding: EdgeInsets.only(left: 4),
-                    child: Text('🏁', style: TextStyle(fontSize: 13)),
-                  )
-                else ...[
-                  const SizedBox(width: 6),
-                  Text('🏠$homeCount/4',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: isCurrent ? Colors.white : Colors.white60)),
-                ],
-              ],
-            ),
-          );
-        },
+  /// One small die at each player's yard corner, so every human can reach
+  /// their own dice without blocking anyone else's view of the board.
+  Widget _cornerDice(LudoState s, int i, double boardSize) {
+    final p = s.players[i];
+    final isCurrent = i == s.currentPlayerIndex && !p.finished;
+    final canRoll = isCurrent &&
+        !session.currentIsAI &&
+        s.phase == LudoPhase.awaitingRoll &&
+        !session.isBusy;
+    final alignment = switch (p.color) {
+      LudoColor.green => Alignment.topLeft,
+      LudoColor.yellow => Alignment.topRight,
+      LudoColor.red => Alignment.bottomLeft,
+      LudoColor.blue => Alignment.bottomRight,
+    };
+    return Align(
+      alignment: alignment,
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: DiceWidget(
+          value: isCurrent ? s.lastRoll : null,
+          rolling: _diceRolling && isCurrent,
+          enabled: canRoll,
+          onTap: session.roll,
+          size: (boardSize * 0.10).clamp(36.0, 56.0),
+          accent: AppColors.ludo(p.color),
+        ),
       ),
     );
   }
@@ -264,9 +255,6 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   // ------------------------------------------------------------- controls
 
   Widget _controls(LudoState s) {
-    final humanTurn = !session.currentIsAI && s.phase != LudoPhase.gameOver;
-    final canRoll =
-        humanTurn && s.phase == LudoPhase.awaitingRoll && !session.isBusy;
     final subtitle = switch (s.phase) {
       LudoPhase.gameOver => 'Game over',
       LudoPhase.awaitingRoll when session.currentIsAI =>
@@ -276,29 +264,8 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     };
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Column(
-        children: [
-          Text(subtitle,
-              style: const TextStyle(fontSize: 14, color: Colors.white70)),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              DiceWidget(
-                value: s.lastRoll,
-                rolling: false,
-                enabled: canRoll,
-                onTap: session.roll,
-              ),
-              const SizedBox(width: 20),
-              FilledButton(
-                onPressed: canRoll ? session.roll : null,
-                child: Text(canRoll ? 'ROLL' : '…'),
-              ),
-            ],
-          ),
-        ],
-      ),
+      child: Text(subtitle,
+          style: const TextStyle(fontSize: 14, color: Colors.white70)),
     );
   }
 
