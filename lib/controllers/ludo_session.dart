@@ -75,6 +75,7 @@ class LudoSession extends ChangeNotifier {
 
   final _rng = Random();
   Timer? _timer;
+  final _stepTimers = <Timer>[];
   MoveAnim? activeAnim;
   bool _busy = false;
   bool _over = false;
@@ -119,6 +120,10 @@ class LudoSession extends ChangeNotifier {
 
   void _playMove(LudoMove move) {
     _timer?.cancel();
+    for (final t in _stepTimers) {
+      t.cancel();
+    }
+    _stepTimers.clear();
     final player = state.currentPlayer;
     final tokens = state.tokensOf(state.currentPlayerIndex);
     final token = tokens[move.tokenIndex];
@@ -137,6 +142,14 @@ class LudoSession extends ChangeNotifier {
       waypoints: waypoints,
       stepMs: move.from == -1 ? 200 : 130,
     );
+    // One tick per hop, synced to each step of the walk animation.
+    final stepMs = activeAnim!.stepMs;
+    for (var i = 1; i < waypoints.length; i++) {
+      _stepTimers.add(Timer(Duration(milliseconds: stepMs * i), () {
+        sound.step();
+        Haptics.light();
+      }));
+    }
     _busy = true;
     notifyListeners();
 
@@ -272,6 +285,10 @@ class LudoSession extends ChangeNotifier {
   @override
   void dispose() {
     _timer?.cancel();
+    for (final t in _stepTimers) {
+      t.cancel();
+    }
+    _stepTimers.clear();
     super.dispose();
   }
 }

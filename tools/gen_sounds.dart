@@ -16,6 +16,7 @@ void main() {
 
   write('tap', _tone(880, 0.05, decay: 18));
   write('move', _tone(520, 0.07, decay: 22));
+  write('step', _tone(660, 0.04, decay: 34, gain: 0.45));
   write('dice', _diceRattle());
   write('capture', _sweep(600, 140, 0.25, decay: 8));
   write('ladder', _arpeggio([523, 659, 784], 0.1));

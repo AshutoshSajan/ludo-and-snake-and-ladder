@@ -27,6 +27,7 @@ class SoundService {
   Future<void> tap() => _play('tap');
   Future<void> dice() => _play('dice');
   Future<void> move() => _play('move');
+  Future<void> step() => _play('step');
   Future<void> capture() => _play('capture');
   Future<void> ladder() => _play('ladder');
   Future<void> snake() => _play('snake');
