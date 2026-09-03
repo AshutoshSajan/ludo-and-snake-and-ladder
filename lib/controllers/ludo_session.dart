@@ -17,12 +17,16 @@ class SeatSetup {
     this.profileId,
     this.isAI = false,
     this.difficulty = AIDifficulty.medium,
+    this.color,
   });
 
   final String? profileId; // null for pure bots
   final String name;
   bool isAI;
   AIDifficulty difficulty;
+
+  /// Corner color for Ludo (null = fall back to seat position order).
+  final LudoColor? color;
 }
 
 /// A token animation in flight: the ghost token hops through [waypoints].
@@ -55,7 +59,7 @@ class LudoSession extends ChangeNotifier {
       players.add(LudoPlayer(
         id: seat.profileId ?? 'bot-$i-${DateTime.now().millisecondsSinceEpoch}',
         name: seat.name,
-        color: LudoBoard.colorOrder[i],
+        color: seat.color ?? LudoBoard.colorOrder[i],
         isAI: seat.isAI,
         difficulty: seat.difficulty,
       ));

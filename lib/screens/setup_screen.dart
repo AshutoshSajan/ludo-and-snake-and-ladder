@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/core/player_profiles.dart';
+import '../../engine/ludo/ludo_board.dart';
 import '../../engine/ludo/ludo_models.dart';
 import '../../providers/app_providers.dart';
 import '../../controllers/ludo_session.dart';
@@ -25,6 +26,7 @@ class _SeatDraft {
   String name;
   bool isAI;
   AIDifficulty difficulty = AIDifficulty.medium;
+  LudoColor? color; // Ludo corner (null = auto)
 }
 
 class _SetupScreenState extends ConsumerState<SetupScreen> {
@@ -32,6 +34,35 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
   int get _minPlayers => 2;
   int get _maxPlayers => widget.game == GameKind.ludo ? 4 : 10;
+  bool get _isLudo => widget.game == GameKind.ludo;
+
+  /// Default corner colors for a table of [n] players. Two players sit
+  /// diagonally (red bottom-left vs yellow top-right); otherwise seats fill
+  /// the classic clockwise circuit.
+  static List<LudoColor> _defaultColors(int n) => n == 2
+      ? const [LudoColor.red, LudoColor.yellow]
+      : LudoBoard.colorOrder.take(n).toList();
+
+  /// Keep each seat's explicit pick (if still unique), then fill the rest
+  /// from the defaults for the current seat count.
+  void _normalizeColors() {
+    if (!_isLudo) return;
+    final taken = <LudoColor>{};
+    for (final s in _seats) {
+      if (s.color != null && taken.add(s.color!)) continue;
+      s.color = null;
+    }
+    final pool = <LudoColor>[
+      ..._defaultColors(_seats.length),
+      ...LudoBoard.colorOrder,
+    ];
+    for (final s in _seats) {
+      if (s.color != null) continue;
+      final c = pool.firstWhere((c) => !taken.contains(c));
+      s.color = c;
+      taken.add(c);
+    }
+  }
 
   @override
   void initState() {
@@ -44,6 +75,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       ),
       _SeatDraft(name: 'Bot 2', isAI: true),
     ];
+    _normalizeColors();
   }
 
   void _setCount(int count) {
@@ -54,6 +86,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       while (_seats.length > count) {
         _seats.removeLast();
       }
+      _normalizeColors();
     });
   }
 
@@ -130,9 +163,11 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               children: [
                 CircleAvatar(
                   radius: 13,
-                  backgroundColor: i == 0
-                      ? AppColors.gold
-                      : AppColors.snakesColors[i % 10],
+                  backgroundColor: _isLudo && seat.color != null
+                      ? AppColors.ludo(seat.color!)
+                      : i == 0
+                          ? AppColors.gold
+                          : AppColors.snakesColors[i % 10],
                   child: Text('${i + 1}',
                       style: const TextStyle(
                           fontSize: 12, fontWeight: FontWeight.w800)),
@@ -153,6 +188,29 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 ),
               ],
             ),
+            if (_isLudo) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Text('Corner',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white54)),
+                  const SizedBox(width: 10),
+                  for (final c in LudoBoard.colorOrder) ...[
+                    const SizedBox(width: 4),
+                    _cornerDot(c, seat),
+                  ],
+                  const Spacer(),
+                  if (_seats.length == 2)
+                    const Text(
+                      'Diagonal seating',
+                      style: TextStyle(fontSize: 11, color: Colors.white38),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: 8),
             if (seat.isAI)
               Row(
@@ -215,6 +273,42 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     );
   }
 
+  Widget _cornerDot(LudoColor c, _SeatDraft seat) {
+    final takenByOther = _seats.any((s) => s != seat && s.color == c);
+    final selected = seat.color == c;
+    return Tooltip(
+      message: takenByOther ? 'Taken' : c.name,
+      child: InkWell(
+        onTap: takenByOther ? null : () => setState(() => seat.color = c),
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: 30,
+          height: 30,
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: selected ? AppColors.ivory : Colors.transparent,
+              width: 2,
+            ),
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.ludo(c),
+            ),
+            child: takenByOther
+                ? const Icon(Icons.lock, size: 12, color: Colors.black45)
+                : (selected
+                    ? const Icon(Icons.check,
+                        size: 14, color: Colors.white, weight: 3)
+                    : null),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _createProfile(int seatIndex) async {
     final ctrl = TextEditingController();
     final name = await showDialog<String>(
@@ -262,6 +356,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           name: s.name.trim(),
           isAI: s.isAI,
           difficulty: s.difficulty,
+          color: _isLudo ? s.color : null,
         ),
     ];
     Haptics.light();
