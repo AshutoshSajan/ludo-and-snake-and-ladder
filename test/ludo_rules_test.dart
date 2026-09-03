@@ -61,8 +61,8 @@ void main() {
       rollDice(s, 4);
       applyMove(s, 0);
       expect(s.tokensOf(0).first.pos, 9);
-      // Red at r=9 -> abs track cell 9 = (1, 6).
-      expect(LudoBoard.coordFor(LudoColor.red, 9, 0, 1), const GridPos(1, 6));
+      // Red at r=9 -> abs track cell 9 = (13, 6).
+      expect(LudoBoard.coordFor(LudoColor.red, 9, 0, 1), const GridPos(13, 6));
       expect(s.currentPlayer.color, LudoColor.green);
     });
 
@@ -82,8 +82,8 @@ void main() {
   group('captures and safe cells', () {
     test('landing on an enemy token captures it, grants extra roll', () {
       final s = _state();
-      // Green sits on abs 5 -> green r = (5 - 13) % 52 = 44.
-      s.tokensOf(1)[0].pos = 44;
+      // Green sits on abs 5 -> green r = (5 - 39) % 52 = 18.
+      s.tokensOf(1)[0].pos = 18;
       // Red at r=2, roll 3 -> lands abs 5 where green sits.
       s.tokensOf(0)[0].pos = 2;
       rollDice(s, 3);
@@ -117,8 +117,8 @@ void main() {
   group('blocks', () {
     test('enemy block cannot be landed on or passed', () {
       final s = _state();
-      s.tokensOf(1)[0].pos = 44; // block on abs 5
-      s.tokensOf(1)[1].pos = 44;
+      s.tokensOf(1)[0].pos = 18; // block on abs 5
+      s.tokensOf(1)[1].pos = 18;
       s.tokensOf(0)[0].pos = 2; // roll 5 passes abs 5
       rollDice(s, 5);
       expect(legalMoves(s), isEmpty);
@@ -127,7 +127,7 @@ void main() {
 
     test('single enemy token can be passed over', () {
       final s = _state();
-      s.tokensOf(1)[0].pos = 44;
+      s.tokensOf(1)[0].pos = 18; // single enemy on abs 5
       s.tokensOf(0)[0].pos = 2;
       rollDice(s, 5);
       expect(legalMoves(s).map((m) => m.tokenIndex), contains(0));
@@ -189,7 +189,7 @@ void main() {
 
     test('coordFor maps base, track, home column, center', () {
       expect(LudoBoard.coordFor(LudoColor.red, -1, 0, 4), const GridPos(11, 2));
-      expect(LudoBoard.coordFor(LudoColor.red, 0, 0, 1), const GridPos(6, 1));
+      expect(LudoBoard.coordFor(LudoColor.red, 0, 0, 1), const GridPos(8, 1));
       expect(LudoBoard.coordFor(LudoColor.red, 51, 0, 1), const GridPos(7, 1));
       expect(LudoBoard.coordFor(LudoColor.red, 55, 0, 1), const GridPos(7, 5));
       expect(LudoBoard.coordFor(LudoColor.red, 56, 0, 1), LudoBoard.center);
