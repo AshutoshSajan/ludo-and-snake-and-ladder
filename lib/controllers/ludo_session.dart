@@ -75,6 +75,11 @@ class LudoSession extends ChangeNotifier {
         difficulty: seat.difficulty,
       ));
     }
+    // Turns always run clockwise around the board, regardless of the order
+    // in which seats were filled or corners were picked on the setup screen.
+    players.sort((a, b) => LudoBoard.colorOrder
+        .indexOf(a.color)
+        .compareTo(LudoBoard.colorOrder.indexOf(b.color)));
     state = createLudoState(players);
     scheduleNext();
   }
@@ -274,12 +279,21 @@ class LudoSession extends ChangeNotifier {
   void addPlayer(
       {String? profileId, required String name, required LudoColor color}) {
     if (!canAddPlayer) return;
-    state.players.add(LudoPlayer(
+    final player = LudoPlayer(
       id: profileId ?? 'bot-${DateTime.now().millisecondsSinceEpoch}',
       name: name,
       color: color,
       isAI: false,
-    ));
+    );
+    // Insert at the clockwise-correct position so turn order stays
+    // red -> blue -> yellow -> green around the board.
+    final insertAt = state.players
+        .where((p) =>
+            LudoBoard.colorOrder.indexOf(p.color) <
+            LudoBoard.colorOrder.indexOf(color))
+        .length;
+    state.players.insert(insertAt, player);
+    if (insertAt <= state.currentPlayerIndex) state.currentPlayerIndex++;
     for (var i = 0; i < 4; i++) {
       state.tokens.add(LudoToken(color: color, index: i));
     }

@@ -78,12 +78,14 @@ class LudoBoard {
   /// (each start cell plus the cell 8 steps ahead of it).
   static const Set<int> safeCells = {3, 11, 16, 24, 29, 37, 42, 50};
 
-  /// Turn order.
+  /// Turn order, clockwise around the board in the direction of play:
+  /// red (bottom-left) -> blue (bottom-right) -> yellow (top-right) ->
+  /// green (top-left).
   static const List<LudoColor> colorOrder = [
     LudoColor.red,
-    LudoColor.green,
-    LudoColor.yellow,
     LudoColor.blue,
+    LudoColor.yellow,
+    LudoColor.green,
   ];
 
   /// Home column cells (r = 1..5 mapped to 51..55) per color. Each color

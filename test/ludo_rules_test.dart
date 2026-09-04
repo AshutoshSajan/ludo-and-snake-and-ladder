@@ -37,7 +37,7 @@ void main() {
       final s = _state();
       rollDice(s, 3);
       expect(s.lastEvent, 'skip');
-      expect(s.currentPlayer.color, LudoColor.green);
+      expect(s.currentPlayer.color, LudoColor.blue);
       expect(s.phase, LudoPhase.awaitingRoll);
     });
 
@@ -63,7 +63,7 @@ void main() {
       expect(s.tokensOf(0).first.pos, 9);
       // Red at r=9 -> abs track cell (42+9)%52 = 51 = (8, 1).
       expect(LudoBoard.coordFor(LudoColor.red, 9, 0, 1), const GridPos(8, 1));
-      expect(s.currentPlayer.color, LudoColor.green);
+      expect(s.currentPlayer.color, LudoColor.blue);
     });
 
     test('three consecutive sixes forfeit the turn', () {
@@ -74,7 +74,7 @@ void main() {
       applyMove(s, 1);
       rollDice(s, 6);
       expect(s.lastEvent, 'tripleSix');
-      expect(s.currentPlayer.color, LudoColor.green);
+      expect(s.currentPlayer.color, LudoColor.blue);
     });
   });
 
@@ -82,13 +82,14 @@ void main() {
   group('captures and safe cells', () {
     test('landing on an enemy token captures it, grants extra roll', () {
       final s = _state();
-      // Green sits on abs 47 -> green r = (47 - 3) % 52 = 44.
-      s.tokensOf(1)[0].pos = 44;
+      // Blue sits on abs 47 -> blue r = (47 - 29) % 52 = 18.
+      s.tokensOf(1)[0].pos = 18;
       // Red at r=2, roll 3 -> lands abs 47 where green sits.
       s.tokensOf(0)[0].pos = 2;
       rollDice(s, 3);
       final captured = applyMove(s, 0);
-      expect(captured, 1 * 4 + 0);
+      // gid = color.index * 4 + tokenIndex; blue's enum index is 3.
+      expect(captured, LudoColor.blue.index * 4 + 0);
       expect(s.tokensOf(1)[0].inBase, isTrue);
       expect(s.lastEvent, 'capture');
       expect(s.extraRoll, isTrue);
@@ -117,8 +118,8 @@ void main() {
   group('blocks', () {
     test('enemy block cannot be landed on or passed', () {
       final s = _state();
-      s.tokensOf(1)[0].pos = 42; // block on abs 45
-      s.tokensOf(1)[1].pos = 42;
+      s.tokensOf(1)[0].pos = 16; // block on abs (29+16)%52 = 45
+      s.tokensOf(1)[1].pos = 16;
       s.tokensOf(0)[0].pos = 2; // roll 5 passes abs 45
       rollDice(s, 5);
       expect(legalMoves(s), isEmpty);
@@ -127,7 +128,7 @@ void main() {
 
     test('single enemy token can be passed over', () {
       final s = _state();
-      s.tokensOf(1)[0].pos = 42; // single enemy on abs 45
+      s.tokensOf(1)[0].pos = 16; // single enemy on abs 45
       s.tokensOf(0)[0].pos = 2;
       rollDice(s, 5);
       expect(legalMoves(s).map((m) => m.tokenIndex), contains(0));
@@ -173,9 +174,9 @@ void main() {
       rollDice(s, 1);
       applyMove(s, 0);
       expect(s.players[1].finished, isTrue);
-      expect(s.rankings.first, 'id-green');
+      expect(s.rankings.first, 'id-blue');
       expect(s.phase, LudoPhase.gameOver);
-      expect(s.rankings, ['id-green', 'id-red']);
+      expect(s.rankings, ['id-blue', 'id-red']);
     });
   });
 
