@@ -294,9 +294,10 @@ class LudoSession extends ChangeNotifier {
         .length;
     state.players.insert(insertAt, player);
     if (insertAt <= state.currentPlayerIndex) state.currentPlayerIndex++;
-    for (var i = 0; i < 4; i++) {
-      state.tokens.add(LudoToken(color: color, index: i));
-    }
+    // Tokens must land in the same slot block as the inserted player, so
+    // tokensOf(playerIndex) stays aligned with players[playerIndex].
+    state.tokens.insertAll(
+        insertAt * 4, [for (var i = 0; i < 4; i++) LudoToken(color: color, index: i)]);
     notifyListeners();
   }
 

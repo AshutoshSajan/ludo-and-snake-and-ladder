@@ -9,16 +9,20 @@ import 'package:flutter/foundation.dart';
 class SoundService {
   SoundService();
 
-  final AudioPlayer _player = AudioPlayer();
+  /// Created lazily on first play — constructing [AudioPlayer] touches
+  /// platform channels, which must not happen until a sound is needed
+  /// (and makes SoundService subclasses safe to create in tests).
+  AudioPlayer? _player;
   bool enabled = true;
   final _rng = Random();
 
   Future<void> _play(String name) async {
     if (!enabled) return;
     try {
-      await _player.stop();
-      await _player.play(AssetSource('sounds/$name.wav'),
-          volume: 0.6 + _rng.nextDouble() * 0.15);
+      final player = _player ??= AudioPlayer();
+      await player.stop();
+      await player.play(AssetSource('sounds/$name.wav'),
+            volume: 0.6 + _rng.nextDouble() * 0.15);
     } catch (e) {
       if (kDebugMode) debugPrint('sound $name failed: $e');
     }
@@ -36,7 +40,7 @@ class SoundService {
   Future<void> win() => _play('win');
   Future<void> champion() => _play('champion');
 
-  void dispose() => _player.dispose();
+  void dispose() => _player?.dispose();
 }
 
 /// Centralized haptics; no-ops on platforms without a vibrator.
