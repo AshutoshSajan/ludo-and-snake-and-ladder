@@ -137,13 +137,23 @@ class LudoBoard {
     return homeColumns[color]![r - 51];
   }
 
-  /// Yard staging slot for a token: its resting spot while waiting in base
-  /// and its permanent corner spot once it finishes (pos 56).
+  /// Yard staging slot for a token: its resting spot while waiting in base.
   static GridPos yardSlot(LudoColor color, int tokenIndex) {
     final origin = yardOrigin[color]!;
     final off = yardSlotOffsets[tokenIndex.clamp(0, 3)];
     return GridPos(origin.row + off.row, origin.col + off.col);
   }
+
+  /// Resting cell for a finished token (pos 56): inside the center finish
+  /// square, on the color's own triangle (red bottom, blue right, yellow
+  /// top, green left). Finished pieces stay here — under their colored
+  /// area — instead of returning to their starting yard slot.
+  static GridPos finishedCell(LudoColor color) => switch (color) {
+        LudoColor.red => const GridPos(8, 7),
+        LudoColor.blue => const GridPos(7, 8),
+        LudoColor.yellow => const GridPos(6, 7),
+        LudoColor.green => const GridPos(7, 6),
+      };
 
   /// Human-readable cell name for debugging.
   static String nameFor(LudoColor color, int r) {

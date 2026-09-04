@@ -36,7 +36,7 @@ class MoveAnim {
     required this.waypoints,
     required this.stepMs,
     this.startInYard = false,
-    this.endInYard = false,
+    this.toHome = false,
   });
 
   final int tokenGid;
@@ -47,9 +47,10 @@ class MoveAnim {
   /// the ghost's resting offset matches the settled yard token exactly.
   final bool startInYard;
 
-  /// True when the last waypoint is the token's finished yard slot, so the
-  /// pawn walks straight into its own corner instead of the board center.
-  final bool endInYard;
+  /// True when the move finishes (to == 56): the last waypoint is the
+  /// color's finished triangle cell, and the ghost rests at the exact
+  /// finished-slot offset so the handoff has no visible slide.
+  final bool toHome;
 
   int get totalMs => waypoints.length * stepMs + 120;
 }
@@ -139,9 +140,8 @@ class LudoSession extends ChangeNotifier {
     final token = tokens[move.tokenIndex];
 
     // Waypoints: cell-by-cell along the path. A finishing move (to == 56)
-    // walks straight into the token's own yard slot — never the board center —
-    // so the pawn ends in its own corner and stays there.
-    final endInYard = move.to == 56;
+    // walks into the color's own triangle inside the center finish square —
+    // never the board center or back to the yard — and stays there.
     final startInYard = move.from == -1;
     final waypoints = <GridPos>[
       LudoBoard.coordFor(player.color, move.from, token.index, 4),
@@ -150,7 +150,7 @@ class LudoSession extends ChangeNotifier {
       else
         for (var r = move.from + 1; r <= move.to; r++)
           r == 56
-              ? LudoBoard.yardSlot(player.color, token.index)
+              ? LudoBoard.finishedCell(player.color)
               : LudoBoard.coordFor(player.color, r, token.index, 4),
     ];
     activeAnim = MoveAnim(
@@ -158,7 +158,7 @@ class LudoSession extends ChangeNotifier {
       waypoints: waypoints,
       stepMs: move.from == -1 ? 200 : 130,
       startInYard: startInYard,
-      endInYard: endInYard,
+      toHome: move.to == 56,
     );
     // One tick per hop, synced to each step of the walk animation.
     final stepMs = activeAnim!.stepMs;
