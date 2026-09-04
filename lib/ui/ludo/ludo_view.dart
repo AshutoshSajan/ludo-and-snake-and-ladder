@@ -34,7 +34,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   Timer? _animTimer;
   Timer? _diceTimer;
   bool _diceRolling = false;
-  int? _lastSeenRoll;
+  int _lastSeenSeq = -1;
   late final AnimationController _fx;
   DateTime _stepStart = DateTime.now();
 
@@ -65,10 +65,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _onSessionChanged() {
-    // Kick off the 3D dice tumble whenever a fresh roll appears.
-    final roll = session.state.lastRoll;
-    if (roll != null && roll != _lastSeenRoll) {
-      _lastSeenRoll = roll;
+    // Kick off the 3D dice tumble whenever a fresh roll appears — tracked by
+    // roll sequence, so it tumbles even when the same number comes up again.
+    if (session.state.rollSeq != _lastSeenSeq) {
+      _lastSeenSeq = session.state.rollSeq;
       _diceTimer?.cancel();
       _diceRolling = true;
       _diceTimer = Timer(const Duration(milliseconds: 600), () {
@@ -137,6 +137,16 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       appBar: AppBar(
         title: const Text('Ludo'),
         actions: [
+          IconButton(
+            icon: Icon(session.autoPlay
+                ? Icons.auto_mode
+                : Icons.auto_mode_outlined),
+            color: session.autoPlay ? AppColors.gold : null,
+            tooltip: session.autoPlay
+                ? 'Autoplay on — tap to stop'
+                : 'Autoplay (take a break)',
+            onPressed: session.toggleAutoPlay,
+          ),
           IconButton(
             icon: const Icon(Icons.pause),
             onPressed: _showPauseMenu,

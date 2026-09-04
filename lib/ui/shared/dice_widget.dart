@@ -221,7 +221,8 @@ class _CubePainter extends CustomPainter {
     6: [[.28, .25], [.72, .25], [.28, .5], [.72, .5], [.28, .75], [.72, .75]],
   };
 
-  static const _shadeColor = Color(0xFFCDC5AE);
+  static const _shadeDark = Color(0xFF101014); // glossy black base
+  static const _shadeLit = Color(0xFF3A3A46); // face brightening toward viewer
   static const double _tau = 2 * math.pi;
 
   @override
@@ -306,14 +307,22 @@ class _CubePainter extends CustomPainter {
 
     for (final (f, _, pts) in visible) {
       final t = 0.55 + 0.45 * rot(f.normal).$3.clamp(0.0, 1.0);
-      facePaint.color = Color.lerp(_shadeColor, AppColors.ivory, t)!;
-      final border =
-          Color.lerp(Color.lerp(accent, Colors.black, 0.25)!, accent, t)!;
-      borderPaint.color = border;
-      pipPaint.color = border;
+      // Glossy black body: dark base brightening toward the viewer.
+      facePaint.color = Color.lerp(_shadeDark, _shadeLit, t)!;
+      // Accent-tinted rim, strongest on the most viewer-facing side.
+      borderPaint.color =
+          Color.lerp(Colors.black, Color.lerp(accent, Colors.white, 0.35)!, t * 0.7)!;
+      pipPaint.color = AppColors.ivory;
 
-      final path = Path()..addPolygon(pts, true);
+      // Rounded corners: every face is drawn as a rounded polygon so the
+      // cube silhouette has softened edges from any angle.
+      final path = _roundedPoly(pts, edge * 0.14);
       canvas.drawPath(path, facePaint);
+      // Glass sheen: faint white overlay strengthening toward the viewer.
+      canvas.drawPath(
+        path,
+        Paint()..color = Colors.white.withValues(alpha: 0.05 + 0.12 * t),
+      );
       canvas.drawPath(path, borderPaint);
 
       final pipR = edge * 0.105;
@@ -358,10 +367,34 @@ class _CubePainter extends CustomPainter {
         canvas.drawPath(
           hi,
           Paint()
-            ..color = Color.lerp(pipPaint.color, AppColors.ivory, 0.45)!,
+            ..color = Color.lerp(pipPaint.color, Colors.white, 0.5)!,
         );
       }
     }
+  }
+
+  /// Polygon path with rounded corners (quadratic curve through each vertex).
+  static Path _roundedPoly(List<Offset> pts, double r) {
+    final path = Path();
+    final n = pts.length;
+    for (var i = 0; i < n; i++) {
+      final p = pts[i];
+      final prev = pts[(i - 1 + n) % n];
+      final next = pts[(i + 1) % n];
+      final toPrev = prev - p;
+      final toNext = next - p;
+      final rr = math.min(r, math.min(toPrev.distance, toNext.distance) / 2);
+      final a = p + toPrev * (rr / toPrev.distance);
+      final b = p + toNext * (rr / toNext.distance);
+      if (i == 0) {
+        path.moveTo(a.dx, a.dy);
+      } else {
+        path.lineTo(a.dx, a.dy);
+      }
+      path.quadraticBezierTo(p.dx, p.dy, b.dx, b.dy);
+    }
+    path.close();
+    return path;
   }
 
   @override

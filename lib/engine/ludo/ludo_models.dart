@@ -100,6 +100,7 @@ class LudoState {
     this.lastEvent,
     this.eventTokenGid,
     this.turnCount = 0,
+    this.rollSeq = 0,
   }) : rankings = rankings ?? [];
 
   final List<LudoPlayer> players; // 2..4, in turn order
@@ -113,6 +114,7 @@ class LudoState {
   String? lastEvent; // 'roll','move','capture','home','six','tripleSix','skip'
   int? eventTokenGid;
   int turnCount;
+  int rollSeq; // increments on every successful roll — UI roll animations key off this
 
   LudoPlayer get currentPlayer => players[currentPlayerIndex];
 
@@ -136,6 +138,7 @@ class LudoState {
       lastEvent: lastEvent,
       eventTokenGid: eventTokenGid,
       turnCount: turnCount,
+      rollSeq: rollSeq,
     );
     return s;
   }

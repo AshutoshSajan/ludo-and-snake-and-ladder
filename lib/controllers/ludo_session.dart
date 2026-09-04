@@ -91,6 +91,9 @@ class LudoSession extends ChangeNotifier {
   bool _busy = false;
   bool _over = false;
 
+  /// When true, human seats roll and move automatically (autoplay / break).
+  bool autoPlay = false;
+
   bool get isBusy => _busy || activeAnim != null;
   bool get currentIsAI => state.currentPlayer.isAI;
 
@@ -99,6 +102,13 @@ class LudoSession extends ChangeNotifier {
   void roll() {
     if (_busy || state.phase != LudoPhase.awaitingRoll || currentIsAI) return;
     _roll();
+  }
+
+  /// Toggle autoplay: human seats roll and pick moves automatically.
+  void toggleAutoPlay() {
+    autoPlay = !autoPlay;
+    notifyListeners();
+    scheduleNext();
   }
 
   void _roll() {
@@ -211,19 +221,19 @@ class LudoSession extends ChangeNotifier {
   void scheduleNext() {
     if (_over || state.phase == LudoPhase.gameOver) return;
     _timer?.cancel();
-    if (!state.currentPlayer.isAI) return;
+    // AI seats always auto-play; human seats only when autoplay is on.
+    final auto = state.currentPlayer.isAI || autoPlay;
+    if (!auto) return;
     if (state.phase == LudoPhase.awaitingRoll) {
       _timer = Timer(const Duration(milliseconds: 900), () {
-        if (state.phase != LudoPhase.awaitingRoll || !state.currentPlayer.isAI) {
-          return;
-        }
+        if (state.phase != LudoPhase.awaitingRoll) return;
+        if (!state.currentPlayer.isAI && !autoPlay) return;
         _roll();
       });
     } else if (state.phase == LudoPhase.awaitingMove) {
       _timer = Timer(const Duration(milliseconds: 700), () {
-        if (state.phase != LudoPhase.awaitingMove || !state.currentPlayer.isAI) {
-          return;
-        }
+        if (state.phase != LudoPhase.awaitingMove) return;
+        if (!state.currentPlayer.isAI && !autoPlay) return;
         final move = chooseLudoMove(state, state.currentPlayer.difficulty, _rng);
         if (move != null) _playMove(move);
       });

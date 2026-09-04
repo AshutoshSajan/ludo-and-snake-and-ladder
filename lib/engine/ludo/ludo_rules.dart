@@ -27,6 +27,7 @@ void rollDice(LudoState s, int value) {
   assert(value >= 1 && value <= 6, 'dice value must be 1..6');
   if (s.phase != LudoPhase.awaitingRoll) return;
   s.lastRoll = value;
+  s.rollSeq += 1; // even a repeated number is a *new* roll (UI animation cue)
   s.eventTokenGid = null;
 
   if (value == 6) {
