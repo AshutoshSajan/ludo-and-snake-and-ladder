@@ -44,9 +44,24 @@ class SoundService {
 }
 
 /// Centralized haptics; no-ops on platforms without a vibrator.
+/// [enabled] is the user-facing toggle persisted in Settings.
+/// Platform errors are swallowed: haptics must never break gameplay.
 class Haptics {
-  static void light() => HapticFeedback.lightImpact();
-  static void medium() => HapticFeedback.mediumImpact();
-  static void heavy() => HapticFeedback.heavyImpact();
-  static void success() => HapticFeedback.vibrate();
+  static bool enabled = true;
+
+  static void light() {
+    if (enabled) HapticFeedback.lightImpact().catchError((_) {});
+  }
+
+  static void medium() {
+    if (enabled) HapticFeedback.mediumImpact().catchError((_) {});
+  }
+
+  static void heavy() {
+    if (enabled) HapticFeedback.heavyImpact().catchError((_) {});
+  }
+
+  static void success() {
+    if (enabled) HapticFeedback.vibrate().catchError((_) {});
+  }
 }

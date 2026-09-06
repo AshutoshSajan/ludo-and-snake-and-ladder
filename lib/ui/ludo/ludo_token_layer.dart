@@ -22,6 +22,7 @@ class LudoTokenLayer extends StatelessWidget {
     required this.currentPlayerIndex,
     this.spinAngle = 0,
     this.bounce = 0,
+    this.hintTokenIndex,
   });
 
   final LudoState state;
@@ -37,6 +38,9 @@ class LudoTokenLayer extends StatelessWidget {
 
   /// 0..1 progress within the current animation step; drives the hop bounce.
   final double bounce;
+
+  /// Token index highlighted by the hint button (the AI's suggested move).
+  final int? hintTokenIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -86,7 +90,8 @@ class LudoTokenLayer extends StatelessWidget {
             top: center.dy - cell * 0.44 + off.dy,
             child: GestureDetector(
               onTap: canMove ? () => onTapToken(t.index) : null,
-              child: _tokenStack(t, cell, canMove),
+              child: _tokenStack(t, cell, canMove,
+                  isHint: t.index == hintTokenIndex),
             ),
           ),
         );
@@ -154,15 +159,18 @@ class LudoTokenLayer extends StatelessWidget {
   }
 
   /// Pawn with a spinning indicator ring at its base — shown only when the
-  /// token is actually movable (tappable), never for idle pieces.
-  Widget _tokenStack(LudoToken t, double cell, bool canMove) {
+  /// token is actually movable (tappable), never for idle pieces. A hinted
+  /// token additionally wears a soft gold halo marking the suggested move.
+  Widget _tokenStack(LudoToken t, double cell, bool canMove,
+      {bool isHint = false}) {
     const pw = 0.60, ph = 0.88; // pawn width/height as a fraction of a cell
     final dot = SizedBox(
       width: cell * pw,
       height: cell * ph,
       child: _tokenDot(t, cell, canMove),
     );
-    if (!canMove) return dot;
+    if (!canMove && !isHint) return dot;
+    final halo = cell * pw * 2.1;
     final ringSize = cell * pw * 1.55;
     return SizedBox(
       width: cell * pw,
@@ -170,15 +178,30 @@ class LudoTokenLayer extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          Positioned(
-            left: (cell * pw - ringSize) / 2,
-            top: cell * ph - ringSize * 0.62,
-            child: _SpinRing(
-              size: ringSize,
-              angle: spinAngle,
-              color: AppColors.gold,
+          if (isHint)
+            Positioned(
+              left: (cell * pw - halo) / 2,
+              top: (cell * ph - halo) / 2,
+              child: Container(
+                width: halo,
+                height: halo,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.gold.withValues(alpha: 0.20),
+                  border: Border.all(color: AppColors.gold, width: 2),
+                ),
+              ),
             ),
-          ),
+          if (canMove)
+            Positioned(
+              left: (cell * pw - ringSize) / 2,
+              top: cell * ph - ringSize * 0.62,
+              child: _SpinRing(
+                size: ringSize,
+                angle: spinAngle,
+                color: AppColors.gold,
+              ),
+            ),
           dot,
         ],
       ),

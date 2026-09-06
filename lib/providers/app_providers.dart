@@ -29,6 +29,45 @@ class SoundToggle extends StateNotifier<bool> {
   }
 }
 
+final hapticsEnabledProvider =
+    StateNotifierProvider<HapticsToggle, bool>((ref) => HapticsToggle(ref));
+
+class HapticsToggle extends StateNotifier<bool> {
+  HapticsToggle(this._ref) : super(true) {
+    _ref.read(storageProvider).loadHapticsEnabled().then((v) {
+      state = v;
+      Haptics.enabled = v;
+    });
+  }
+
+  final Ref _ref;
+
+  void toggle() {
+    state = !state;
+    Haptics.enabled = state;
+    _ref.read(storageProvider).saveHapticsEnabled(state);
+  }
+}
+
+/// Battery saver: off disables the continuous board effects (breathing turn
+/// glow, spinning selection rings). One-shot feedback like the dice tumble
+/// and token hops still play — they stop by themselves in under a second.
+final animationsEnabledProvider =
+    StateNotifierProvider<AnimationsToggle, bool>((ref) => AnimationsToggle(ref));
+
+class AnimationsToggle extends StateNotifier<bool> {
+  AnimationsToggle(this._ref) : super(true) {
+    _ref.read(storageProvider).loadAnimationsEnabled().then((v) => state = v);
+  }
+
+  final Ref _ref;
+
+  void toggle() {
+    state = !state;
+    _ref.read(storageProvider).saveAnimationsEnabled(state);
+  }
+}
+
 final soundServiceProvider = Provider<SoundService>((ref) {
   final s = SoundService();
   ref.onDispose(s.dispose);

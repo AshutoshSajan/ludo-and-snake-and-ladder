@@ -10,6 +10,7 @@ import '../../engine/ludo/ludo_board.dart';
 import '../../engine/ludo/ludo_models.dart';
 import '../../engine/ludo/ludo_rules.dart';
 import '../../providers/app_providers.dart';
+import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
@@ -35,6 +36,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   Timer? _diceTimer;
   bool _diceRolling = false;
   int _lastSeenSeq = -1;
+  int? _hintToken;
   late final AnimationController _fx;
   DateTime _stepStart = DateTime.now();
 
@@ -69,6 +71,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     // roll sequence, so it tumbles even when the same number comes up again.
     if (session.state.rollSeq != _lastSeenSeq) {
       _lastSeenSeq = session.state.rollSeq;
+      _hintToken = null; // a new roll invalidates any shown hint
       _diceTimer?.cancel();
       _diceRolling = true;
       _diceTimer = Timer(const Duration(milliseconds: 600), () {
@@ -123,20 +126,69 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     );
   }
 
+  /// Screen-reader description of the board state. CustomPaint content is
+  /// invisible to assistive tech, so the view supplies the live summary.
+  String _boardSemanticLabel(LudoState s, bool hasMoves) {
+    final name = s.currentPlayer.name;
+    return switch (s.phase) {
+      LudoPhase.awaitingRoll => '$name to roll the dice.',
+      LudoPhase.awaitingMove => hasMoves
+          ? '$name rolled ${s.lastRoll}. '
+              'Tap a highlighted pawn to move it.'
+          : '$name rolled ${s.lastRoll}. No possible move.',
+      LudoPhase.gameOver => 'Game over. '
+          '${s.players.where((p) => p.finished).map((p) => p.name).join(', ')} '
+          'finished.',
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = session.state;
+    // Battery saver: stop the continuous effects ticker when the setting is
+    // off (one-shot animations — dice tumble, token hops — still play).
+    final animationsOn = ref.watch(animationsEnabledProvider);
+    if (animationsOn && !_fx.isAnimating) {
+      _fx.repeat();
+    } else if (!animationsOn && _fx.isAnimating) {
+      _fx.stop();
+    }
     final movable = <int>{
       if (s.phase == LudoPhase.awaitingMove &&
           !session.currentIsAI &&
           !session.isBusy)
         for (final m in legalMoves(s)) m.tokenIndex,
     };
+    // A stale hint (different turn / no longer movable) clears itself.
+    if (_hintToken != null && (!movable.contains(_hintToken))) {
+      _hintToken = null;
+    }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Ludo'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.undo),
+            tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
+            onPressed: session.canUndo
+                ? () {
+                    Haptics.light();
+                    setState(() => _hintToken = null);
+                    session.undo();
+                  }
+                : null,
+          ),
+          IconButton(
+            icon: const Icon(Icons.lightbulb_outline),
+            tooltip: _hintToken == null
+                ? 'Hint (best move)'
+                : 'Hint shown — tap a glowing pawn',
+            onPressed: session.canHint
+                ? () => setState(
+                    () => _hintToken = session.hintTokenIndex())
+                : null,
+          ),
           IconButton(
             icon: Icon(session.autoPlay
                 ? Icons.auto_mode
@@ -158,7 +210,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         child: Column(
           children: [
             Expanded(
-              child: Stack(
+              child: Semantics(
+                label: _boardSemanticLabel(s, movable.isNotEmpty),
+                liveRegion: true,
+                child: Stack(
                 children: [
                   Center(
                     child: AspectRatio(
@@ -210,6 +265,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                                     anim: anim,
                                     animStep: _animStep,
                                     currentPlayerIndex: s.currentPlayerIndex,
+                                    hintTokenIndex: _hintToken,
                                     spinAngle: spin,
                                     bounce: bounce,
                                   ),
@@ -225,6 +281,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                   // play area — outside the board, never inside a player's yard.
                   for (var i = 0; i < s.players.length; i++) _cornerDice(s, i),
                 ],
+              ),
               ),
             ),
             _controls(s),

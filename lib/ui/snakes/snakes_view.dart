@@ -97,6 +97,18 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     return pendingMove(session.state).to;
   }
 
+  /// Screen-reader description of the board state (announced on change).
+  String _boardSemanticLabel(SnakesState s) {
+    if (s.phase == SnakesPhase.gameOver) {
+      final winner =
+          s.players.reduce((a, b) => a.square >= b.square ? a : b);
+      return 'Game over. ${winner.name} won with square ${winner.square}.';
+    }
+    final lead = s.players.reduce((a, b) => a.square >= b.square ? a : b);
+    return '${s.currentPlayer.name} to roll. '
+        '${lead.name} leads on square ${lead.square} of 100.';
+  }
+
   // ------------------------------------------------------------------ HUD
 
   Widget _playerStrip(SnakesState s) {
@@ -175,13 +187,17 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
                     final boardSize = cons.biggest.width;
                     return Stack(
                       children: [
-                        CustomPaint(
-                          size: Size.square(boardSize),
-                          painter: SnakesBoardPainter(
-                            highlightSquare:
-                                s.phase == SnakesPhase.awaitingMove
-                                    ? _pendingTarget()
-                                    : null,
+                        Semantics(
+                          label: _boardSemanticLabel(s),
+                          liveRegion: true,
+                          child: CustomPaint(
+                            size: Size.square(boardSize),
+                            painter: SnakesBoardPainter(
+                              highlightSquare:
+                                  s.phase == SnakesPhase.awaitingMove
+                                      ? _pendingTarget()
+                                      : null,
+                            ),
                           ),
                         ),
                         ..._pawnWidgets(boardSize, s, movingToken),

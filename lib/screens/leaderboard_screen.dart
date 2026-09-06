@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/core/player_profiles.dart';
 import '../providers/app_providers.dart';
+import '../ui/theme.dart';
 
 /// Local leaderboards: wins, games and win-rate per profile and game.
 class LeaderboardScreen extends ConsumerWidget {
@@ -73,15 +74,17 @@ abstract class _StatsAdapter {
 
 class _LudoStats implements _StatsAdapter {
   @override
-  Widget trailing(PlayerProfile p) => _stat(p.ludoWins, p.ludoGames);
+  Widget trailing(PlayerProfile p) =>
+      _stat(p.ludoWins, p.ludoGames, p.ludoStreak(), p.ludoBestStreak());
 }
 
 class _SnakesStats implements _StatsAdapter {
   @override
-  Widget trailing(PlayerProfile p) => _stat(p.snakesWins, p.snakesGames);
+  Widget trailing(PlayerProfile p) =>
+      _stat(p.snakesWins, p.snakesGames, p.snakesStreak(), p.snakesBestStreak());
 }
 
-Widget _stat(int wins, int games) {
+Widget _stat(int wins, int games, int streak, int best) {
   final rate = games == 0 ? 0 : (wins / games * 100).round();
   return Row(
     mainAxisSize: MainAxisSize.min,
@@ -91,6 +94,26 @@ Widget _stat(int wins, int games) {
       const SizedBox(width: 10),
       Text('$games games · $rate%',
           style: const TextStyle(color: Colors.white54, fontSize: 12)),
+      if (games > 0) ...[
+        const SizedBox(width: 10),
+        Tooltip(
+          message: 'Current streak (longest: $best)',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(streak >= 3 ? Icons.local_fire_department : Icons.stairs,
+                  size: 14,
+                  color: streak >= 3 ? AppColors.gold : Colors.white54),
+              const SizedBox(width: 2),
+              Text('$streak',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color:
+                          streak >= 3 ? AppColors.gold : Colors.white54)),
+            ],
+          ),
+        ),
+      ],
     ],
   );
 }

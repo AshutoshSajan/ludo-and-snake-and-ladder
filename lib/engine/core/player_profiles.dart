@@ -14,7 +14,10 @@ class PlayerProfile {
     this.ludoWins = 0,
     this.snakesGames = 0,
     this.snakesWins = 0,
-  });
+    List<bool>? recentLudo,
+    List<bool>? recentSnakes,
+  })  : recentLudo = recentLudo ?? [],
+        recentSnakes = recentSnakes ?? [];
 
   final String id;
   String name;
@@ -23,17 +26,50 @@ class PlayerProfile {
   int snakesGames;
   int snakesWins;
 
+  /// Recent results, newest last (capped at 20) — powers streak stats.
+  final List<bool> recentLudo;
+  final List<bool> recentSnakes;
+
+  static const _formCap = 20;
+
   double ludoWinRate() => ludoGames == 0 ? 0 : ludoWins / ludoGames;
   double snakesWinRate() => snakesGames == 0 ? 0 : snakesWins / snakesGames;
+
+  /// Current win streak (consecutive most-recent wins), 0 if last was a loss.
+  int ludoStreak() => _trailingWins(recentLudo);
+  int snakesStreak() => _trailingWins(recentSnakes);
+
+  /// Longest all-win run in the recorded form.
+  int ludoBestStreak() => _bestRun(recentLudo);
+  int snakesBestStreak() => _bestRun(recentSnakes);
+
+  static int _trailingWins(List<bool> form) {
+    var n = 0;
+    for (var i = form.length - 1; i >= 0 && form[i]; i--, n++) {}
+    return n;
+  }
+
+  static int _bestRun(List<bool> form) {
+    var best = 0, cur = 0;
+    for (final w in form) {
+      cur = w ? cur + 1 : 0;
+      if (cur > best) best = cur;
+    }
+    return best;
+  }
 
   void recordGame(GameKind game, bool won) {
     switch (game) {
       case GameKind.ludo:
         ludoGames += 1;
         if (won) ludoWins += 1;
+        recentLudo.add(won);
+        if (recentLudo.length > _formCap) recentLudo.removeAt(0);
       case GameKind.snakes:
         snakesGames += 1;
         if (won) snakesWins += 1;
+        recentSnakes.add(won);
+        if (recentSnakes.length > _formCap) recentSnakes.removeAt(0);
     }
   }
 
@@ -44,6 +80,8 @@ class PlayerProfile {
         'ludoWins': ludoWins,
         'snakesGames': snakesGames,
         'snakesWins': snakesWins,
+        'recentLudo': recentLudo,
+        'recentSnakes': recentSnakes,
       };
 
   factory PlayerProfile.fromJson(Map<String, dynamic> j) => PlayerProfile(
@@ -53,6 +91,10 @@ class PlayerProfile {
         ludoWins: (j['ludoWins'] as num?)?.toInt() ?? 0,
         snakesGames: (j['snakesGames'] as num?)?.toInt() ?? 0,
         snakesWins: (j['snakesWins'] as num?)?.toInt() ?? 0,
+        recentLudo:
+            (j['recentLudo'] as List?)?.map((e) => e as bool).toList(),
+        recentSnakes:
+            (j['recentSnakes'] as List?)?.map((e) => e as bool).toList(),
       );
 }
 

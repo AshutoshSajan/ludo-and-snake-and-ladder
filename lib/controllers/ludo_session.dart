@@ -63,7 +63,8 @@ class LudoSession extends ChangeNotifier {
     required this.profiles,
     required this.sound,
     required this.onGameOver,
-  }) {
+    Random? rng,
+  }) : _rng = rng ?? Random() {
     final players = <LudoPlayer>[];
     for (var i = 0; i < seats.length; i++) {
       final seat = seats[i];
@@ -89,7 +90,7 @@ class LudoSession extends ChangeNotifier {
   final SoundService sound;
   final void Function(LudoState) onGameOver;
 
-  final _rng = Random();
+  final Random _rng;
   Timer? _timer;
   final _stepTimers = <Timer>[];
   MoveAnim? activeAnim;
@@ -116,7 +117,57 @@ class LudoSession extends ChangeNotifier {
     scheduleNext();
   }
 
+  // ------------------------------------------------------------ undo & hint
+
+  final _undoStack = <LudoState>[];
+
+  /// True when the last roll+move of the current human turn can be undone.
+  bool get canUndo =>
+      _undoStack.isNotEmpty &&
+      !isBusy &&
+      !autoPlay &&
+      state.phase != LudoPhase.gameOver;
+
+  /// Undo the last roll (and any move made from it). Restores the most
+  /// recent pre-roll snapshot, so moves made since — including bot moves —
+  /// are rewound too. Disabled while autoplay is on or an animation runs.
+  void undo() {
+    if (!canUndo) return;
+    _timer?.cancel();
+    for (final t in _stepTimers) {
+      t.cancel();
+    }
+    _stepTimers.clear();
+    activeAnim = null;
+    _busy = false;
+    state = _undoStack.removeLast();
+    notifyListeners();
+    scheduleNext();
+  }
+
+  /// True when a hint can be requested: it's a human's move phase and
+  /// nothing is animating.
+  bool get canHint =>
+      !_busy &&
+      !currentIsAI &&
+      !autoPlay &&
+      state.phase == LudoPhase.awaitingMove &&
+      legalMoves(state).isNotEmpty;
+
+  /// The AI's best move for the current human player — the hint highlight.
+  /// Returns the token index (0–3) of the recommended move, or null when
+  /// there is nothing to suggest (not this player's move phase).
+  int? hintTokenIndex() {
+    if (!canHint) {
+      return null;
+    }
+    return chooseLudoMove(state, AIDifficulty.hard, _rng)?.tokenIndex;
+  }
+
   void _roll() {
+    // Snapshot for undo: restores the pre-roll state (roll + move both go).
+    _undoStack.add(state.copy());
+    if (_undoStack.length > 10) _undoStack.removeAt(0);
     rollDice(state, _rng.nextInt(6) + 1);
     sound.dice();
     Haptics.light();

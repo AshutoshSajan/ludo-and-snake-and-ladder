@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/core/player_profiles.dart';
-import '../providers/app_providers.dart';
 import '../ui/ludo/ludo_board_painter.dart';
 import '../ui/snakes/snakes_board_painter.dart';
 import '../ui/theme.dart';
 import 'home_widgets.dart';
 import 'leaderboard_screen.dart';
+import 'settings_screen.dart';
 import 'setup_screen.dart';
 
 /// Home: the club entrance — pick a table.
@@ -70,15 +70,14 @@ class HomeScreen extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      Consumer(builder: (context, ref, _) {
-                        final on = ref.watch(soundEnabledProvider);
-                        return IconButton.filled(
-                          onPressed: () =>
-                              ref.read(soundEnabledProvider.notifier).toggle(),
-                          icon: Icon(on ? Icons.volume_up : Icons.volume_off),
-                          tooltip: 'Toggle sound',
-                        );
-                      }),
+                      IconButton.filled(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const SettingsScreen()),
+                        ),
+                        icon: const Icon(Icons.settings_outlined),
+                        tooltip: 'Settings',
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
