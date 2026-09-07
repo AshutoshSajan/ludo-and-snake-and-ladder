@@ -25,9 +25,10 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 // server entrypoint so the integration test exercises production code.
 import '../bin/server.dart' show wsHandler;
 
-ServerMember _member(LudoColor c, {String? seatId, void Function(String)? on}) =>
+ServerMember _member(LudoColor c,
+        {String? seatId, String? id, void Function(String)? on}) =>
     ServerMember(
-      id: seatId ?? c.name,
+      id: id ?? seatId ?? c.name,
       seatId: seatId ?? c.name,
       name: c.label,
       color: c,
@@ -400,6 +401,143 @@ void main() {
       host.sink.add(
           jsonEncode({'type': 'hello', 'seatId': 'h', 'name': 'H'}));
       expect(await nextMsg(hostBuf, 'joined'), isNotNull);
+    });
+
+    test('dropped player rejoins mid-game and resumes the game', () async {
+      host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'h', 'name': 'H'}));
+      final code =
+          (await nextMsg(hostBuf, 'joined'))['code'] as String;
+      guest.sink.add(jsonEncode(
+          {'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}));
+      await nextMsg(guestBuf, 'joined');
+      host.sink.add(jsonEncode({'type': 'start'}));
+      final before =
+          (await nextMsg(hostBuf, 'state'))['state'] as Map<String, dynamic>;
+      expect(before['phase'], 'awaitingRoll');
+
+      // The guest's connection dies mid-game.
+      await guest.sink.close();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Same profile comes back on a fresh socket.
+      final guest2 = WebSocketChannel.connect(
+          Uri.parse('ws://127.0.0.1:${http.port}/ws'));
+      await guest2.ready;
+      final guest2Buf = <Map<String, dynamic>>[];
+      guest2.stream.listen((d) => guest2Buf
+          .add(jsonDecode(d as String) as Map<String, dynamic>));
+      guest2.sink.add(jsonEncode(
+          {'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}));
+      await nextMsg(guest2Buf, 'joined');
+      // The rejoining client immediately receives the current snapshot.
+      final resumed = (await nextMsg(guest2Buf, 'state'))['state']
+          as Map<String, dynamic>;
+      expect(resumed['rollSeq'], before['rollSeq']);
+      expect(resumed['currentPlayerIndex'], before['currentPlayerIndex']);
+
+      // And the reconnected seat is live in the broadcast path again.
+      host.sink.add(jsonEncode({'type': 'roll'}));
+      final after = (await nextMsg(guest2Buf, 'state'))['state']
+          as Map<String, dynamic>;
+      expect(after['rollSeq'], 1);
+      await guest2.sink.close();
+    });
+  });
+
+  // -------------------------------------------------- reconnect (authority)
+
+  group('GameAuthority: reconnect', () {
+    test('rejoinRoom reclaims the original corner mid-game', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.handleIntent(
+          room: room, connectionId: 'red', msg: {'type': 'start'});
+      expect(room.started, isTrue);
+
+      // red drops; blue remains.
+      auth.removeMember(room.code, 'red');
+      expect(room.members, hasLength(1));
+
+      // red returns on a new connection and gets the same corner back.
+      final sinkJson = <String>[];
+      final rejoining =
+          _member(LudoColor.green, seatId: 'red', id: 'c9', on: sinkJson.add);
+      final rejoined = auth.rejoinRoom(room.code, rejoining);
+      expect(rejoined, same(room));
+      expect(rejoining.color, LudoColor.red,
+          reason: 'the returning player reclaims their original seat');
+      expect(room.members, hasLength(2));
+
+      // The authority's turn check matches on seatId, so the returned
+      // member can act as their old self again.
+      auth.handleIntent(room: room, connectionId: 'c9', msg: {'type': 'roll'});
+      expect(sinkJson, isNotEmpty,
+          reason: 'the reconnected member receives state broadcasts');
+      expect(room.stateOrNull!.rollSeq, 1);
+    });
+
+    test('rejoinRoom rejects a seatId that never sat in the room', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      expect(
+        auth.rejoinRoom(room.code, _member(LudoColor.blue)),
+        isNull,
+        reason: 'reconnect must not become seat stealing',
+      );
+      expect(room.members, hasLength(1));
+    });
+
+    test('rejoinRoom evicts a stale half-open connection for the seat', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      // Simulate a half-open socket the server never saw close.
+      room.members['ghost'] = _member(LudoColor.red, id: 'ghost');
+      final fresh = _member(LudoColor.red, id: 'c1');
+      expect(auth.rejoinRoom(room.code, fresh), same(room));
+      expect(room.members.keys, ['c1']);
+    });
+
+    test('a started empty room survives the grace period, then is dropped',
+        () async {
+      final auth = GameAuthority(
+          rng: Random(1), emptyRoomGrace: const Duration(milliseconds: 40));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.handleIntent(
+          room: room, connectionId: 'red', msg: {'type': 'start'});
+      auth.removeMember(room.code, 'red');
+      auth.removeMember(room.code, 'blue');
+      expect(auth.rooms.containsKey(room.code), isTrue,
+          reason: 'the game stays recoverable for a moment');
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(auth.rooms.containsKey(room.code), isFalse);
+      expect(room.removed, isTrue);
+    });
+
+    test('an emptied lobby room is removed immediately', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.removeMember(room.code, 'red');
+      expect(auth.rooms.containsKey(room.code), isFalse);
+      expect(room.removed, isTrue);
+    });
+
+    test('rejoining cancels the abandon timer', () async {
+      final auth = GameAuthority(
+          rng: Random(1), emptyRoomGrace: const Duration(milliseconds: 40));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.handleIntent(
+          room: room, connectionId: 'red', msg: {'type': 'start'});
+      auth.removeMember(room.code, 'red');
+      auth.removeMember(room.code, 'blue');
+      auth.rejoinRoom(
+          room.code, _member(LudoColor.red, seatId: 'red', id: 'c1'));
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(auth.rooms.containsKey(room.code), isTrue,
+          reason: 'a returning player keeps the room alive');
     });
   });
 }

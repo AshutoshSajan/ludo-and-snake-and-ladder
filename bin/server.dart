@@ -84,8 +84,10 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             if (code.isEmpty) {
               room = authority.createRoom(member!);
             } else {
-              final joined =
-                  authority.joinWithColor(code, member!, color);
+              var joined = authority.joinWithColor(code, member!, color);
+              // Not a fresh join — maybe a returning player reclaiming
+              // their seat (lobby or mid-game).
+              joined ??= authority.rejoinRoom(code, member!);
               if (joined == null) {
                 webSocket.sink.add(jsonEncode({
                   'type': 'error',
@@ -100,6 +102,12 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             webSocket.sink.add(jsonEncode(
                 {'type': 'joined', 'code': room.code, 'color': member!.color.name}));
             _lobby(room);
+            if (room.started) {
+              // A mid-game rejoin needs the current snapshot to resume;
+              // lobby players just wait for the broadcast at start.
+              webSocket.sink.add(jsonEncode(
+                  {'type': 'state', 'state': room.state.toJson()}));
+            }
             return;
           }
 

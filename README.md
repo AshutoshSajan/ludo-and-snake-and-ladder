@@ -139,4 +139,6 @@ opens `index.html` in a tab.
       screen — create a room, share the 4-letter code, and play remotely.
       Clients send only *intents*; the server broadcasts snapshots, so the
       game cannot be cheated from the client side.
-- [ ] Phase 9+ — online leaderboards (SQLite), reconnect mid-game, spectating.
+- [x] Phase 9 — mid-game reconnect: auto-reconnect with backoff, seat reclaim
+      on the server, and a grace period for abandoned-but-started rooms.
+- [ ] Phase 10+ — online leaderboards (SQLite), spectating.

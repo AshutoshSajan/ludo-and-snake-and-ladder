@@ -7,6 +7,7 @@
 /// state snapshot, so clients stay dumb and cannot cheat.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -44,6 +45,14 @@ class Room {
   /// Built once at [start] from the seated members; never touched before.
   late LudoState state;
   final Map<String, ServerMember> members = {}; // by connection id
+
+  /// Persistent seat claims: seatId -> color. Survives disconnects so a
+  /// returning player reclaims their exact seat, even mid-game.
+  final Map<String, LudoColor> seatRegistry = {};
+
+  /// Cancelled when someone (re)joins; fires only while the room sits empty.
+  Timer? abandonTimer;
+
   bool started = false;
   bool removed = false;
 
@@ -100,9 +109,13 @@ class Room {
 /// Server-side game logic shared by the transport layer (websockets) and
 /// tests (direct function calls).
 class GameAuthority {
-  GameAuthority({Random? rng}) : rng = rng ?? Random.secure();
+  GameAuthority({Random? rng, this.emptyRoomGrace = const Duration(minutes: 5)})
+      : rng = rng ?? Random.secure();
 
   final Random rng;
+
+  /// How long a started room with no connected members stays recoverable.
+  final Duration emptyRoomGrace;
   final Map<String, Room> rooms = {};
 
   static String _newCode() {
@@ -136,6 +149,9 @@ class GameAuthority {
       if (room.ownerOf(c) == null) {
         member.color = c;
         room.members[member.id] = member;
+        room.seatRegistry[member.seatId] = c;
+        room.abandonTimer?.cancel();
+        room.abandonTimer = null;
         return room;
       }
     }
@@ -150,6 +166,27 @@ class GameAuthority {
     if (room.members.values.any((m) => m.seatId == member.seatId)) return null;
     if (room.ownerOf(color) != null) return joinRoom(code, member);
     room.members[member.id] = member;
+    room.seatRegistry[member.seatId] = member.color;
+    room.abandonTimer?.cancel();
+    room.abandonTimer = null;
+    return room;
+  }
+
+  /// Seats a returning player back into their original corner. Works in the
+  /// lobby and, crucially, mid-game: the seat survives the disconnect, so the
+  /// game state (whose turn, tokens) keeps pointing at the same seatId. Any
+  /// stale half-open connection for that seat is evicted. Returns null when
+  /// the room is gone or the seatId never sat there (no seat stealing).
+  Room? rejoinRoom(String code, ServerMember member) {
+    final room = rooms[code.toUpperCase()];
+    if (room == null) return null;
+    final claimed = room.seatRegistry[member.seatId];
+    if (claimed == null) return null;
+    room.members.removeWhere((_, m) => m.seatId == member.seatId);
+    member.color = claimed;
+    room.members[member.id] = member;
+    room.abandonTimer?.cancel();
+    room.abandonTimer = null;
     return room;
   }
 
@@ -158,8 +195,21 @@ class GameAuthority {
     if (room == null) return false;
     room.members.remove(connectionId);
     if (room.members.isEmpty) {
-      rooms.remove(code);
-      room.removed = true;
+      if (!room.started) {
+        // A lobby nobody is in any more is worthless — drop it now.
+        rooms.remove(code);
+        room.removed = true;
+      } else {
+        // A started game stays recoverable for a grace period so a flaky
+        // connection (or the last one crashing) can still come back.
+        room.abandonTimer?.cancel();
+        room.abandonTimer = Timer(emptyRoomGrace, () {
+          if (room.members.isEmpty && rooms[code] == room) {
+            rooms.remove(code);
+            room.removed = true;
+          }
+        });
+      }
     }
     return true;
   }

@@ -21,15 +21,23 @@ class LobbySeat {
   final LudoColor color;
 }
 
-enum OnlineStatus { idle, connecting, inLobby, playing, error }
+enum OnlineStatus { idle, connecting, reconnecting, inLobby, playing, error }
 
 class OnlineClient extends ChangeNotifier {
-  OnlineClient(this.serverUrl, {required this.seatId, required this.name});
+  OnlineClient(
+    this.serverUrl, {
+    required this.seatId,
+    required this.name,
+    WebSocketChannel Function(Uri uri)? channelFactory,
+  }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
   /// e.g. 'ws://localhost:8080/ws'
   final String serverUrl;
   final String seatId; // profile id — our identity across reconnects
   final String name;
+
+  /// Overridable for tests (fake WebSocket channels).
+  final WebSocketChannel Function(Uri) _channelFactory;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
@@ -49,6 +57,15 @@ class OnlineClient extends ChangeNotifier {
   /// Fire-and-forget chat lines: (from, text).
   final chat = <({String from, String text})>[];
 
+  // Reconnect state: we keep the join code and identity, and retry with
+  // exponential backoff until the server answers hello again.
+  String? _joinCode;
+  bool _userClosed = false;
+  int _reconnectAttempts = 0;
+  Timer? _reconnectTimer;
+  static const _maxReconnectAttempts = 5;
+  static const _reconnectBaseDelay = Duration(milliseconds: 500);
+
   bool get connected =>
       status == OnlineStatus.inLobby || status == OnlineStatus.playing;
 
@@ -62,18 +79,25 @@ class OnlineClient extends ChangeNotifier {
 
   Future<void> connect({String? code, LudoColor? preferredColor}) async {
     assert(status == OnlineStatus.idle || status == OnlineStatus.error);
+    _userClosed = false;
+    _reconnectAttempts = 0;
+    _joinCode = code;
     status = OnlineStatus.connecting;
     errorText = null;
     notifyListeners();
+    await _openAndHello(preferredColor: preferredColor);
+  }
+
+  Future<void> _openAndHello({LudoColor? preferredColor}) async {
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(serverUrl));
+      _channel = _channelFactory(Uri.parse(serverUrl));
       _sub = _channel!.stream.listen(_onMessage, onDone: _onClosed,
           onError: (_) => _onClosed());
       _send({
         'type': 'hello',
         'seatId': seatId,
         'name': name,
-        if (code != null && code.isNotEmpty) 'code': code,
+        if (_joinCode != null && _joinCode!.isNotEmpty) 'code': _joinCode,
         if (preferredColor != null) 'color': preferredColor.name,
       });
     } catch (e) {
@@ -84,8 +108,30 @@ class OnlineClient extends ChangeNotifier {
   }
 
   void _onClosed() {
-    status = OnlineStatus.idle;
+    if (_userClosed) {
+      status = OnlineStatus.idle;
+      notifyListeners();
+      return;
+    }
+    // A dropped socket can surface as error AND done — handle it once.
+    if (status == OnlineStatus.reconnecting && _reconnectTimer != null) return;
+    _sub?.cancel();
+    _sub = null;
+    // Unplanned drop (network blip, server bounce): retry with backoff.
+    if (_reconnectAttempts >= _maxReconnectAttempts) {
+      status = OnlineStatus.error;
+      errorText = 'Connection lost — could not reach the server.';
+      notifyListeners();
+      return;
+    }
+    final delay = _reconnectBaseDelay * (1 << _reconnectAttempts);
+    _reconnectAttempts++;
+    status = OnlineStatus.reconnecting;
     notifyListeners();
+    _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null; // so a later drop is handled again
+      _openAndHello();
+    });
   }
 
   void _onMessage(dynamic data) {
@@ -100,6 +146,7 @@ class OnlineClient extends ChangeNotifier {
         roomCode = msg['code'] as String;
         myColor = LudoColor.values.byName(msg['color'] as String);
         status = OnlineStatus.inLobby;
+        _reconnectAttempts = 0; // we're back on the wire
       case 'lobby':
         started = msg['started'] as bool? ?? false;
         lobbySeats
@@ -132,6 +179,11 @@ class OnlineClient extends ChangeNotifier {
       case 'error':
         errorText = msg['text'] as String;
         status = OnlineStatus.error;
+        // A definitive rejection (bad code, gone room) — stop retrying.
+        _reconnectTimer?.cancel();
+        _userClosed = true;
+        _channel?.sink.close();
+        _channel = null;
     }
     notifyListeners();
   }
@@ -149,15 +201,24 @@ class OnlineClient extends ChangeNotifier {
   void sendChat(String text) => _send({'type': 'chat', 'text': text});
 
   Future<void> disconnect() async {
-    await _sub?.cancel();
-    await _channel?.sink.close();
-    _channel = null;
+    _userClosed = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    // Reflect the leave immediately so the UI doesn't flash a spinner
+    // while the socket cleanup below settles.
     status = OnlineStatus.idle;
     notifyListeners();
+    await _sub?.cancel();
+    _sub = null;
+    await _channel?.sink.close();
+    _channel = null;
   }
 
   @override
   void dispose() {
+    _userClosed = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _sub?.cancel();
     _channel?.sink.close();
     super.dispose();

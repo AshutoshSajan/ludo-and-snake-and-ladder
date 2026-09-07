@@ -76,6 +76,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       );
     }
     session.addListener(_onSessionChanged);
+    widget.onlineClient?.addListener(_onClientChanged);
   }
 
   @override
@@ -84,8 +85,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     _diceTimer?.cancel();
     _fx.dispose();
     session.removeListener(_onSessionChanged);
+    widget.onlineClient?.removeListener(_onClientChanged);
     session.dispose();
     super.dispose();
+  }
+
+  /// The online client notifies for transport events too (reconnecting,
+  /// errors) — the banner reads its status on every rebuild.
+  void _onClientChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onSessionChanged() {
@@ -176,6 +184,9 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   @override
   Widget build(BuildContext context) {
     final s = session.state;
+    // Online games surface transport trouble right on the board.
+    final reconnecting = widget.onlineClient?.status ==
+        OnlineStatus.reconnecting;
     // Battery saver: stop the continuous effects ticker when the setting is
     // off (one-shot animations — dice tumble, token hops — still play).
     final animationsOn = ref.watch(animationsEnabledProvider);
@@ -240,6 +251,30 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       body: SafeArea(
         child: Column(
           children: [
+            if (reconnecting)
+              Material(
+                color: AppColors.danger,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      ),
+                      const SizedBox(width: 10),
+                      Text('Connection lost — reconnecting…',
+                          style: TextStyle(
+                              color: Colors.white.withAlpha(230),
+                              fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ),
             Expanded(
               child: Semantics(
                 label: _boardSemanticLabel(s, movable.isNotEmpty),

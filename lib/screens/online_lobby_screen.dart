@@ -217,8 +217,19 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   // ------------------------------------------------------------------ lobby
 
   Widget _lobby(OnlineClient client) {
-    if (client.status == OnlineStatus.connecting) {
-      return const Center(child: CircularProgressIndicator());
+    if (client.status == OnlineStatus.connecting ||
+        client.status == OnlineStatus.reconnecting) {
+      final back = client.status == OnlineStatus.reconnecting;
+      return Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 12),
+          Text(
+            back ? 'Connection lost — reconnecting…' : 'Connecting…',
+            style: const TextStyle(color: AppColors.ivory, fontSize: 14),
+          ),
+        ]),
+      );
     }
     if (client.status == OnlineStatus.error) {
       return ListView(
