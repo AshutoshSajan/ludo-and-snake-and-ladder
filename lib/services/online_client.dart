@@ -122,6 +122,16 @@ class OnlineClient extends ChangeNotifier {
   // Reconnect state: we keep the join code and identity, and retry with
   // exponential backoff until the server answers hello again.
   String? _joinCode;
+  bool _spectating = false;
+
+  /// True once the server seated us as a read-only watcher. Spectators see
+  /// everything but can never roll, move, or claim a seat.
+  bool get isSpectator => _spectating;
+
+  /// Spectator names from the latest lobby roster (players see this too, as
+  /// a "watching" line).
+  final spectatorNames = <String>[];
+
   bool _userClosed = false;
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
@@ -131,7 +141,8 @@ class OnlineClient extends ChangeNotifier {
   bool get connected =>
       status == OnlineStatus.inLobby || status == OnlineStatus.playing;
 
-  bool get isMyTurn => state != null && started && connected;
+  bool get isMyTurn =>
+      !_spectating && state != null && started && connected;
 
   void _send(Map<String, dynamic> msg) {
     final ch = _channel;
@@ -139,11 +150,16 @@ class OnlineClient extends ChangeNotifier {
     ch.sink.add(jsonEncode(msg));
   }
 
-  Future<void> connect({String? code, LudoColor? preferredColor}) async {
+  Future<void> connect({
+    String? code,
+    LudoColor? preferredColor,
+    bool spectate = false,
+  }) async {
     assert(status == OnlineStatus.idle || status == OnlineStatus.error);
     _userClosed = false;
     _reconnectAttempts = 0;
     _joinCode = code;
+    _spectating = spectate;
     status = OnlineStatus.connecting;
     errorText = null;
     notifyListeners();
@@ -161,6 +177,7 @@ class OnlineClient extends ChangeNotifier {
         'name': name,
         if (_joinCode != null && _joinCode!.isNotEmpty) 'code': _joinCode,
         if (preferredColor != null) 'color': preferredColor.name,
+        if (_spectating) 'spectate': true,
       });
     } catch (e) {
       status = OnlineStatus.error;
@@ -206,7 +223,9 @@ class OnlineClient extends ChangeNotifier {
     switch (msg['type'] as String?) {
       case 'joined':
         roomCode = msg['code'] as String;
-        myColor = LudoColor.values.byName(msg['color'] as String);
+        _spectating = msg['spectator'] as bool? ?? _spectating;
+        final colorName = msg['color'] as String?;
+        myColor = colorName == null ? null : LudoColor.values.byName(colorName);
         status = OnlineStatus.inLobby;
         _reconnectAttempts = 0; // we're back on the wire
       case 'lobby':
@@ -219,6 +238,11 @@ class OnlineClient extends ChangeNotifier {
                 name: (s as Map)['name'] as String,
                 color: LudoColor.values.byName(s['color'] as String),
               ),
+          ]);
+        spectatorNames
+          ..clear()
+          ..addAll([
+            for (final n in (msg['spectators'] as List? ?? [])) n as String,
           ]);
       case 'state':
         final incoming = LudoState.fromJson(
@@ -238,6 +262,13 @@ class OnlineClient extends ChangeNotifier {
           text: msg['text'] as String,
         ));
         onChat?.call();
+      case 'roomClosed':
+        // The authority dropped an abandoned room (grace period expired).
+        errorText = 'The room has closed.';
+        status = OnlineStatus.error;
+        _userClosed = true;
+        _channel?.sink.close();
+        _channel = null;
       case 'error':
         errorText = msg['text'] as String;
         status = OnlineStatus.error;
@@ -257,10 +288,17 @@ class OnlineClient extends ChangeNotifier {
 
   // ------------------------------------------------------------ intents
 
-  void sendStart() => _send({'type': 'start'});
-  void sendRoll() => _send({'type': 'roll'});
-  void sendMove(int tokenIndex) => _send({'type': 'move', 'token': tokenIndex});
-  void sendChat(String text) => _send({'type': 'chat', 'text': text});
+  void sendStart() =>
+      _spectating ? _noop() : _send({'type': 'start'});
+  void sendRoll() => _spectating ? _noop() : _send({'type': 'roll'});
+  void sendMove(int tokenIndex) =>
+      _spectating ? _noop() : _send({'type': 'move', 'token': tokenIndex});
+  void sendChat(String text) =>
+      _spectating ? _noop() : _send({'type': 'chat', 'text': text});
+
+  /// Spectators are read-only; their intents are dropped client-side so the
+  /// server never even sees them.
+  void _noop() {}
 
   Future<void> disconnect() async {
     _userClosed = true;

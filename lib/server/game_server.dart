@@ -51,6 +51,10 @@ class Room {
   /// returning player reclaims their exact seat, even mid-game.
   final Map<String, LudoColor> seatRegistry = {};
 
+  /// Read-only watchers by connection id. They receive every broadcast but
+  /// can never act, claim a seat, or count toward [full].
+  final Map<String, ServerMember> spectators = {};
+
   /// Cancelled when someone (re)joins; fires only while the room sits empty.
   Timer? abandonTimer;
 
@@ -100,7 +104,7 @@ class Room {
 
   void broadcast(Map<String, dynamic> message) {
     final json = jsonEncode(message);
-    for (final m in members.values) {
+    for (final m in [...members.values, ...spectators.values]) {
       try {
         m.sink(json);
       } catch (_) {
@@ -167,6 +171,7 @@ class GameAuthority {
         member.color = c;
         room.members[member.id] = member;
         room.seatRegistry[member.seatId] = c;
+        room.spectators.removeWhere((_, m) => m.seatId == member.seatId);
         room.abandonTimer?.cancel();
         room.abandonTimer = null;
         return room;
@@ -184,6 +189,7 @@ class GameAuthority {
     if (room.ownerOf(color) != null) return joinRoom(code, member);
     room.members[member.id] = member;
     room.seatRegistry[member.seatId] = member.color;
+    room.spectators.removeWhere((_, m) => m.seatId == member.seatId);
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
     return room;
@@ -202,16 +208,42 @@ class GameAuthority {
     room.members.removeWhere((_, m) => m.seatId == member.seatId);
     member.color = claimed;
     room.members[member.id] = member;
+    room.spectators.removeWhere((_, m) => m.seatId == member.seatId);
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
     return room;
   }
 
-  bool removeMember(String code, String connectionId) {
+  /// Adds [member] as a read-only spectator of an existing room — lobby or
+  /// mid-game. Spectators never claim seats and their intents are ignored
+  /// by [handleIntent]. Returns null only when the room is gone, or when
+  /// [member] is already seated as a player in it.
+  Room? spectateRoom(String code, ServerMember member) {
+    final room = rooms[code.toUpperCase()];
+    if (room == null) return null;
+    if (room.members.values.any((m) => m.seatId == member.seatId)) {
+      return null; // already playing here — no duplicate feeds
+    }
+    // One spectator connection per profile; a reconnecting watcher replaces
+    // their own stale connection.
+    room.spectators.removeWhere((_, m) => m.seatId == member.seatId);
+    room.spectators[member.id] = member;
+    room.abandonTimer?.cancel();
+    room.abandonTimer = null;
+    return room;
+  }
+
+  /// Removes the connection [connectionId] from a room's players or
+  /// spectators. A room nobody is connected to at all is dropped right away
+  /// if it never started; a started game lingers for [emptyRoomGrace] so a
+  /// dropped player can still return, and watchers are told when it finally
+  /// closes.
+  bool leaveRoom(String code, String connectionId) {
     final room = rooms[code];
     if (room == null) return false;
-    room.members.remove(connectionId);
-    if (room.members.isEmpty) {
+    final wasMember = room.members.remove(connectionId) != null;
+    if (!wasMember) room.spectators.remove(connectionId);
+    if (room.members.isEmpty && room.spectators.isEmpty) {
       if (!room.started) {
         // A lobby nobody is in any more is worthless — drop it now.
         rooms.remove(code);
@@ -221,7 +253,10 @@ class GameAuthority {
         // connection (or the last one crashing) can still come back.
         room.abandonTimer?.cancel();
         room.abandonTimer = Timer(emptyRoomGrace, () {
-          if (room.members.isEmpty && rooms[code] == room) {
+          if (room.members.isEmpty &&
+              room.spectators.isEmpty &&
+              rooms[code] == room) {
+            room.broadcast({'type': 'roomClosed'});
             rooms.remove(code);
             room.removed = true;
           }

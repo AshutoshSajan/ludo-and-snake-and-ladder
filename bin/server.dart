@@ -78,6 +78,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
               orElse: () => LudoColor.red,
             );
             final code = (msg['code'] as String? ?? '').trim();
+            final spectate = msg['spectate'] as bool? ?? false;
 
             member = ServerMember(
               id: connId,
@@ -88,7 +89,25 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             );
 
             final Room room;
-            if (code.isEmpty) {
+            if (spectate) {
+              if (code.isEmpty) {
+                webSocket.sink.add(jsonEncode({
+                  'type': 'error',
+                  'text': 'a room code is required to spectate',
+                }));
+                return;
+              }
+              final watched = authority.spectateRoom(code, member!);
+              if (watched == null) {
+                webSocket.sink.add(jsonEncode({
+                  'type': 'error',
+                  'text': "room '$code' not found "
+                      '(or you are already playing in it)',
+                }));
+                return;
+              }
+              room = watched;
+            } else if (code.isEmpty) {
               room = authority.createRoom(member!);
             } else {
               var joined = authority.joinWithColor(code, member!, color);
@@ -106,12 +125,17 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             }
             roomCode = room.code;
             _connections[connId] = room.code;
-            webSocket.sink.add(jsonEncode(
-                {'type': 'joined', 'code': room.code, 'color': member!.color.name}));
+            webSocket.sink.add(jsonEncode({
+              'type': 'joined',
+              'code': room.code,
+              if (!spectate) 'color': member!.color.name,
+              if (spectate) 'spectator': true,
+            }));
             _lobby(room);
             if (room.started) {
-              // A mid-game rejoin needs the current snapshot to resume;
-              // lobby players just wait for the broadcast at start.
+              // A mid-game rejoin or a spectator needs the current snapshot
+              // to resume / watch; lobby players just wait for the broadcast
+              // at start.
               webSocket.sink.add(jsonEncode(
                   {'type': 'state', 'state': room.state.toJson()}));
             }
@@ -129,11 +153,11 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           }
         },
         onDone: () {
-          if (roomCode != null) authority.removeMember(roomCode!, connId);
+          if (roomCode != null) authority.leaveRoom(roomCode!, connId);
           _connections.remove(connId);
         },
         onError: (_) {
-          if (roomCode != null) authority.removeMember(roomCode!, connId);
+          if (roomCode != null) authority.leaveRoom(roomCode!, connId);
           _connections.remove(connId);
         },
         cancelOnError: true,
@@ -151,6 +175,9 @@ void _lobby(Room room) {
     'seats': [
       for (final m in room.orderedMembers)
         {'name': m.name, 'color': m.color.name}
+    ],
+    'spectators': [
+      for (final m in room.spectators.values) m.name,
     ],
   });
 }

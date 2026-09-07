@@ -168,7 +168,7 @@ void main() {
     test('the last member leaving dissolves the room', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
-      auth.removeMember(room.code, 'red');
+      auth.leaveRoom(room.code, 'red');
       expect(room.removed, isTrue);
       expect(auth.rooms.containsKey(room.code), isFalse);
     });
@@ -379,6 +379,51 @@ void main() {
           reason: 'every client sees the same authoritative dice');
     });
 
+    test('a spectator watches a running game without a seat', () async {
+      host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'h3', 'name': 'H'}));
+      final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
+      guest.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'g3', 'name': 'G', 'code': code}));
+      await nextMsg(guestBuf, 'joined');
+      host.sink.add(jsonEncode({'type': 'start'}));
+      await nextMsg(hostBuf, 'state');
+
+      // The watcher connects mid-game.
+      final watcher = WebSocketChannel.connect(
+          Uri.parse('ws://127.0.0.1:${http.port}/ws'));
+      await watcher.ready;
+      final buf = <Map<String, dynamic>>[];
+      watcher.stream
+          .listen((d) => buf.add(jsonDecode(d as String) as Map<String, dynamic>));
+      watcher.sink.add(jsonEncode({
+        'type': 'hello',
+        'seatId': 'watcher-1',
+        'name': 'Watcher',
+        'code': code,
+        'spectate': true,
+      }));
+
+      final wJoined = await nextMsg(buf, 'joined');
+      expect(wJoined['spectator'], isTrue);
+      expect(wJoined.containsKey('color'), isFalse,
+          reason: 'spectators claim no corner');
+      final snapshot = await nextMsg(buf, 'state');
+      expect((snapshot['state'] as Map)['players'], hasLength(2));
+
+      // The watcher's intents are dead letters, but real play reaches them.
+      watcher.sink.add(jsonEncode({'type': 'roll'}));
+      host.sink.add(jsonEncode({'type': 'roll'}));
+      final after = await nextMsg(buf, 'state');
+      expect(after['state']['rollSeq'],
+          (snapshot['state'] as Map)['rollSeq'] + 1);
+      // The watcher's own lobby roster names them.
+      final roster = await nextMsg(buf, 'lobby');
+      expect(roster['spectators'], contains('Watcher'));
+
+      await watcher.sink.close();
+    });
+
     test('joining a bogus room code yields an error message', () async {
       final stranger = WebSocketChannel.connect(
           Uri.parse('ws://127.0.0.1:${http.port}/ws'));
@@ -459,7 +504,7 @@ void main() {
       expect(room.started, isTrue);
 
       // red drops; blue remains.
-      auth.removeMember(room.code, 'red');
+      auth.leaveRoom(room.code, 'red');
       expect(room.members, hasLength(1));
 
       // red returns on a new connection and gets the same corner back.
@@ -509,8 +554,8 @@ void main() {
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
           room: room, connectionId: 'red', msg: {'type': 'start'});
-      auth.removeMember(room.code, 'red');
-      auth.removeMember(room.code, 'blue');
+      auth.leaveRoom(room.code, 'red');
+      auth.leaveRoom(room.code, 'blue');
       expect(auth.rooms.containsKey(room.code), isTrue,
           reason: 'the game stays recoverable for a moment');
       await Future<void>.delayed(const Duration(milliseconds: 60));
@@ -521,7 +566,7 @@ void main() {
     test('an emptied lobby room is removed immediately', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
-      auth.removeMember(room.code, 'red');
+      auth.leaveRoom(room.code, 'red');
       expect(auth.rooms.containsKey(room.code), isFalse);
       expect(room.removed, isTrue);
     });
@@ -533,13 +578,62 @@ void main() {
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
           room: room, connectionId: 'red', msg: {'type': 'start'});
-      auth.removeMember(room.code, 'red');
-      auth.removeMember(room.code, 'blue');
+      auth.leaveRoom(room.code, 'red');
+      auth.leaveRoom(room.code, 'blue');
       auth.rejoinRoom(
           room.code, _member(LudoColor.red, seatId: 'red', id: 'c1'));
       await Future<void>.delayed(const Duration(milliseconds: 60));
       expect(auth.rooms.containsKey(room.code), isTrue,
           reason: 'a returning player keeps the room alive');
+    });
+  });
+
+  // ---------------------------------------------------------- spectating
+
+  group('GameAuthority: spectators', () {
+    test('a watcher receives broadcasts but cannot act', () {
+      final seen = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      final watcher =
+          auth.spectateRoom(room.code, _member(LudoColor.green, seatId: 'w',
+              id: 'w1', on: seen.add));
+      expect(watcher, isNotNull);
+      expect(room.spectators, hasLength(1));
+
+      room.broadcast({'type': 'lobby', 'code': room.code});
+      expect(seen, hasLength(1),
+          reason: 'spectators are on the broadcast feed');
+
+      // The watcher cannot start or roll — handleIntent only looks at
+      // seated members.
+      auth.handleIntent(
+          room: room, connectionId: 'w1', msg: {'type': 'start'});
+      auth.handleIntent(room: room, connectionId: 'w1', msg: {'type': 'roll'});
+      expect(room.started, isFalse);
+    });
+
+    test('a seated player cannot spectate the same room', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      expect(
+        auth.spectateRoom(room.code, _member(LudoColor.red, id: 'red-x')),
+        isNull,
+        reason: 'no duplicate feeds for someone already seated',
+      );
+    });
+
+    test('a spectator leaving does not kill a started room', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.spectateRoom(room.code, _member(LudoColor.green, seatId: 'w'));
+      auth.leaveRoom(room.code, 'w');
+      expect(auth.rooms.containsKey(room.code), isTrue);
+      auth.leaveRoom(room.code, 'red');
+      expect(auth.rooms.containsKey(room.code), isTrue,
+          reason: 'started games linger for the grace period');
     });
   });
 

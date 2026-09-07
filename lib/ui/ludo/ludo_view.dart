@@ -208,7 +208,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Ludo'),
+        title: widget.onlineClient?.isSpectator ?? false
+            ? const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.visibility, size: 18),
+                SizedBox(width: 6),
+                Text('Ludo — watching'),
+              ])
+            : const Text('Ludo'),
         actions: [
           IconButton(
             icon: const Icon(Icons.undo),

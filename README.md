@@ -147,4 +147,7 @@ opens `index.html` in a tab.
       (wins / games / average placement) at `GET /leaderboard`. The home
       screen's *Online Leaderboard* button shows the top players with a
       medal podium — requires the server to be running.
-- [ ] Phase 11+ — spectating.
+- [x] Phase 11 — spectating: anyone can watch a running or waiting room via
+      the lobby's *Spectate* option. Watchers receive every state broadcast,
+      claim no seat, and their intents are ignored by the server (and the
+      client). Seated players see who is watching in the roster.

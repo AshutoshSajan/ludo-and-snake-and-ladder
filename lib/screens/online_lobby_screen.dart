@@ -37,6 +37,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   final _chatCtrl = TextEditingController();
 
   OnlineClient? _client;
+  bool _spectate = false; // "Watch" instead of "Join" in the connect form
   final String _seatId =
       'u${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
       '${Random().nextInt(1 << 16).toRadixString(36)}';
@@ -65,7 +66,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     }
     final code = _codeCtrl.text.trim();
     if (!createRoom && code.length != 4) {
-      _showSnack('Room codes are 4 letters');
+      _showSnack(
+          _spectate ? 'Enter a room code to watch' : 'Room codes are 4 letters');
       return;
     }
     final client = OnlineClient(
@@ -74,7 +76,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       name: name,
     )..addListener(() => setState(() {}));
     setState(() => _client = client);
-    client.connect(code: createRoom ? null : code);
+    client.connect(code: createRoom ? null : code, spectate: !createRoom && _spectate);
   }
 
   void _showSnack(String text) {
@@ -186,10 +188,40 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               child: FilledButton.tonalIcon(
                 icon: const Icon(Icons.login),
                 label: const Text('Join'),
-                onPressed: () => _connect(createRoom: false),
+                onPressed: () {
+                  setState(() => _spectate = false);
+                  _connect(createRoom: false);
+                },
               ),
             ),
           ],
+        ),
+        const SizedBox(height: 8),
+        Center(
+          child: TextButton.icon(
+            icon: Icon(
+              _spectate ? Icons.visibility : Icons.visibility_outlined,
+              size: 18,
+            ),
+            label: Text(_spectate
+                ? 'Spectating — tap again to cancel'
+                : 'Just want to watch? Spectate a room'),
+            style: TextButton.styleFrom(
+              foregroundColor:
+                  _spectate ? AppColors.gold : AppColors.ivory.withAlpha(150),
+            ),
+            onPressed: () {
+              setState(() => _spectate = !_spectate);
+              if (!_spectate) return;
+              final code = _codeCtrl.text.trim();
+              final name = _nameCtrl.text.trim();
+              if (name.isEmpty) {
+                _showSnack('Pick a display name first');
+              } else if (code.length == 4) {
+                _connect(createRoom: false);
+              }
+            },
+          ),
         ),
       ],
     );
@@ -255,9 +287,21 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     }
     final seats = client.lobbySeats;
     final iAmHost = seats.isNotEmpty && client.myColor == seats.first.color;
+    final spectating = client.isSpectator;
     return ListView(
       shrinkWrap: true,
       children: [
+        if (spectating)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: Center(
+              child: Chip(
+                avatar: Icon(Icons.visibility, size: 16),
+                label: Text('Spectating'),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ),
         Card(
           color: AppColors.feltLight,
           child: Padding(
@@ -319,7 +363,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   )
                 : null,
           ),
-        if (seats.length < 4)
+        if (seats.length < 4 && !spectating)
           ListTile(
             leading: const CircleAvatar(
               child: Icon(Icons.person_add_alt, size: 18),
@@ -329,20 +373,31 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               style: TextStyle(color: AppColors.ivory.withAlpha(150)),
             ),
           ),
-        const SizedBox(height: 12),
-        FilledButton.icon(
-          icon: const Icon(Icons.play_arrow),
-          label: Text(
-            client.started
-                ? 'Game starting…'
-                : iAmHost
-                ? 'Start game'
-                : 'Waiting for the host to start',
+        if (client.spectatorNames.isNotEmpty)
+          ListTile(
+            leading: const CircleAvatar(
+              child: Icon(Icons.visibility, size: 18),
+            ),
+            title: Text(
+              'Watching: ${client.spectatorNames.join(', ')}',
+              style: TextStyle(color: AppColors.ivory.withAlpha(150)),
+            ),
           ),
-          onPressed: client.started || !iAmHost || seats.length < 2
-              ? null
-              : client.sendStart,
-        ),
+        const SizedBox(height: 12),
+        if (!spectating)
+          FilledButton.icon(
+            icon: const Icon(Icons.play_arrow),
+            label: Text(
+              client.started
+                  ? 'Game starting…'
+                  : iAmHost
+                      ? 'Start game'
+                      : 'Waiting for the host to start',
+            ),
+            onPressed: client.started || !iAmHost || seats.length < 2
+                ? null
+                : client.sendStart,
+          ),
         const SizedBox(height: 16),
         // Light-weight table talk while everyone gathers.
         for (final line in client.chat.reversed.take(6))
@@ -356,28 +411,29 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               ),
             ),
           ),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _chatCtrl,
-                style: const TextStyle(color: AppColors.ivory),
-                onSubmitted: (_) => _sendChat(client),
-                decoration: InputDecoration(
-                  labelText: 'Say something…',
-                  labelStyle: const TextStyle(color: AppColors.ivory),
-                  enabledBorder: _border(AppColors.ivory.withAlpha(90)),
-                  focusedBorder: _border(AppColors.gold),
+        if (!spectating)
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _chatCtrl,
+                  style: const TextStyle(color: AppColors.ivory),
+                  onSubmitted: (_) => _sendChat(client),
+                  decoration: InputDecoration(
+                    labelText: 'Say something…',
+                    labelStyle: const TextStyle(color: AppColors.ivory),
+                    enabledBorder: _border(AppColors.ivory.withAlpha(90)),
+                    focusedBorder: _border(AppColors.gold),
+                  ),
                 ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.send, color: AppColors.gold),
-              tooltip: 'Send chat',
-              onPressed: () => _sendChat(client),
-            ),
-          ],
-        ),
+              IconButton(
+                icon: const Icon(Icons.send, color: AppColors.gold),
+                tooltip: 'Send chat',
+                onPressed: () => _sendChat(client),
+              ),
+            ],
+          ),
       ],
     );
   }
