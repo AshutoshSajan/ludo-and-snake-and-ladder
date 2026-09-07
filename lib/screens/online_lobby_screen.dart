@@ -16,6 +16,16 @@ import '../ui/theme.dart';
 class OnlineLobbyScreen extends StatefulWidget {
   const OnlineLobbyScreen({super.key});
 
+  /// On web the server is typically the same host the app was served from,
+  /// just on the dedicated WebSocket port. Shared with the online
+  /// leaderboard screen so both target the same server by default.
+  static String defaultServerUrl() {
+    if (kIsWeb && Uri.base.host.isNotEmpty) {
+      return 'ws://${Uri.base.host}:8080/ws';
+    }
+    return 'ws://localhost:8080/ws';
+  }
+
   @override
   State<OnlineLobbyScreen> createState() => _OnlineLobbyScreenState();
 }
@@ -34,16 +44,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   @override
   void initState() {
     super.initState();
-    _serverCtrl.text = _defaultServerUrl();
-  }
-
-  /// On web the server is typically the same host the app was served from,
-  /// just on the dedicated WebSocket port.
-  static String _defaultServerUrl() {
-    if (kIsWeb && Uri.base.host.isNotEmpty) {
-      return 'ws://${Uri.base.host}:8080/ws';
-    }
-    return 'ws://localhost:8080/ws';
+    _serverCtrl.text = OnlineLobbyScreen.defaultServerUrl();
   }
 
   @override

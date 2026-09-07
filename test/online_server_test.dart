@@ -17,13 +17,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
+import 'package:game_club/server/leaderboard_store.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 // Reuses the real transport (WebSocket handler + protocol) from the
 // server entrypoint so the integration test exercises production code.
-import '../bin/server.dart' show wsHandler;
+import '../bin/server.dart'
+    show wsHandler, leaderboardHandler, leaderboardStore, authority;
 
 ServerMember _member(LudoColor c,
         {String? seatId, String? id, void Function(String)? on}) =>
@@ -538,6 +540,100 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 60));
       expect(auth.rooms.containsKey(room.code), isTrue,
           reason: 'a returning player keeps the room alive');
+    });
+  });
+
+  // ------------------------------------------------- leaderboard recording
+
+  group('GameAuthority: leaderboard recording', () {
+    test('a finished game is recorded once with correct ranks', () {
+      final store = LeaderboardStore.inMemory();
+      final auth = GameAuthority(rng: Random(1), leaderboard: store);
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.handleIntent(
+          room: room, connectionId: 'red', msg: {'type': 'start'});
+
+      final s = room.state;
+      // Force the endgame: three of red's tokens home, the last one one
+      // step short, a pending 1 for red. Red's move finishes red; with
+      // 2 players the game then ends and blue is auto-ranked behind.
+      for (final t in s.tokens) {
+        t.pos = t.color == LudoColor.red && t.index == 0 ? 55 : 56;
+      }
+      s
+        ..lastRoll = 1
+        ..phase = LudoPhase.awaitingMove;
+      auth.handleIntent(
+          room: room, connectionId: 'red', msg: {'type': 'move', 'token': 0});
+
+      expect(s.phase, LudoPhase.gameOver);
+      expect(s.rankings, ['red', 'blue']);
+      expect(store.totalGames, 1);
+
+      final rows = store.topPlayers();
+      expect(rows.map((r) => r.name), ['Red', 'Blue']);
+      expect(rows[0].wins, 1);
+      expect(rows[0].games, 1);
+      expect(rows[0].avgRank, 1.0);
+      expect(rows[1].avgRank, 2.0);
+
+      // Anything after game over is rejected, so no double recording.
+      auth.handleIntent(room: room, connectionId: 'red', msg: {'type': 'roll'});
+      expect(store.totalGames, 1);
+      expect(store.topPlayers().first.games, 1);
+    });
+
+    test('without a store, completion stays a pure no-op', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.handleIntent(
+          room: room, connectionId: 'red', msg: {'type': 'start'});
+      for (final t in room.state.tokens) {
+        t.pos = t.color == LudoColor.red && t.index == 0 ? 55 : 56;
+      }
+      room.state
+        ..lastRoll = 1
+        ..phase = LudoPhase.awaitingMove;
+      expect(
+        () => auth.handleIntent(
+            room: room, connectionId: 'red', msg: {'type': 'move', 'token': 0}),
+        returnsNormally,
+      );
+      expect(room.state.phase, LudoPhase.gameOver);
+    });
+  });
+
+  // --------------------------------------------------- leaderboard over HTTP
+
+  group('GET /leaderboard (production handler)', () {
+    test('serves recorded games as JSON and rejects non-GET', () async {
+      // Swap the module globals for a clean, seeded pair.
+      final store = LeaderboardStore.inMemory();
+      leaderboardStore = store;
+      authority = GameAuthority(rng: Random(1), leaderboard: store);
+      store.recordResults(gameId: 'g1', results: [
+        GameResult(seatId: 'w', name: 'Winnie', color: 'red', rank: 1),
+        GameResult(seatId: 'l', name: 'Louie', color: 'blue', rank: 2),
+      ]);
+
+      final resp = leaderboardHandler(shelf.Request(
+          'GET', Uri.parse('http://localhost/leaderboard')));
+      expect(resp.statusCode, 200);
+      final body =
+          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+      expect(body['ok'], isTrue);
+      expect(body['games'], 1);
+      final players = body['players'] as List;
+      expect(players, hasLength(2));
+      expect(players.first['name'], 'Winnie');
+      expect(players.first['wins'], 1);
+      expect(players.first['avgRank'], 1.0);
+
+      final post = leaderboardHandler(shelf.Request(
+          'POST', Uri.parse('http://localhost/leaderboard')));
+      expect(post.statusCode, 405);
     });
   });
 }

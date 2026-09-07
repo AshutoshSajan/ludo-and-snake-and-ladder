@@ -141,4 +141,10 @@ opens `index.html` in a tab.
       game cannot be cheated from the client side.
 - [x] Phase 9 — mid-game reconnect: auto-reconnect with backoff, seat reclaim
       on the server, and a grace period for abandoned-but-started rooms.
-- [ ] Phase 10+ — online leaderboards (SQLite), spectating.
+- [x] Phase 10 — online leaderboards: the server records every finished game
+      into SQLite (`lib/server/leaderboard_store.dart`, `--db FILE` to choose
+      the path, default `ludo_leaderboard.db`) and serves career stats
+      (wins / games / average placement) at `GET /leaderboard`. The home
+      screen's *Online Leaderboard* button shows the top players with a
+      medal podium — requires the server to be running.
+- [ ] Phase 11+ — spectating.

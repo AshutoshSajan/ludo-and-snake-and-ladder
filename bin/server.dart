@@ -1,9 +1,10 @@
 /// Game Club — authoritative Ludo server.
 ///
-/// Run:  dart run bin/server.dart [--port 8080]
+/// Run:  dart run bin/server.dart [--port 8080] [--db FILE]
 ///
 /// Endpoints:
 ///   GET  /            -> health check
+///   GET  /leaderboard -> top players + total games recorded
 ///   WS   /ws?code=XXXX  -> join/create room, then JSON message protocol
 ///
 /// Client -> server messages:
@@ -30,8 +31,14 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/server/game_server.dart';
+import 'package:game_club/server/leaderboard_store.dart';
 
-final authority = GameAuthority();
+/// Not final so tests can swap in a fresh authority + store.
+GameAuthority authority = GameAuthority();
+
+/// Not final so tests can swap in an in-memory store. main() replaces this
+/// with the file-backed store before the server starts listening.
+LeaderboardStore leaderboardStore = LeaderboardStore.inMemory();
 
 final _connections = <String, String>{}; // connId -> roomCode
 
@@ -149,24 +156,52 @@ void _lobby(Room room) {
 }
 
 shelf.Response _health(shelf.Request req) => shelf.Response.ok(
-      jsonEncode({'ok': true, 'rooms': authority.rooms.length}),
+      jsonEncode({
+        'ok': true,
+        'rooms': authority.rooms.length,
+        'games': leaderboardStore.totalGames,
+      }),
       headers: {'content-type': 'application/json'},
     );
 
+shelf.Response leaderboardHandler(shelf.Request req) {
+  if (req.method != 'GET') {
+    return shelf.Response(405,
+        body: jsonEncode({'ok': false, 'text': 'GET only'}),
+        headers: {'content-type': 'application/json'});
+  }
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'games': leaderboardStore.totalGames,
+      'players': [for (final e in leaderboardStore.topPlayers()) e.toJson()],
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
 Future<void> main(List<String> args) async {
   var port = 8080;
+  var dbPath = 'ludo_leaderboard.db';
   for (var i = 0; i < args.length - 1; i++) {
     if (args[i] == '--port') port = int.tryParse(args[i + 1]) ?? port;
+    if (args[i] == '--db') dbPath = args[i + 1];
   }
+
+  // File-backed persistence for production runs; tests swap the globals.
+  leaderboardStore = LeaderboardStore(dbPath);
+  authority = GameAuthority(leaderboard: leaderboardStore);
 
   final handler = const shelf.Pipeline()
       .addMiddleware(shelf.logRequests())
       .addHandler((req) {
         if (req.url.path == 'ws') return wsHandler()(req);
+        if (req.url.path == 'leaderboard') return leaderboardHandler(req);
         return _health(req);
       });
 
   final server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
   stdout.writeln('Game Club server listening on '
-      'ws://${server.address.host}:${server.port}/ws');
+      'ws://${server.address.host}:${server.port}/ws '
+      '(leaderboard db: $dbPath)');
 }

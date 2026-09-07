@@ -8,6 +8,7 @@ import '../ui/theme.dart';
 import 'home_widgets.dart';
 import 'leaderboard_screen.dart';
 import 'online_lobby_screen.dart';
+import 'scoreboard_screen.dart';
 import 'settings_screen.dart';
 import 'setup_screen.dart';
 
@@ -91,6 +92,18 @@ class HomeScreen extends ConsumerWidget {
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => const OnlineLobbyScreen(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.emoji_events_outlined, size: 18),
+                      label: const Text('Online Leaderboard'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const ScoreboardScreen(),
                         ),
                       ),
                     ),

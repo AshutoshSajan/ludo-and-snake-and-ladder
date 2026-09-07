@@ -14,6 +14,7 @@ import 'dart:math';
 import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
+import 'leaderboard_store.dart';
 
 /// One connected participant.
 class ServerMember {
@@ -53,6 +54,12 @@ class Room {
   /// Cancelled when someone (re)joins; fires only while the room sits empty.
   Timer? abandonTimer;
 
+  /// Unique id for the current game — the leaderboard's dedupe key.
+  String? gameId;
+
+  /// Set once the results of [gameId] have been persisted.
+  bool resultsRecorded = false;
+
   bool started = false;
   bool removed = false;
 
@@ -84,6 +91,10 @@ class Room {
         ),
     ];
     state = createLudoState(players);
+    // One id per game: the store dedupes on (gameId, seatId), so a botched
+    // double-completion cannot inflate a player's stats.
+    gameId = '${DateTime.now().microsecondsSinceEpoch}-$code';
+    resultsRecorded = false;
     started = true;
   }
 
@@ -109,13 +120,19 @@ class Room {
 /// Server-side game logic shared by the transport layer (websockets) and
 /// tests (direct function calls).
 class GameAuthority {
-  GameAuthority({Random? rng, this.emptyRoomGrace = const Duration(minutes: 5)})
-      : rng = rng ?? Random.secure();
+  GameAuthority({
+    Random? rng,
+    this.emptyRoomGrace = const Duration(minutes: 5),
+    this.leaderboard,
+  }) : rng = rng ?? Random.secure();
 
   final Random rng;
 
   /// How long a started room with no connected members stays recoverable.
   final Duration emptyRoomGrace;
+
+  /// Optional persistence for finished games. Null = leaderboard disabled.
+  final LeaderboardStore? leaderboard;
   final Map<String, Room> rooms = {};
 
   static String _newCode() {
@@ -238,6 +255,7 @@ class GameAuthority {
         if (state.currentPlayer.id != member.seatId) return;
         rollDice(state, rng.nextInt(6) + 1);
         room.broadcastState();
+        _recordResultsIfFinished(room, state);
 
       case 'move':
         if (state == null || state.phase != LudoPhase.awaitingMove) return;
@@ -248,6 +266,7 @@ class GameAuthority {
         if (!legal) return; // reject illegal move silently
         applyMove(state, idx);
         room.broadcastState();
+        _recordResultsIfFinished(room, state);
 
       case 'chat':
         final text = (msg['text'] as String? ?? '').trim();
@@ -255,6 +274,29 @@ class GameAuthority {
         room.broadcast(
             {'type': 'chat', 'from': member.name, 'text': text});
     }
+  }
+
+  /// Persists the result when a game just reached completion. A no-op
+  /// without a leaderboard store, before start, or once already recorded.
+  void _recordResultsIfFinished(Room room, LudoState state) {
+    final store = leaderboard;
+    if (store == null || room.gameId == null || room.resultsRecorded) return;
+    if (state.phase != LudoPhase.gameOver) return;
+    final rankings = state.rankings;
+    if (rankings.length < state.players.length) return;
+    room.resultsRecorded = true;
+    store.recordResults(
+      gameId: room.gameId!,
+      results: [
+        for (final p in state.players)
+          GameResult(
+            seatId: p.id,
+            name: p.name,
+            color: p.color.name,
+            rank: rankings.indexOf(p.id) + 1,
+          ),
+      ],
+    );
   }
 }
 

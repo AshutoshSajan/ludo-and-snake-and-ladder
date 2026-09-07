@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../engine/ludo/ludo_models.dart';
@@ -19,6 +20,44 @@ class LobbySeat {
 
   final String name;
   final LudoColor color;
+}
+
+/// One aggregated row of the server-side leaderboard.
+class LeaderboardRow {
+  LeaderboardRow({
+    required this.name,
+    required this.wins,
+    required this.games,
+    required this.avgRank,
+  });
+
+  factory LeaderboardRow.fromJson(Map<String, dynamic> j) => LeaderboardRow(
+        name: j['name'] as String? ?? '?',
+        wins: j['wins'] as int? ?? 0,
+        games: j['games'] as int? ?? 0,
+        avgRank: (j['avgRank'] as num?)?.toDouble() ?? 0,
+      );
+
+  final String name;
+  final int wins; // first-place finishes
+  final int games;
+  final double avgRank; // lower is better; 1.0 = always first
+}
+
+/// The parsed GET /leaderboard response.
+class LeaderboardData {
+  LeaderboardData({required this.games, required this.rows});
+
+  factory LeaderboardData.fromJson(Map<String, dynamic> j) => LeaderboardData(
+        games: j['games'] as int? ?? 0,
+        rows: [
+          for (final r in (j['players'] as List? ?? []))
+            LeaderboardRow.fromJson(r as Map<String, dynamic>),
+        ],
+      );
+
+  final int games; // total finished games on the server
+  final List<LeaderboardRow> rows;
 }
 
 enum OnlineStatus { idle, connecting, reconnecting, inLobby, playing, error }
@@ -38,6 +77,29 @@ class OnlineClient extends ChangeNotifier {
 
   /// Overridable for tests (fake WebSocket channels).
   final WebSocketChannel Function(Uri) _channelFactory;
+
+  /// Fetches the server leaderboard over plain HTTP. [serverUrl] is the
+  /// WebSocket URL (ws://host:port/ws); the matching http(s) origin is used.
+  /// Throws on network errors or a non-200 response.
+  static Future<LeaderboardData> fetchLeaderboard(String serverUrl,
+      {http.Client? httpClient, Duration timeout = const Duration(seconds: 5)}) async {
+    final ws = Uri.parse(serverUrl);
+    final base = ws.replace(
+      scheme: ws.scheme == 'wss' ? 'https' : 'http',
+      path: '/leaderboard',
+    );
+    final client = httpClient ?? http.Client();
+    try {
+      final resp = await client.get(base).timeout(timeout);
+      if (resp.statusCode != 200) {
+        throw Exception('Leaderboard request failed (HTTP ${resp.statusCode})');
+      }
+      return LeaderboardData.fromJson(
+          jsonDecode(resp.body) as Map<String, dynamic>);
+    } finally {
+      if (httpClient == null) client.close();
+    }
+  }
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
