@@ -8,6 +8,7 @@ import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
 import '../providers/app_providers.dart';
+import '../services/online_client.dart';
 import '../services/sound_service.dart';
 
 /// A seat chosen on the setup screen.
@@ -64,6 +65,7 @@ class LudoSession extends ChangeNotifier {
     required this.sound,
     required this.onGameOver,
     Random? rng,
+    bool skipSchedule = false,
   }) : _rng = rng ?? Random() {
     final players = <LudoPlayer>[];
     for (var i = 0; i < seats.length; i++) {
@@ -82,7 +84,7 @@ class LudoSession extends ChangeNotifier {
         .indexOf(a.color)
         .compareTo(LudoBoard.colorOrder.indexOf(b.color)));
     state = createLudoState(players);
-    scheduleNext();
+    if (!skipSchedule) scheduleNext();
   }
 
   late LudoState state;
@@ -101,11 +103,66 @@ class LudoSession extends ChangeNotifier {
   bool autoPlay = false;
 
   bool get isBusy => _busy || activeAnim != null;
-  bool get currentIsAI => state.currentPlayer.isAI;
+
+  // ---------------------------------------------------------------- online
+
+  /// Attached authoritative-server client (null in local games).
+  OnlineClient? online;
+  String? mySeatId;
+
+  bool get isOnline => online != null;
+
+  /// Named constructor for online play: adopts the server snapshot and
+  /// forwards intents. The server owns the dice and validation.
+  factory LudoSession.online({
+    required OnlineClient client,
+    required String seatId,
+    required ProfilesNotifier profiles,
+    required SoundService sound,
+    required void Function(LudoState) onGameOver,
+  }) {
+    final snapshot = client.state!;
+    final s = LudoSession(
+      seats: [
+        for (final p in snapshot.players)
+          SeatSetup(name: p.name, profileId: p.id, color: p.color),
+      ],
+      profiles: profiles,
+      sound: sound,
+      onGameOver: onGameOver,
+      skipSchedule: true,
+    );
+    // Replace engine-generated state with the authoritative snapshot.
+    s.state = snapshot;
+    s.mySeatId = seatId;
+    s.online = client;
+    client.onRoll = () {
+      s.sound.dice();
+      Haptics.light();
+    };
+    client.onState = (old, next) => s._adoptState(old, next);
+    return s;
+  }
+
+  /// Whether the current seat is driven by the local AI. Never true in an
+  /// online game — remote seats are driven by the server, and the server
+  /// snapshot tells us when it is our turn.
+  bool get currentIsAI => !isOnline && state.currentPlayer.isAI;
+
+  /// Whether the *local* user may act now (online: it's my seat's turn).
+  bool get isMyTurnNow =>
+      isOnline ? state.currentPlayer.id == mySeatId : !currentIsAI;
 
   // ---------------------------------------------------------------- turns
 
   void roll() {
+    if (isOnline) {
+      if (isBusy || state.phase != LudoPhase.awaitingRoll || !isMyTurnNow) {
+        return;
+      }
+      online!.sendRoll();
+      return;
+    }
     if (_busy || state.phase != LudoPhase.awaitingRoll || currentIsAI) return;
     _roll();
   }
@@ -122,10 +179,12 @@ class LudoSession extends ChangeNotifier {
   final _undoStack = <LudoState>[];
 
   /// True when the last roll+move of the current human turn can be undone.
+  /// Online games are server-authoritative — no local undo.
   bool get canUndo =>
       _undoStack.isNotEmpty &&
       !isBusy &&
       !autoPlay &&
+      !isOnline &&
       state.phase != LudoPhase.gameOver;
 
   /// Undo the last roll (and any move made from it). Restores the most
@@ -145,11 +204,12 @@ class LudoSession extends ChangeNotifier {
     scheduleNext();
   }
 
-  /// True when a hint can be requested: it's a human's move phase and
-  /// nothing is animating.
+  /// True when a hint can be requested: it's the local human's move phase
+  /// and nothing is animating.
   bool get canHint =>
       !_busy &&
       !currentIsAI &&
+      isMyTurnNow &&
       !autoPlay &&
       state.phase == LudoPhase.awaitingMove &&
       legalMoves(state).isNotEmpty;
@@ -188,7 +248,19 @@ class LudoSession extends ChangeNotifier {
   }
 
   void tapToken(int tokenIndex) {
-    if (_busy || currentIsAI || state.phase != LudoPhase.awaitingMove) return;
+    if (_busy || state.phase != LudoPhase.awaitingMove) return;
+    if (isOnline) {
+      // Remote play: validate locally for responsiveness, but only send the
+      // intent — the server is the single source of truth.
+      if (!isMyTurnNow) return;
+      final move = legalMoves(state)
+          .where((m) => m.tokenIndex == tokenIndex)
+          .firstOrNull;
+      if (move == null) return;
+      online!.sendMove(tokenIndex);
+      return;
+    }
+    if (currentIsAI) return;
     final move =
         legalMoves(state).where((m) => m.tokenIndex == tokenIndex).firstOrNull;
     if (move == null) return;
@@ -241,26 +313,7 @@ class LudoSession extends ChangeNotifier {
       final captured = applyMove(state, move.tokenIndex);
       activeAnim = null;
       _busy = false;
-      if (captured != null) {
-        sound.capture();
-        Haptics.heavy();
-      } else if (state.lastEvent == 'home' || state.lastEvent == 'finished') {
-        sound.home();
-        Haptics.medium();
-      } else {
-        // Landed on a safe (star) cell?
-        final target = move.to;
-        final onSafe = target >= 0 &&
-            target <= 50 &&
-            LudoBoard.safeCells.contains(LudoBoard.absCell(player.color, target));
-        if (onSafe) {
-          sound.safe();
-          Haptics.light();
-        } else {
-          sound.move();
-          Haptics.light();
-        }
-      }
+      _playOutcome(player.color, move.to, captured != null);
       notifyListeners();
 
       if (state.phase == LudoPhase.gameOver) {
@@ -275,6 +328,10 @@ class LudoSession extends ChangeNotifier {
 
   /// Kick the next action: AI roll/move or wait for the human.
   void scheduleNext() {
+    if (isOnline) {
+      // The server drives turn flow; the client only animates snapshots.
+      return;
+    }
     if (_over || state.phase == LudoPhase.gameOver) return;
     _timer?.cancel();
     // AI seats always auto-play; human seats only when autoplay is on.
@@ -293,6 +350,116 @@ class LudoSession extends ChangeNotifier {
         final move = chooseLudoMove(state, state.currentPlayer.difficulty, _rng);
         if (move != null) _playMove(move);
       });
+    }
+  }
+
+  /// Outcome sounds/haptics shared by local moves and online replays.
+  void _playOutcome(LudoColor color, int to, bool captured) {
+    if (captured) {
+      sound.capture();
+      Haptics.heavy();
+    } else if (state.lastEvent == 'home' || state.lastEvent == 'finished') {
+      sound.home();
+      Haptics.medium();
+    } else {
+      // Landed on a safe (star) cell?
+      final onSafe = to >= 0 &&
+          to <= 50 &&
+          LudoBoard.safeCells.contains(LudoBoard.absCell(color, to));
+      if (onSafe) {
+        sound.safe();
+        Haptics.light();
+      } else {
+        sound.move();
+        Haptics.light();
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- online
+
+  /// Adopts an authoritative snapshot from the server. When the snapshot
+  /// represents a *move* on the same roll (same rollSeq) and exactly one
+  /// token advanced, the move is replayed as the usual walk animation so
+  /// remote turns look identical to local ones.
+  void _adoptState(LudoState? old, LudoState next) {
+    _timer?.cancel();
+    for (final t in _stepTimers) {
+      t.cancel();
+    }
+    _stepTimers.clear();
+    activeAnim = null;
+    _busy = false;
+    state = next;
+
+    MoveAnim? replay;
+    LudoToken? moved;
+    bool captured = false;
+    if (old != null && old.rollSeq == next.rollSeq) {
+      final prev = {for (final t in old.tokens) t.gid: t.pos};
+      for (final t in next.tokens) {
+        if (prev[t.gid] != t.pos) {
+          moved = t;
+          break;
+        }
+      }
+      if (moved != null) {
+        final from = prev[moved.gid]!;
+        final to = moved.pos;
+        final waypoints = <GridPos>[
+          LudoBoard.coordFor(moved.color, from, moved.index, 4),
+          if (from == -1)
+            LudoBoard.coordFor(moved.color, 0, moved.index, 4)
+          else
+            for (var r = from + 1; r <= to; r++)
+              r == 56
+                  ? LudoBoard.finishedCell(moved.color)
+                  : LudoBoard.coordFor(moved.color, r, moved.index, 4),
+        ];
+        replay = MoveAnim(
+          tokenGid: moved.gid,
+          waypoints: waypoints,
+          stepMs: from == -1 ? 200 : 130,
+          startInYard: from == -1,
+          toHome: to == 56,
+        );
+        for (var i = 1; i < waypoints.length; i++) {
+          _stepTimers.add(Timer(Duration(milliseconds: replay.stepMs * i), () {
+            sound.step();
+            Haptics.light();
+          }));
+        }
+        // Capture detection: an opponent token stood on the landing cell
+        // before this move and is gone (sent home) in the snapshot.
+        if (moved.pos >= 0 && moved.pos <= 50) {
+          final landing = LudoBoard.absCell(moved.color, moved.pos);
+          captured = old.tokens.any((t) =>
+              t.color != moved!.color &&
+              t.pos >= 0 &&
+              t.pos <= 50 &&
+              LudoBoard.absCell(t.color, t.pos) == landing);
+        }
+      }
+    }
+
+    if (replay != null) {
+      final color = moved!.color;
+      final to = moved.pos;
+      activeAnim = replay;
+      _busy = true;
+      _timer = Timer(Duration(milliseconds: replay.totalMs), () {
+        activeAnim = null;
+        _busy = false;
+        _playOutcome(color, to, captured);
+        notifyListeners();
+      });
+    }
+    notifyListeners();
+
+    if (state.phase == LudoPhase.gameOver && !_over) {
+      _over = true;
+      sound.champion();
+      onGameOver(state);
     }
   }
 

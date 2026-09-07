@@ -38,6 +38,11 @@ dependencies:
   audioplayers: ^6.8.1
   shared_preferences: ^2.5.5
 
+  # Online multiplayer (server + client).
+  shelf: ^1.4.0
+  shelf_web_socket: ^3.0.0
+  web_socket_channel: ^3.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

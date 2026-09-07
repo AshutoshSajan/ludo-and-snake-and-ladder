@@ -47,6 +47,25 @@ class LudoPlayer {
         difficulty: difficulty,
         finished: finished,
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'color': color.name,
+        'isAI': isAI,
+        'difficulty': difficulty.name,
+        'finished': finished,
+      };
+
+  static LudoPlayer fromJson(Map<String, dynamic> j) => LudoPlayer(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        color: LudoColor.values.byName(j['color'] as String),
+        isAI: j['isAI'] as bool? ?? false,
+        difficulty:
+            AIDifficulty.values.byName(j['difficulty'] as String? ?? 'medium'),
+        finished: j['finished'] as bool? ?? false,
+      );
 }
 
 class LudoToken {
@@ -64,6 +83,14 @@ class LudoToken {
   bool get inBase => pos == -1;
   bool get isHome => pos == 56;
   bool get inHomeColumn => pos >= 51 && pos <= 55;
+
+  Map<String, dynamic> toJson() => {'c': color.name, 'i': index, 'p': pos};
+
+  static LudoToken fromJson(Map<String, dynamic> j) => LudoToken(
+        color: LudoColor.values.byName(j['c'] as String),
+        index: j['i'] as int,
+        pos: j['p'] as int,
+      );
 }
 
 class LudoMove {
@@ -142,4 +169,40 @@ class LudoState {
     );
     return s;
   }
+
+  Map<String, dynamic> toJson() => {
+        'players': [for (final p in players) p.toJson()],
+        'tokens': [for (final t in tokens) t.toJson()],
+        'cur': currentPlayerIndex,
+        'phase': phase.name,
+        'roll': lastRoll,
+        'sixes': consecutiveSixes,
+        'extra': extraRoll,
+        'rankings': rankings,
+        'event': lastEvent,
+        'eventGid': eventTokenGid,
+        'turns': turnCount,
+        'rollSeq': rollSeq,
+      };
+
+  static LudoState fromJson(Map<String, dynamic> j) => LudoState(
+        players: [
+          for (final p in j['players'] as List)
+            LudoPlayer.fromJson(Map<String, dynamic>.from(p as Map))
+        ],
+        tokens: [
+          for (final t in j['tokens'] as List)
+            LudoToken.fromJson(Map<String, dynamic>.from(t as Map))
+        ],
+        currentPlayerIndex: j['cur'] as int,
+        phase: LudoPhase.values.byName(j['phase'] as String),
+        lastRoll: j['roll'] as int?,
+        consecutiveSixes: j['sixes'] as int? ?? 0,
+        extraRoll: j['extra'] as bool? ?? false,
+        rankings: [...(j['rankings'] as List? ?? []).cast<String>()],
+        lastEvent: j['event'] as String?,
+        eventTokenGid: j['eventGid'] as int?,
+        turnCount: j['turns'] as int? ?? 0,
+        rollSeq: j['rollSeq'] as int? ?? 0,
+      );
 }

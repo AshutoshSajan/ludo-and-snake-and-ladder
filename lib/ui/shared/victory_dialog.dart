@@ -17,7 +17,7 @@ class VictoryDialog extends StatefulWidget {
 
   final String title;
   final List<String> rankedNames; // winner first
-  final VoidCallback onRematch;
+  final VoidCallback? onRematch; // null hides the Rematch button
   final VoidCallback onHome;
 
   @override
@@ -85,24 +85,37 @@ class _VictoryDialogState extends State<VictoryDialog>
                       alignment: Alignment.center,
                       transform: Matrix4.identity()
                         ..translateByDouble(
-                            0, -14 * math.sin(t * 2 * math.pi), 0, 1)
+                          0,
+                          -14 * math.sin(t * 2 * math.pi),
+                          0,
+                          1,
+                        )
                         ..rotateZ(0.16 * math.sin(t * 2 * math.pi + 0.6))
                         ..scaleByDouble(
-                            1 + 0.10 * math.sin(t * 4 * math.pi), 1, 0, 1),
-                      child: const Text('🏆',
-                          style: TextStyle(fontSize: 64, shadows: [
+                          1 + 0.10 * math.sin(t * 4 * math.pi),
+                          1,
+                          0,
+                          1,
+                        ),
+                      child: const Text(
+                        '🏆',
+                        style: TextStyle(
+                          fontSize: 64,
+                          shadows: [
                             Shadow(color: AppColors.gold, blurRadius: 28),
-                          ])),
+                          ],
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       widget.title,
                       textAlign: TextAlign.center,
-                      style:
-                          Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.gold,
-                              ),
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.gold,
+                          ),
                     ),
                     const SizedBox(height: 16),
                     for (var i = 0; i < widget.rankedNames.length; i++)
@@ -136,11 +149,14 @@ class _VictoryDialogState extends State<VictoryDialog>
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         OutlinedButton(
-                            onPressed: widget.onHome,
-                            child: const Text('Home')),
-                        FilledButton(
+                          onPressed: widget.onHome,
+                          child: const Text('Home'),
+                        ),
+                        if (widget.onRematch != null)
+                          FilledButton(
                             onPressed: widget.onRematch,
-                            child: const Text('Rematch')),
+                            child: const Text('Rematch'),
+                          ),
                       ],
                     ),
                   ],

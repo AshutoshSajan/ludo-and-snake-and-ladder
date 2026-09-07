@@ -10,6 +10,7 @@ import '../../engine/ludo/ludo_board.dart';
 import '../../engine/ludo/ludo_models.dart';
 import '../../engine/ludo/ludo_rules.dart';
 import '../../providers/app_providers.dart';
+import '../../services/online_client.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/victory_dialog.dart';
@@ -20,9 +21,19 @@ import 'ludo_token_layer.dart';
 
 /// Full Ludo game screen: board, tokens, dice, HUD and pause menu.
 class LudoGameView extends ConsumerStatefulWidget {
-  const LudoGameView({super.key, required this.seats});
+  const LudoGameView({
+    super.key,
+    this.seats = const [],
+    this.onlineClient,
+    this.onlineSeatId,
+  });
 
   final List<SeatSetup> seats;
+
+  /// When set, the game is driven by this authoritative-server connection
+  /// (online mode): the session sends intents and adopts snapshots.
+  final OnlineClient? onlineClient;
+  final String? onlineSeatId;
 
   @override
   ConsumerState<LudoGameView> createState() => _LudoGameViewState();
@@ -47,12 +58,23 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat();
-    session = LudoSession(
-      seats: widget.seats,
-      profiles: ref.read(profilesProvider.notifier),
-      sound: ref.read(soundServiceProvider),
-      onGameOver: _onGameOver,
-    );
+    final online = widget.onlineClient;
+    if (online != null) {
+      session = LudoSession.online(
+        client: online,
+        seatId: widget.onlineSeatId!,
+        profiles: ref.read(profilesProvider.notifier),
+        sound: ref.read(soundServiceProvider),
+        onGameOver: _onGameOver,
+      );
+    } else {
+      session = LudoSession(
+        seats: widget.seats,
+        profiles: ref.read(profilesProvider.notifier),
+        sound: ref.read(soundServiceProvider),
+        onGameOver: _onGameOver,
+      );
+    }
     session.addListener(_onSessionChanged);
   }
 
@@ -96,9 +118,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _onGameOver(LudoState s) {
-    ref
-        .read(profilesProvider.notifier)
-        .recordResults(GameKind.ludo, s.rankings);
+    // Online results belong to remote players — only local games update
+    // profile streaks and leaderboards.
+    if (!session.isOnline) {
+      ref
+          .read(profilesProvider.notifier)
+          .recordResults(GameKind.ludo, s.rankings);
+    }
     final names = [
       for (final id in s.rankings)
         s.players.where((p) => p.id == id).firstOrNull?.name ?? 'Player',
@@ -110,14 +136,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       builder: (_) => VictoryDialog(
         title: '${names.first} wins Ludo!',
         rankedNames: names,
-        onRematch: () {
-          Navigator.of(context).pop(); // dialog
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (_) => LudoGameView(seats: widget.seats),
-            ),
-          );
-        },
+        // No local rematch against a server-owned game — leave instead.
+        onRematch: session.isOnline
+            ? null
+            : () {
+                Navigator.of(context).pop(); // dialog
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(
+                    builder: (_) => LudoGameView(seats: widget.seats),
+                  ),
+                );
+              },
         onHome: () {
           Navigator.of(context).pop(); // dialog
           Navigator.of(context).popUntil((r) => r.isFirst);
@@ -132,13 +161,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     final name = s.currentPlayer.name;
     return switch (s.phase) {
       LudoPhase.awaitingRoll => '$name to roll the dice.',
-      LudoPhase.awaitingMove => hasMoves
-          ? '$name rolled ${s.lastRoll}. '
-              'Tap a highlighted pawn to move it.'
-          : '$name rolled ${s.lastRoll}. No possible move.',
-      LudoPhase.gameOver => 'Game over. '
-          '${s.players.where((p) => p.finished).map((p) => p.name).join(', ')} '
-          'finished.',
+      LudoPhase.awaitingMove =>
+        hasMoves
+            ? '$name rolled ${s.lastRoll}. '
+                  'Tap a highlighted pawn to move it.'
+            : '$name rolled ${s.lastRoll}. No possible move.',
+      LudoPhase.gameOver =>
+        'Game over. '
+            '${s.players.where((p) => p.finished).map((p) => p.name).join(', ')} '
+            'finished.',
     };
   }
 
@@ -185,20 +216,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 ? 'Hint (best move)'
                 : 'Hint shown — tap a glowing pawn',
             onPressed: session.canHint
-                ? () => setState(
-                    () => _hintToken = session.hintTokenIndex())
+                ? () => setState(() => _hintToken = session.hintTokenIndex())
                 : null,
           ),
-          IconButton(
-            icon: Icon(session.autoPlay
-                ? Icons.auto_mode
-                : Icons.auto_mode_outlined),
-            color: session.autoPlay ? AppColors.gold : null,
-            tooltip: session.autoPlay
-                ? 'Autoplay on — tap to stop'
-                : 'Autoplay (take a break)',
-            onPressed: session.toggleAutoPlay,
-          ),
+          if (!session.isOnline)
+            IconButton(
+              icon: Icon(
+                session.autoPlay ? Icons.auto_mode : Icons.auto_mode_outlined,
+              ),
+              color: session.autoPlay ? AppColors.gold : null,
+              tooltip: session.autoPlay
+                  ? 'Autoplay on — tap to stop'
+                  : 'Autoplay (take a break)',
+              onPressed: session.toggleAutoPlay,
+            ),
           IconButton(
             icon: const Icon(Icons.pause),
             onPressed: _showPauseMenu,
@@ -214,74 +245,81 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 label: _boardSemanticLabel(s, movable.isNotEmpty),
                 liveRegion: true,
                 child: Stack(
-                children: [
-                  Center(
-                    child: AspectRatio(
-                      aspectRatio: 1,
-                      child: LayoutBuilder(
-                        builder: (context, cons) {
-                          final boardSize = cons.biggest.width;
-                          final highlights = {
-                            for (final m in legalMoves(s))
-                              if (movable.isNotEmpty && m.to >= 0 && m.to <= 50)
-                                LudoBoard.absCell(s.currentPlayer.color, m.to),
-                          };
-                          final playerNames = {
-                            for (final p in s.players) p.color: p.name,
-                          };
-                          // Rebuild every _fx tick: corner breathing glow, spinning
-                          // rings and the per-step hop bounce all live off this.
-                          return AnimatedBuilder(
-                            animation: _fx,
-                            builder: (context, _) {
-                              final pulse =
-                                  0.5 + 0.5 * math.sin(_fx.value * 2 * math.pi);
-                              final spin = _fx.value * 2 * math.pi;
-                              final anim = session.activeAnim;
-                              final bounce = anim == null
-                                  ? 0.0
-                                  : (DateTime.now()
-                                                .difference(_stepStart)
-                                                .inMilliseconds /
-                                            anim.stepMs)
-                                        .clamp(0.0, 1.0);
-                              return Stack(
-                                children: [
-                                  CustomPaint(
-                                    size: Size.square(boardSize),
-                                    painter: LudoBoardPainter(
-                                      highlightCells: highlights,
-                                      playerNames: playerNames,
-                                      activeColor: s.currentPlayer.color,
-                                      pulse: pulse,
-                                      repaint: _fx,
+                  children: [
+                    Center(
+                      child: AspectRatio(
+                        aspectRatio: 1,
+                        child: LayoutBuilder(
+                          builder: (context, cons) {
+                            final boardSize = cons.biggest.width;
+                            final highlights = {
+                              for (final m in legalMoves(s))
+                                if (movable.isNotEmpty &&
+                                    m.to >= 0 &&
+                                    m.to <= 50)
+                                  LudoBoard.absCell(
+                                    s.currentPlayer.color,
+                                    m.to,
+                                  ),
+                            };
+                            final playerNames = {
+                              for (final p in s.players) p.color: p.name,
+                            };
+                            // Rebuild every _fx tick: corner breathing glow, spinning
+                            // rings and the per-step hop bounce all live off this.
+                            return AnimatedBuilder(
+                              animation: _fx,
+                              builder: (context, _) {
+                                final pulse =
+                                    0.5 +
+                                    0.5 * math.sin(_fx.value * 2 * math.pi);
+                                final spin = _fx.value * 2 * math.pi;
+                                final anim = session.activeAnim;
+                                final bounce = anim == null
+                                    ? 0.0
+                                    : (DateTime.now()
+                                                  .difference(_stepStart)
+                                                  .inMilliseconds /
+                                              anim.stepMs)
+                                          .clamp(0.0, 1.0);
+                                return Stack(
+                                  children: [
+                                    CustomPaint(
+                                      size: Size.square(boardSize),
+                                      painter: LudoBoardPainter(
+                                        highlightCells: highlights,
+                                        playerNames: playerNames,
+                                        activeColor: s.currentPlayer.color,
+                                        pulse: pulse,
+                                        repaint: _fx,
+                                      ),
                                     ),
-                                  ),
-                                  LudoTokenLayer(
-                                    state: s,
-                                    boardSize: boardSize,
-                                    movableTokenIndices: movable,
-                                    onTapToken: session.tapToken,
-                                    anim: anim,
-                                    animStep: _animStep,
-                                    currentPlayerIndex: s.currentPlayerIndex,
-                                    hintTokenIndex: _hintToken,
-                                    spinAngle: spin,
-                                    bounce: bounce,
-                                  ),
-                                ],
-                              );
-                            },
-                          );
-                        },
+                                    LudoTokenLayer(
+                                      state: s,
+                                      boardSize: boardSize,
+                                      movableTokenIndices: movable,
+                                      onTapToken: session.tapToken,
+                                      anim: anim,
+                                      animStep: _animStep,
+                                      currentPlayerIndex: s.currentPlayerIndex,
+                                      hintTokenIndex: _hintToken,
+                                      spinAngle: spin,
+                                      bounce: bounce,
+                                    ),
+                                  ],
+                                );
+                              },
+                            );
+                          },
+                        ),
                       ),
                     ),
-                  ),
-                  // One die per player, pinned to the outer felt corners of the
-                  // play area — outside the board, never inside a player's yard.
-                  for (var i = 0; i < s.players.length; i++) _cornerDice(s, i),
-                ],
-              ),
+                    // One die per player, pinned to the outer felt corners of the
+                    // play area — outside the board, never inside a player's yard.
+                    for (var i = 0; i < s.players.length; i++)
+                      _cornerDice(s, i),
+                  ],
+                ),
               ),
             ),
             _controls(s),

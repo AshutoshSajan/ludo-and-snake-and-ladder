@@ -7,6 +7,7 @@ import '../ui/snakes/snakes_board_painter.dart';
 import '../ui/theme.dart';
 import 'home_widgets.dart';
 import 'leaderboard_screen.dart';
+import 'online_lobby_screen.dart';
 import 'settings_screen.dart';
 import 'setup_screen.dart';
 
@@ -65,7 +66,8 @@ class HomeScreen extends ConsumerWidget {
                           label: const Text('Leaderboards'),
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
-                                builder: (_) => const LeaderboardScreen()),
+                              builder: (_) => const LeaderboardScreen(),
+                            ),
                           ),
                         ),
                       ),
@@ -73,7 +75,8 @@ class HomeScreen extends ConsumerWidget {
                       IconButton.filled(
                         onPressed: () => Navigator.of(context).push(
                           MaterialPageRoute(
-                              builder: (_) => const SettingsScreen()),
+                            builder: (_) => const SettingsScreen(),
+                          ),
                         ),
                         icon: const Icon(Icons.settings_outlined),
                         tooltip: 'Settings',
@@ -81,11 +84,15 @@ class HomeScreen extends ConsumerWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Center(
-                    child: Chip(
-                      avatar: Icon(Icons.wifi_off, size: 16),
-                      label: Text('Online play — coming soon',
-                          style: TextStyle(fontSize: 12)),
+                  Center(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.wifi, size: 18),
+                      label: const Text('Online Ludo'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const OnlineLobbyScreen(),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -98,8 +105,7 @@ class HomeScreen extends ConsumerWidget {
   }
 
   void _openSetup(BuildContext context, GameKind game) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => SetupScreen(game: game)),
-    );
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => SetupScreen(game: game)));
   }
 }
