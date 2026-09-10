@@ -27,6 +27,10 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Add per-step hop tick sound synced to token movement
 - Finished tokens in own yard, champion fanfare + confetti, per-corner dice with 3D tumble, remove top strip
 ### Fixed
+- Fix(dice): stop tumble carrying across turns; settle spin-down ends after settle duration
+
+Semantics wrapper for the GestureDetector (accessibility label) with explicit
+textDirection; regression tests for spin-down stop and value settle.
 - Fix turn order to run clockwise around the board (red-blue-yellow-green)
 - Fix Ludo track direction and color-to-corner mapping
 
