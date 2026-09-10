@@ -17,6 +17,7 @@
 library;
 
 import 'package:fake_async/fake_async.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -26,6 +27,7 @@ import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/services/sound_service.dart';
+import 'package:game_club/ui/shared/dice_widget.dart';
 
 /// HapticFeedback fires real platform channels during gameplay; mock them
 /// so tests never hit MissingPluginException from unawaited calls.
@@ -438,6 +440,75 @@ void main() {
         expect(session.state.tokens[0].pos, 8);
         session.dispose();
       });
+    });
+  });
+
+  /// Regression: the 3D dice spun forever when a tumble ended without a
+  /// value (e.g. the view rebuilds during an opponent's turn) and the settle
+  /// spin-down never ran. Observable as a fresh painter on every pumped
+  /// frame even after the settle duration has passed.
+  group('10. dice tumble widget', () {
+    Future<void> pumpDice(WidgetTester tester) async {
+      await tester.pumpWidget(DiceWidget(
+        value: null,
+        rolling: true,
+        enabled: false,
+        onTap: () {},
+      ));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    CustomPainter? painterOf(WidgetTester tester) =>
+        tester.widget<CustomPaint>(find.byType(CustomPaint)).painter;
+
+    testWidgets('dice settle spin-down stops painting after settle duration',
+        (tester) async {
+      await pumpDice(tester);
+
+      // While rolling, the painter is rebuilt every frame (controller repeat).
+      final a = painterOf(tester);
+      await tester.pump();
+      expect(painterOf(tester), isNot(same(a)));
+
+      // Tumble ends with no value: rolling false, still no roll.
+      await tester.pumpWidget(DiceWidget(
+        value: null,
+        rolling: false,
+        enabled: false,
+        onTap: () {},
+      ));
+
+      // Give the settle spin-down its full duration plus a couple of frames.
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.pump();
+
+      // After settling, no more per-frame painting: the painter instance
+      // stays identical across pumped frames.
+      final settled = painterOf(tester);
+      await tester.pump();
+      await tester.pump();
+      expect(painterOf(tester), same(settled));
+    });
+
+    testWidgets('normal settle with a value also stops after settle duration',
+        (tester) async {
+      await pumpDice(tester);
+      await tester.pumpWidget(DiceWidget(
+        value: 4,
+        rolling: false,
+        enabled: false,
+        onTap: () {},
+      ));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.pump();
+
+      final settled = painterOf(tester);
+      await tester.pump();
+      await tester.pump();
+      expect(painterOf(tester), same(settled));
     });
   });
 }

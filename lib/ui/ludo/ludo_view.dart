@@ -77,6 +77,9 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     }
     session.addListener(_onSessionChanged);
     widget.onlineClient?.addListener(_onClientChanged);
+    // Don't tumble for whatever roll the session was born with — only for
+    // rolls that happen from now on.
+    _lastSeenSeq = session.state.rollSeq;
   }
 
   @override
@@ -99,14 +102,19 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   void _onSessionChanged() {
     // Kick off the 3D dice tumble whenever a fresh roll appears — tracked by
     // roll sequence, so it tumbles even when the same number comes up again.
+    // Guarded on lastRoll: a seq bump without a pending roll (triple-six
+    // forfeit, undo to a pre-roll state) has no value to settle on, and a
+    // tumble with no landing would spin forever.
     if (session.state.rollSeq != _lastSeenSeq) {
       _lastSeenSeq = session.state.rollSeq;
       _hintToken = null; // a new roll invalidates any shown hint
-      _diceTimer?.cancel();
-      _diceRolling = true;
-      _diceTimer = Timer(const Duration(milliseconds: 600), () {
-        if (mounted) setState(() => _diceRolling = false);
-      });
+      if (session.state.lastRoll != null) {
+        _diceTimer?.cancel();
+        _diceRolling = true;
+        _diceTimer = Timer(const Duration(milliseconds: 600), () {
+          if (mounted) setState(() => _diceRolling = false);
+        });
+      }
     }
     final anim = session.activeAnim;
     _animTimer?.cancel();

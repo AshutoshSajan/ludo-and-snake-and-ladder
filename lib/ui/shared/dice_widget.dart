@@ -70,8 +70,12 @@ class _DiceWidgetState extends State<DiceWidget>
     super.didUpdateWidget(old);
     if (widget.rolling && !old.rolling) {
       _startSpin();
+    } else if (!widget.rolling && old.rolling) {
+      // Always settle when the tumble ends — even if no roll value arrived
+      // (e.g. a forfeited turn). Otherwise the spin would run forever.
+      _settleTo(widget.value ?? _shown);
     } else if (!widget.rolling &&
-        (old.rolling || widget.value != old.value) &&
+        widget.value != old.value &&
         widget.value != null) {
       _settleTo(widget.value!);
     }
@@ -142,6 +146,7 @@ class _DiceWidgetState extends State<DiceWidget>
     return Semantics(
       button: true,
       label: 'Roll dice',
+      textDirection: TextDirection.ltr,
       child: GestureDetector(
         onTap: widget.enabled && !widget.rolling ? widget.onTap : null,
         child: AnimatedScale(
