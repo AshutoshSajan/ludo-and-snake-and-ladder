@@ -79,39 +79,53 @@ flutter test               # 28 tests: full Ludo + Snakes rule coverage
 flutter analyze
 ```
 
-### Branching, PRs & CI
+### Branches, PRs & CI
 
 All development follows a **branch-and-PR workflow** — nothing is ever pushed
-directly to `main`:
+directly to `main`. The repo has four permanent tiers:
+
+| Branch | Role | PRs into it come from | Merge gate |
+|---|---|---|---|
+| `sandbox` | free experiments / spikes / prototypes | anything, no ceremony | none — break it freely |
+| `dev` | **day-to-day development integration** | `feat/…` `fix/…` `chore/…` task branches (and `sandbox` when a spike graduates) | analyze + full tests + build (CI) |
+| `staging` | release preparation / integration testing | `dev` | analyze + full tests + build (CI) |
+| `main` | production | `staging` **only** | merged by the maintainer |
+
+**The rules:**
 
 - **Every feature, bugfix, task or experiment gets its own branch**, named
-  `feat/…`, `fix/…`, `chore/…`, `spike/…` etc., cut from the current
-  integration branch.
-- **Pull requests always target the parent/integration branch (`staging`) —
-  never `main`.** `main` is only updated when `staging` is merged into it.
+  `feat/…`, `fix/…`, `chore/…`, `spike/…` etc., cut from the branch it will
+  be merged into (normally `dev`).
+- **PRs always target the immediate parent branch — `feat/…` → `dev`,
+  `dev` → `staging`, `staging` → `main`.** Task branches never target
+  `staging`/`main` directly, and nothing is ever pushed to `main`.
 - Tests must pass (analyze + full suite + release build) before a PR merges;
-  CI runs on every PR and every merge to `staging`/`main`.
+  CI runs on every PR and every merge to `dev`/`staging`/`main`.
 
 ```bash
-git checkout staging && git pull          # latest integration state
-git checkout -b feat/my-feature staging   # new branch per task
+git checkout dev && git pull                # latest development state
+git checkout -b feat/my-feature dev         # new branch per task
 # …work (TDD: failing test first, then the fix)…
 git push -u origin feat/my-feature
-gh pr create --base staging               # PR to staging, never main
+gh pr create --base dev                     # PR to the parent, never main
+# spike?            → cut from sandbox, PR back to sandbox
+# spike graduated?  → branch feat/… from sandbox, PR to dev
 ```
 
 ### CI & changelog
 
 `.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
 release web build — PRs must be green to merge) and on **every merge to
-`staging`/`main`** (same checks, so the app build is verified on integration).
+`dev`/`staging`/`main`** (same checks, so the app build is verified on
+every tier).
 
 `CHANGELOG.md` is **maintained by [git-cliff](https://git-cliff.org)** from the
 commit history using `cliff.toml` (Keep a Changelog format):
 
 - Regenerate locally after commits: `git-cliff -o CHANGELOG.md`
-- The CI changelog job runs on integration pushes and **opens a PR into
-  `staging`** with the regenerated file (it never pushes to `main`).
+- The CI changelog job runs on integration pushes (`dev`, `staging`, `main`)
+  and **opens a PR into `staging`** with the regenerated file (it never
+  pushes to `main`).
 - Write commit subjects as `feat: …`, `fix: …`, `docs: …`, `chore: …` etc.
   (Conventional Commits) so entries land in the right *Added / Fixed / …*
   group; anything else falls into the history-matching rules in `cliff.toml`.

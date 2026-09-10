@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, staging]
+    branches: [main, staging, dev]
   pull_request: # every PR, regardless of target branch
 
 jobs:
@@ -34,7 +34,7 @@ jobs:
   changelog:
     # Maintain CHANGELOG.md via git-cliff on integration pushes. Never pushes
     # to main: it opens a pull request targeting staging instead.
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write
