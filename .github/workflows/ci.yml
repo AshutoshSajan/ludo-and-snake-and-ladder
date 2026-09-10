@@ -30,3 +30,37 @@ jobs:
 
       - name: Build web (release)
         run: flutter build web --release
+
+  changelog:
+    # Maintain CHANGELOG.md automatically on main: regenerate with git-cliff
+    # and commit when the generation output differs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so git-cliff sees every commit
+
+      - name: Install git-cliff
+        run: |
+          curl -sL https://github.com/orhun/git-cliff/releases/download/v2.14.1/git-cliff-2.14.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /tmp
+          sudo install /tmp/git-cliff-2.14.1/git-cliff /usr/local/bin/git-cliff
+          git-cliff --version
+
+      - name: Regenerate CHANGELOG.md
+        run: git-cliff -o CHANGELOG.md
+
+      - name: Commit CHANGELOG.md if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "CHANGELOG.md up to date"
+          else
+            git add CHANGELOG.md
+            git commit -m "chore: regenerate changelog [skip ci]"
+            git push
+          fi

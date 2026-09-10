@@ -79,6 +79,21 @@ flutter test               # 28 tests: full Ludo + Snakes rule coverage
 flutter analyze
 ```
 
+### CI & changelog
+
+`.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
+release web build — PRs must be green to merge) and on **every merge to
+`main`** (same checks, so the app build is verified on main).
+
+`CHANGELOG.md` is **maintained by [git-cliff](https://git-cliff.org)** from the
+commit history using `cliff.toml` (Keep a Changelog format):
+
+- Regenerate locally after commits: `git-cliff -o CHANGELOG.md`
+- CI regenerates it on every push to `main` and auto-commits when it changed.
+- Write commit subjects as `feat: …`, `fix: …`, `docs: …`, `chore: …` etc.
+  (Conventional Commits) so entries land in the right *Added / Fixed / …*
+  group; anything else falls into the history-matching rules in `cliff.toml`.
+
 ### Platform notes
 
 | Target | Status |
