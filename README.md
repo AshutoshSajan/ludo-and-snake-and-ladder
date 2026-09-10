@@ -79,17 +79,39 @@ flutter test               # 28 tests: full Ludo + Snakes rule coverage
 flutter analyze
 ```
 
+### Branching, PRs & CI
+
+All development follows a **branch-and-PR workflow** — nothing is ever pushed
+directly to `main`:
+
+- **Every feature, bugfix, task or experiment gets its own branch**, named
+  `feat/…`, `fix/…`, `chore/…`, `spike/…` etc., cut from the current
+  integration branch.
+- **Pull requests always target the parent/integration branch (`staging`) —
+  never `main`.** `main` is only updated when `staging` is merged into it.
+- Tests must pass (analyze + full suite + release build) before a PR merges;
+  CI runs on every PR and every merge to `staging`/`main`.
+
+```bash
+git checkout staging && git pull          # latest integration state
+git checkout -b feat/my-feature staging   # new branch per task
+# …work (TDD: failing test first, then the fix)…
+git push -u origin feat/my-feature
+gh pr create --base staging               # PR to staging, never main
+```
+
 ### CI & changelog
 
 `.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
 release web build — PRs must be green to merge) and on **every merge to
-`main`** (same checks, so the app build is verified on main).
+`staging`/`main`** (same checks, so the app build is verified on integration).
 
 `CHANGELOG.md` is **maintained by [git-cliff](https://git-cliff.org)** from the
 commit history using `cliff.toml` (Keep a Changelog format):
 
 - Regenerate locally after commits: `git-cliff -o CHANGELOG.md`
-- CI regenerates it on every push to `main` and auto-commits when it changed.
+- The CI changelog job runs on integration pushes and **opens a PR into
+  `staging`** with the regenerated file (it never pushes to `main`).
 - Write commit subjects as `feat: …`, `fix: …`, `docs: …`, `chore: …` etc.
   (Conventional Commits) so entries land in the right *Added / Fixed / …*
   group; anything else falls into the history-matching rules in `cliff.toml`.
