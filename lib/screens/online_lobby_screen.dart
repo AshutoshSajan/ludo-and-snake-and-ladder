@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../services/online_client.dart';
 import '../ui/ludo/ludo_view.dart';
+import '../ui/snakes/online_snakes_view.dart';
 import '../ui/theme.dart';
 
 /// Online lobby: connect to an authoritative Ludo server, create or join a
@@ -38,6 +39,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
+
+  /// Game the host picks when creating a room; joiners inherit the room's.
+  String _gameType = 'ludo';
   final String _seatId =
       'u${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
       '${Random().nextInt(1 << 16).toRadixString(36)}';
@@ -74,6 +78,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       _serverCtrl.text.trim(),
       seatId: _seatId,
       name: name,
+      gameType: _gameType,
     )..addListener(() => setState(() {}));
     setState(() => _client = client);
     client.connect(code: createRoom ? null : code, spectate: !createRoom && _spectate);
@@ -88,6 +93,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   Future<void> _disconnect() async {
     await _client?.disconnect();
     if (mounted) setState(() => _client = null);
+  }
+
+  /// Leave button inside the snakes game view: drop the socket and return
+  /// to the connect/lobby form.
+  void _disconnectAndClose() {
+    _disconnect();
   }
 
   @override
@@ -123,14 +134,17 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               constraints: const BoxConstraints(maxWidth: 460),
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: client == null
-                    ? _connectForm()
-                    : client.state != null
-                    ? LudoGameView(
-                        onlineClient: client,
-                        onlineSeatId: client.seatId,
-                      )
-                    : _lobby(client),
+                child: switch (client) {
+                  null => _connectForm(),
+                  OnlineClient c when c.gameType == 'snakes' &&
+                          c.snakesState != null =>
+                    OnlineSnakesView(client: c, onLeave: _disconnectAndClose),
+                  OnlineClient c when c.state != null => LudoGameView(
+                      onlineClient: c,
+                      onlineSeatId: c.seatId,
+                    ),
+                  OnlineClient _ => _lobby(client),
+                },
               ),
             ),
           ),
@@ -158,6 +172,23 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         const SizedBox(height: 12),
         _field(_nameCtrl, 'Your name', 'e.g. Asha'),
         const SizedBox(height: 24),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(
+              value: 'ludo',
+              label: Text('Ludo'),
+              icon: Icon(Icons.casino_outlined),
+            ),
+            ButtonSegment(
+              value: 'snakes',
+              label: Text('Snakes'),
+              icon: Icon(Icons.grid_on_outlined),
+            ),
+          ],
+          selected: {_gameType},
+          onSelectionChanged: (sel) => setState(() => _gameType = sel.first),
+        ),
+        const SizedBox(height: 12),
         FilledButton.icon(
           icon: const Icon(Icons.add_circle_outline),
           label: const Text('Create a room'),

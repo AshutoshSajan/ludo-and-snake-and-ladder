@@ -3,7 +3,8 @@
 A production-ready, cross-platform **Game Club** app built with Flutter —
 containing **Ludo (2–4 players)** and **Snakes & Ladders (2–10 players)**.
 Local-first: hot-seat multiplayer with friends on one device plus AI bots —
-**plus online Ludo multiplayer** via a self-hosted authoritative Dart server.
+**plus online multiplayer for both games** (Ludo and Snakes & Ladders) via a
+self-hosted authoritative Dart server.
 
 ## Games & rules
 
@@ -194,6 +195,11 @@ opens `index.html` in a tab.
       screen — create a room, share the 4-letter code, and play remotely.
       Clients send only *intents*; the server broadcasts snapshots, so the
       game cannot be cheated from the client side.
+- [x] Phase 8b — **online Snakes & Ladders**: rooms are game-typed — the host
+      picks Snakes & Ladders at room creation and everyone joins the same
+      flow (code, lobby, spectate, reconnect). The server rolls and resolves
+      the single forced move with the pure engine; the client auto-sends the
+      move intent after a beat so the roll stays visible.
 - [x] Phase 9 — mid-game reconnect: auto-reconnect with backoff, seat reclaim
       on the server, and a grace period for abandoned-but-started rooms.
 - [x] Phase 10 — online leaderboards: the server records every finished game

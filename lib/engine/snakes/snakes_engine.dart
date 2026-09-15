@@ -41,6 +41,24 @@ class SnakesPlayer {
         square: square,
         finished: finished,
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        't': tokenIndex,
+        'ai': isAI,
+        'sq': square,
+        'fin': finished,
+      };
+
+  static SnakesPlayer fromJson(Map<String, dynamic> j) => SnakesPlayer(
+        id: j['id'] as String,
+        name: j['name'] as String? ?? 'Player',
+        tokenIndex: j['t'] as int? ?? 0,
+        isAI: j['ai'] as bool? ?? false,
+        square: j['sq'] as int? ?? 0,
+        finished: j['fin'] as bool? ?? false,
+      );
 }
 
 enum SnakesPhase { awaitingRoll, awaitingMove, gameOver }
@@ -77,6 +95,37 @@ class SnakesState {
         eventFrom: eventFrom,
         eventTo: eventTo,
         rankings: [...rankings],
+      );
+
+  /// Wire format for server snapshots (mirrors `LudoState.toJson`).
+  Map<String, dynamic> toJson() => {
+        'players': [for (final p in players) p.toJson()],
+        'cur': currentPlayerIndex,
+        'phase': phase.name,
+        if (lastRoll != null) 'roll': lastRoll,
+        if (lastEvent != null) 'event': lastEvent,
+        if (eventFrom != null) 'from': eventFrom,
+        if (eventTo != null) 'to': eventTo,
+        'rankings': [...rankings],
+      };
+
+  static SnakesState fromJson(Map<String, dynamic> j) => SnakesState(
+        players: [
+          for (final p in (j['players'] as List? ?? []))
+            SnakesPlayer.fromJson(Map<String, dynamic>.from(p as Map)),
+        ],
+        currentPlayerIndex: j['cur'] as int? ?? 0,
+        phase: SnakesPhase.values.firstWhere(
+          (p) => p.name == j['phase'],
+          orElse: () => SnakesPhase.awaitingRoll,
+        ),
+        lastRoll: j['roll'] as int?,
+        lastEvent: j['event'] as String?,
+        eventFrom: j['from'] as int?,
+        eventTo: j['to'] as int?,
+        rankings: [
+          for (final r in (j['rankings'] as List? ?? [])) r as String,
+        ],
       );
 }
 
