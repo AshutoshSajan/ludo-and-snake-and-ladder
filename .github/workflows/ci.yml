@@ -6,6 +6,29 @@ on:
   pull_request: # every PR, regardless of target branch
 
 jobs:
+  guard-main:
+    # Branch protection is unavailable (private repo, free plan), so enforce
+    # the "no direct pushes to main" rule here: the head of main must always
+    # be a merge commit (i.e. it arrived via a PR / maintainer merge).
+    # Note: squash-merging PRs into main will fail this guard — use merge
+    # commits for staging -> main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject direct pushes to main
+        run: |
+          parents=$(git rev-list --parents -n 1 "${{ github.sha }}" | wc -w)
+          if [ "$parents" -lt 3 ]; then
+            echo "::error::Direct push to main is forbidden."
+            echo "::error::Merge 'staging' into 'main' via a pull request (merge commit, not squash)."
+            exit 1
+          fi
+          echo "main head is a merge commit — OK"
+
   test:
     runs-on: ubuntu-latest
     steps:
