@@ -79,17 +79,57 @@ flutter test               # 28 tests: full Ludo + Snakes rule coverage
 flutter analyze
 ```
 
+### Branches, PRs & CI
+
+All development follows a **branch-and-PR workflow** — nothing is ever pushed
+directly to `main`. The repo has four permanent tiers:
+
+| Branch | Role | PRs into it come from | Merge gate |
+|---|---|---|---|
+| `sandbox` | free experiments / spikes / prototypes | anything, no ceremony | none — break it freely |
+| `dev` | **day-to-day development integration** | `feat/…` `fix/…` `chore/…` task branches (and `sandbox` when a spike graduates) | analyze + full tests + build (CI) |
+| `staging` | release preparation / integration testing | `dev` | analyze + full tests + build (CI) |
+| `main` | production | `staging` **only** | merged by the maintainer |
+
+**The rules:**
+
+- **Every feature, bugfix, task or experiment gets its own branch**, named
+  `feat/…`, `fix/…`, `chore/…`, `spike/…` etc., cut from the branch it will
+  be merged into (normally `dev`).
+- **PRs always target the immediate parent branch — `feat/…` → `dev`,
+  `dev` → `staging`, `staging` → `main`.** Task branches never target
+  `staging`/`main` directly, and nothing is ever pushed to `main`.
+- Tests must pass (analyze + full suite + release build) before a PR merges;
+  CI runs on every PR and every merge to `dev`/`staging`/`main`.
+- **`main` is CI-guarded**: a push to `main` fails CI unless its head is a
+  merge commit (direct pushes are rejected; squash-merges into `main` are
+  rejected too — use merge commits). Branch protection itself is unavailable
+  on this private repo (free plan), so the guard job stands in for it.
+
+```bash
+git checkout dev && git pull                # latest development state
+git checkout -b feat/my-feature dev         # new branch per task
+# …work (TDD: failing test first, then the fix)…
+git push -u origin feat/my-feature
+gh pr create --base dev                     # PR to the parent, never main
+# spike?            → cut from sandbox, PR back to sandbox
+# spike graduated?  → branch feat/… from sandbox, PR to dev
+```
+
 ### CI & changelog
 
 `.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
 release web build — PRs must be green to merge) and on **every merge to
-`main`** (same checks, so the app build is verified on main).
+`dev`/`staging`/`main`** (same checks, so the app build is verified on
+every tier).
 
 `CHANGELOG.md` is **maintained by [git-cliff](https://git-cliff.org)** from the
 commit history using `cliff.toml` (Keep a Changelog format):
 
 - Regenerate locally after commits: `git-cliff -o CHANGELOG.md`
-- CI regenerates it on every push to `main` and auto-commits when it changed.
+- The CI changelog job runs on integration pushes (`dev`, `staging`, `main`)
+  and **opens a PR into `staging`** with the regenerated file (it never
+  pushes to `main`).
 - Write commit subjects as `feat: …`, `fix: …`, `docs: …`, `chore: …` etc.
   (Conventional Commits) so entries land in the right *Added / Fixed / …*
   group; anything else falls into the history-matching rules in `cliff.toml`.
