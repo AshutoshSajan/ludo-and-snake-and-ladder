@@ -116,7 +116,7 @@ void main() {
       async.elapse(const Duration(milliseconds: 1));
       expect(factory.channels, hasLength(2));
       expect(factory.last.sent.first,
-         {'type': 'hello', 'seatId': 'p2', 'name': 'B', 'code': 'CODE'});
+         {'type': 'hello', 'seatId': 'p2', 'name': 'B', 'game': 'ludo', 'code': 'CODE'});
 
       // Server answers: we are back in the same seat and even get the
       // running game snapshot.
