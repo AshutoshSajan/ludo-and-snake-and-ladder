@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../engine/ludo/ludo_models.dart';
+import '../engine/snakes/snakes_engine.dart';
 
 /// One lobby seat as reported by the server.
 class LobbySeat {
@@ -67,6 +68,7 @@ class OnlineClient extends ChangeNotifier {
     this.serverUrl, {
     required this.seatId,
     required this.name,
+    this.gameType = 'ludo',
     WebSocketChannel Function(Uri uri)? channelFactory,
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
@@ -74,6 +76,10 @@ class OnlineClient extends ChangeNotifier {
   final String serverUrl;
   final String seatId; // profile id — our identity across reconnects
   final String name;
+
+  /// Which game to play when creating a room ('ludo' | 'snakes'). Joiners
+  /// have their value overwritten by the room's real game type on 'joined'.
+  String gameType;
 
   /// Overridable for tests (fake WebSocket channels).
   final WebSocketChannel Function(Uri) _channelFactory;
@@ -114,6 +120,9 @@ class OnlineClient extends ChangeNotifier {
 
   /// Latest authoritative snapshot, decoded. Null until the game starts.
   LudoState? state;
+
+  /// Latest authoritative Snakes & Ladders snapshot (snakes rooms only).
+  SnakesState? snakesState;
   int _seenRollSeq = 0;
 
   /// Fire-and-forget chat lines: (from, text).
@@ -142,7 +151,12 @@ class OnlineClient extends ChangeNotifier {
       status == OnlineStatus.inLobby || status == OnlineStatus.playing;
 
   bool get isMyTurn =>
-      !_spectating && state != null && started && connected;
+      !_spectating &&
+      started &&
+      connected &&
+      (gameType == 'snakes'
+          ? snakesState != null
+          : state != null);
 
   void _send(Map<String, dynamic> msg) {
     final ch = _channel;
@@ -175,6 +189,7 @@ class OnlineClient extends ChangeNotifier {
         'type': 'hello',
         'seatId': seatId,
         'name': name,
+        'game': gameType,
         if (_joinCode != null && _joinCode!.isNotEmpty) 'code': _joinCode,
         if (preferredColor != null) 'color': preferredColor.name,
         if (_spectating) 'spectate': true,
@@ -223,6 +238,7 @@ class OnlineClient extends ChangeNotifier {
     switch (msg['type'] as String?) {
       case 'joined':
         roomCode = msg['code'] as String;
+        gameType = msg['game'] as String? ?? gameType;
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
         myColor = colorName == null ? null : LudoColor.values.byName(colorName);
@@ -245,15 +261,27 @@ class OnlineClient extends ChangeNotifier {
             for (final n in (msg['spectators'] as List? ?? [])) n as String,
           ]);
       case 'state':
-        final incoming = LudoState.fromJson(
-            Map<String, dynamic>.from(msg['state'] as Map));
-        // Dice sound on every new roll (rollSeq-based, like local play).
-        if (incoming.rollSeq != _seenRollSeq) {
-          _seenRollSeq = incoming.rollSeq;
-          onRoll?.call();
+        if ((msg['game'] as String?) == 'snakes') {
+          final incoming = SnakesState.fromJson(
+              Map<String, dynamic>.from(msg['state'] as Map));
+          // Dice sound on a fresh roll: phase moved roll -> move.
+          if (snakesState?.phase == SnakesPhase.awaitingRoll &&
+              incoming.phase == SnakesPhase.awaitingMove) {
+            onRoll?.call();
+          }
+          onSnakesState?.call(snakesState, incoming);
+          snakesState = incoming;
+        } else {
+          final incoming = LudoState.fromJson(
+              Map<String, dynamic>.from(msg['state'] as Map));
+          // Dice sound on every new roll (rollSeq-based, like local play).
+          if (incoming.rollSeq != _seenRollSeq) {
+            _seenRollSeq = incoming.rollSeq;
+            onRoll?.call();
+          }
+          onState?.call(state, incoming);
+          state = incoming;
         }
-        onState?.call(state, incoming);
-        state = incoming;
         started = true;
         status = OnlineStatus.playing;
       case 'chat':
@@ -284,6 +312,7 @@ class OnlineClient extends ChangeNotifier {
   /// Hooks used by the session adapter (sounds, animation replay).
   void Function()? onRoll;
   void Function(LudoState? oldState, LudoState newState)? onState;
+  void Function(SnakesState? oldState, SnakesState newState)? onSnakesState;
   void Function()? onChat;
 
   // ------------------------------------------------------------ intents
@@ -293,6 +322,10 @@ class OnlineClient extends ChangeNotifier {
   void sendRoll() => _spectating ? _noop() : _send({'type': 'roll'});
   void sendMove(int tokenIndex) =>
       _spectating ? _noop() : _send({'type': 'move', 'token': tokenIndex});
+
+  /// Snakes & Ladders: the roll fully determines the move, so the intent
+  /// carries no token.
+  void sendSnakesMove() => _spectating ? _noop() : _send({'type': 'move'});
   void sendChat(String text) =>
       _spectating ? _noop() : _send({'type': 'chat', 'text': text});
 
