@@ -30,6 +30,7 @@ Rooms are now game-typed: the host picks Snakes & Ladders at creation and everyo
 - Add per-step hop tick sound synced to token movement
 - Finished tokens in own yard, champion fanfare + confetti, per-corner dice with 3D tumble, remove top strip
 ### Fixed
+- Fix(changelog): skip merge-commit subjects in git-cliff
 - Fix(dice): stop tumble carrying across turns; settle spin-down ends after settle duration
 
 Semantics wrapper for the GestureDetector (accessibility label) with explicit
