@@ -8,15 +8,15 @@
 ///   WS   /ws?code=XXXX  -> join/create room, then JSON message protocol
 ///
 /// Client -> server messages:
-///   {type: 'hello', seatId, name, color?}   first message on a socket
+///   {type: 'hello', seatId, name, color?, game?, code?}  first message
 ///   {type: 'start'}
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
 ///   {type: 'chat', text}
 /// Server -> client:
-///   {type: 'joined', code, color}
+///   {type: 'joined', code, color, game}
 ///   {type: 'lobby', seats: [{name, color}...]}
-///   {type: 'state', state: LudoStateJson}
+///   {type: 'state', game, state: LudoStateJson | SnakesStateJson}
 ///   {type: 'chat', from, text}
 ///   {type: 'error', text}
 library;
@@ -79,6 +79,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             );
             final code = (msg['code'] as String? ?? '').trim();
             final spectate = msg['spectate'] as bool? ?? false;
+            final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
 
             member = ServerMember(
               id: connId,
@@ -108,7 +109,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
               }
               room = watched;
             } else if (code.isEmpty) {
-              room = authority.createRoom(member!);
+              room = authority.createRoom(member!, game: game);
             } else {
               var joined = authority.joinWithColor(code, member!, color);
               // Not a fresh join — maybe a returning player reclaiming
@@ -128,6 +129,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             webSocket.sink.add(jsonEncode({
               'type': 'joined',
               'code': room.code,
+              'game': room.gameType,
               if (!spectate) 'color': member!.color.name,
               if (spectate) 'spectator': true,
             }));
@@ -136,8 +138,11 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
               // A mid-game rejoin or a spectator needs the current snapshot
               // to resume / watch; lobby players just wait for the broadcast
               // at start.
-              webSocket.sink.add(jsonEncode(
-                  {'type': 'state', 'state': room.state.toJson()}));
+              webSocket.sink.add(jsonEncode({
+                'type': 'state',
+                'game': room.gameType,
+                'state': room.stateJson(),
+              }));
             }
             return;
           }

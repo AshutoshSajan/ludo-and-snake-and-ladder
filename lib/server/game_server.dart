@@ -14,6 +14,7 @@ import 'dart:math';
 import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
+import '../engine/snakes/snakes_engine.dart' as snakes;
 import 'leaderboard_store.dart';
 
 /// One connected participant.
@@ -38,13 +39,20 @@ class ServerMember {
 
 /// A waiting/running game.
 class Room {
-  Room(this.code, {required this.rng});
+  Room(this.code, {required this.rng, this.gameType = 'ludo'});
 
   final String code;
   final Random rng;
 
+  /// Which game this room plays: 'ludo' or 'snakes'. Chosen by the host at
+  /// room creation; joiners inherit it. Seats stay corner-color based, so
+  /// both games currently seat up to 4 players.
+  final String gameType;
+
   /// Built once at [start] from the seated members; never touched before.
-  late LudoState state;
+  /// A [LudoState] for ludo rooms, a [snakes.SnakesState] for snakes rooms.
+  late Object game;
+
   final Map<String, ServerMember> members = {}; // by connection id
 
   /// Persistent seat claims: seatId -> color. Survives disconnects so a
@@ -86,15 +94,26 @@ class Room {
 
   /// Build the game state from seated members (called once at start).
   void start() {
-    final players = [
-      for (final m in orderedMembers)
-        LudoPlayer(
-          id: m.seatId,
-          name: m.name,
-          color: m.color,
-        ),
-    ];
-    state = createLudoState(players);
+    if (gameType == 'snakes') {
+      game = snakes.createSnakesState([
+        for (final m in orderedMembers)
+          snakes.SnakesPlayer(
+            id: m.seatId,
+            name: m.name,
+            // Pawn palette slot derived from the corner seat color.
+            tokenIndex: LudoBoard.colorOrder.indexOf(m.color),
+          ),
+      ]);
+    } else {
+      game = createLudoState([
+        for (final m in orderedMembers)
+          LudoPlayer(
+            id: m.seatId,
+            name: m.name,
+            color: m.color,
+          ),
+      ]);
+    }
     // One id per game: the store dedupes on (gameId, seatId), so a botched
     // double-completion cannot inflate a player's stats.
     gameId = '${DateTime.now().microsecondsSinceEpoch}-$code';
@@ -113,12 +132,30 @@ class Room {
     }
   }
 
-  void broadcastState() =>
-      broadcast({'type': 'state', 'state': state.toJson()});
+  void broadcastState() => broadcast({
+        'type': 'state',
+        'game': gameType,
+        'state': stateJson(),
+      });
 
-  /// The state, or null before [start] has built it. Keeps intent
-  /// handling from touching the [late] field too early.
-  LudoState? get stateOrNull => started ? state : null;
+  /// The serialized game state for the wire (see [broadcastState]).
+  Map<String, dynamic> stateJson() => switch (game) {
+        LudoState s => s.toJson(),
+        snakes.SnakesState s => s.toJson(),
+        _ => throw StateError('room game not started'),
+      };
+
+  /// The ludo state, or null before [start] (or in a snakes room). Keeps
+  /// intent handling from touching the [late] field too early.
+  LudoState? get stateOrNull =>
+      gameType == 'ludo' && started ? game as LudoState : null;
+
+  /// The ludo state (rooms created before snakes support used this name).
+  LudoState get state => game as LudoState;
+
+  /// The snakes state, or null before [start] (or in a ludo room).
+  snakes.SnakesState? get snakesState =>
+      gameType == 'snakes' && started ? game as snakes.SnakesState : null;
 }
 
 /// Server-side game logic shared by the transport layer (websockets) and
@@ -146,13 +183,14 @@ class GameAuthority {
     ].join();
   }
 
-  /// Creates a room and seats [host] in the first free corner.
-  Room createRoom(ServerMember host) {
+  /// Creates a room and seats [host] in the first free corner. [game]
+  /// selects the room's game: 'ludo' (default) or 'snakes'.
+  Room createRoom(ServerMember host, {String game = 'ludo'}) {
     String code;
     do {
       code = _newCode();
     } while (rooms.containsKey(code));
-    final room = Room(code, rng: rng);
+    final room = Room(code, rng: rng, gameType: game);
     rooms[code] = room;
     return joinRoom(code, host)!;
   }
@@ -275,8 +313,10 @@ class GameAuthority {
   }) {
     final member = room.members[connectionId];
     if (member == null) return;
-    final state = room.stateOrNull;
-    if (state == null && msg['type'] != 'start') return;
+    final isSnakes = room.gameType == 'snakes';
+    final state = isSnakes ? null : room.stateOrNull;
+    final snakesState = room.snakesState;
+    if (state == null && snakesState == null && msg['type'] != 'start') return;
 
     switch (msg['type'] as String?) {
       case 'start':
@@ -286,6 +326,17 @@ class GameAuthority {
         }
 
       case 'roll':
+        if (isSnakes) {
+          if (snakesState == null ||
+              snakesState.phase != snakes.SnakesPhase.awaitingRoll) {
+            return;
+          }
+          if (snakesState.currentPlayer.id != member.seatId) return;
+          snakes.rollDice(snakesState, rng.nextInt(6) + 1);
+          room.broadcastState();
+          _recordResultsIfFinished(room, snakesState);
+          return;
+        }
         if (state == null || state.phase != LudoPhase.awaitingRoll) return;
         if (state.currentPlayer.id != member.seatId) return;
         rollDice(state, rng.nextInt(6) + 1);
@@ -293,6 +344,19 @@ class GameAuthority {
         _recordResultsIfFinished(room, state);
 
       case 'move':
+        if (isSnakes) {
+          // Snakes & Ladders has exactly one move per roll — no choice to
+          // validate, just resolve it for the current player.
+          if (snakesState == null ||
+              snakesState.phase != snakes.SnakesPhase.awaitingMove) {
+            return;
+          }
+          if (snakesState.currentPlayer.id != member.seatId) return;
+          snakes.applyMove(snakesState);
+          room.broadcastState();
+          _recordResultsIfFinished(room, snakesState);
+          return;
+        }
         if (state == null || state.phase != LudoPhase.awaitingMove) return;
         if (state.currentPlayer.id != member.seatId) return;
         final idx = msg['token'] as int?;
@@ -313,25 +377,46 @@ class GameAuthority {
 
   /// Persists the result when a game just reached completion. A no-op
   /// without a leaderboard store, before start, or once already recorded.
-  void _recordResultsIfFinished(Room room, LudoState state) {
+  void _recordResultsIfFinished(Room room, Object state) {
     final store = leaderboard;
     if (store == null || room.gameId == null || room.resultsRecorded) return;
-    if (state.phase != LudoPhase.gameOver) return;
-    final rankings = state.rankings;
-    if (rankings.length < state.players.length) return;
+
+    List<GameResult>? results;
+    switch (state) {
+      case LudoState s when s.phase == LudoPhase.gameOver:
+        final rankings = s.rankings;
+        if (rankings.length < s.players.length) return;
+        results = [
+          for (final p in s.players)
+            GameResult(
+              seatId: p.id,
+              name: p.name,
+              color: p.color.name,
+              rank: rankings.indexOf(p.id) + 1,
+            ),
+        ];
+      case snakes.SnakesState s when s.phase == snakes.SnakesPhase.gameOver:
+        // The classic ruleset ranks everyone the moment the first pawn
+        // reaches square 100, so all players should be present.
+        if (s.rankings.length < s.players.length) return;
+        results = [
+          for (final p in s.players)
+            GameResult(
+              seatId: p.id,
+              name: p.name,
+              // Pawn slot -> corner seat color, stable across reconnects.
+              color: LudoBoard
+                  .colorOrder[p.tokenIndex.clamp(0, 3)]
+                  .name,
+              rank: s.rankings.indexOf(p.id) + 1,
+            ),
+        ];
+      default:
+        return; // game not over yet
+    }
+
     room.resultsRecorded = true;
-    store.recordResults(
-      gameId: room.gameId!,
-      results: [
-        for (final p in state.players)
-          GameResult(
-            seatId: p.id,
-            name: p.name,
-            color: p.color.name,
-            rank: rankings.indexOf(p.id) + 1,
-          ),
-      ],
-    );
+    store.recordResults(gameId: room.gameId!, results: results);
   }
 }
 
