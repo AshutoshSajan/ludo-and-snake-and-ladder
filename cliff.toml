@@ -47,6 +47,7 @@ commit_parsers = [
   { message = "^chore", skip = true }, # e.g. bot changelog regeneration
   { message = "^ci", group = "Other" },
   { message = "^test", group = "Testing" },
+  { message = "^Merge ", skip = true }, # merge-commit subjects are noise
   { message = ".*", group = "Other" },
 ]
 
