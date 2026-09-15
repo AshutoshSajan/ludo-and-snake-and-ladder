@@ -41,6 +41,9 @@ Track now runs counter-clockwise with each color's start cell adjacent to its ow
 - Fix blue home column misalignment (col 6 -> col 7) so all home runs connect to their matching center triangle
 - Fix Ludo center home triangles spanning the 3x3 block; draw ladder rails as parallel tracks
 ### Other
+- Merge pull request #10 from AshutoshSajan/chore/changelog-update
+
+chore: update CHANGELOG.md
 - Merge pull request #11 from AshutoshSajan/dev
 
 Release: online Snakes & Ladders
