@@ -41,12 +41,30 @@ Track now runs counter-clockwise with each color's start cell adjacent to its ow
 - Fix blue home column misalignment (col 6 -> col 7) so all home runs connect to their matching center triangle
 - Fix Ludo center home triangles spanning the 3x3 block; draw ladder rails as parallel tracks
 ### Other
+- Merge pull request #11 from AshutoshSajan/dev
+
+Release: online Snakes & Ladders
 - Merge pull request #9 from AshutoshSajan/feat/online-snakes
 
 Online Snakes & Ladders multiplayer
+- Merge pull request #8 from AshutoshSajan/chore/changelog-update
+
+chore: update CHANGELOG.md
+- Merge pull request #7 from AshutoshSajan/chore/changelog-update
+
+chore: update CHANGELOG.md
+- Merge pull request #6 from AshutoshSajan/chore/dev-to-staging-sync
+
+chore: sync dev into staging (main-merge guard)
 - Merge pull request #5 from AshutoshSajan/chore/ci-main-merge-guard
 
 chore: CI guard rejects direct pushes to main
+- Merge pull request #4 from AshutoshSajan/chore/changelog-update
+
+chore: update CHANGELOG.md
+- Merge pull request #2 from AshutoshSajan/dev
+
+Dev
 - Merge pull request #1 from AshutoshSajan/chore/branching-pr-workflow
 
 chore: branch-and-PR workflow — integrate via staging, never push/PR to main
