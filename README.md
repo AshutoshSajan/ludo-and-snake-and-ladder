@@ -101,6 +101,10 @@ directly to `main`. The repo has four permanent tiers:
   `staging`/`main` directly, and nothing is ever pushed to `main`.
 - Tests must pass (analyze + full suite + release build) before a PR merges;
   CI runs on every PR and every merge to `dev`/`staging`/`main`.
+- **`main` is CI-guarded**: a push to `main` fails CI unless its head is a
+  merge commit (direct pushes are rejected; squash-merges into `main` are
+  rejected too — use merge commits). Branch protection itself is unavailable
+  on this private repo (free plan), so the guard job stands in for it.
 
 ```bash
 git checkout dev && git pull                # latest development state
