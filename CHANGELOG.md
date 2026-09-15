@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ### Added
+- Feat: online Snakes & Ladders multiplayer
+
+Rooms are now game-typed: the host picks Snakes & Ladders at creation and everyone joins via the same 4-letter code flow. The server rolls and resolves the single forced move with the pure engine (same intent protocol); the client auto-sends its move after a beat, renders board/pawns with the shared painter, and handles game-over, spectating, and mid-game reconnects. Leaderboard results map pawn slots back to corner seats.
 - Phase 10+11: online leaderboards (SQLite store + /leaderboard + scoreboard UI) and spectating (read-only watchers, spectator lobby UI, intent no-ops)
 - Online leaderboards: SQLite-backed career stats (Phase 10)
 
@@ -38,21 +41,12 @@ Track now runs counter-clockwise with each color's start cell adjacent to its ow
 - Fix blue home column misalignment (col 6 -> col 7) so all home runs connect to their matching center triangle
 - Fix Ludo center home triangles spanning the 3x3 block; draw ladder rails as parallel tracks
 ### Other
-- Merge pull request #3 from AshutoshSajan/staging
+- Merge pull request #9 from AshutoshSajan/feat/online-snakes
 
-Staging
-- Merge pull request #6 from AshutoshSajan/chore/dev-to-staging-sync
-
-chore: sync dev into staging (main-merge guard)
+Online Snakes & Ladders multiplayer
 - Merge pull request #5 from AshutoshSajan/chore/ci-main-merge-guard
 
 chore: CI guard rejects direct pushes to main
-- Merge pull request #4 from AshutoshSajan/chore/changelog-update
-
-chore: update CHANGELOG.md
-- Merge pull request #2 from AshutoshSajan/dev
-
-Dev
 - Merge pull request #1 from AshutoshSajan/chore/branching-pr-workflow
 
 chore: branch-and-PR workflow — integrate via staging, never push/PR to main
