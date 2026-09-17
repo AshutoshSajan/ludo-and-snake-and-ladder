@@ -5,7 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
+## [v1.0.0] - 2026-09-17
 ### Added
+- Feat: online Snakes & Ladders multiplayer
+
+Rooms are now game-typed: the host picks Snakes & Ladders at creation and everyone joins via the same 4-letter code flow. The server rolls and resolves the single forced move with the pure engine (same intent protocol); the client auto-sends its move after a beat, renders board/pawns with the shared painter, and handles game-over, spectating, and mid-game reconnects. Leaderboard results map pawn slots back to corner seats.
 - Phase 10+11: online leaderboards (SQLite store + /leaderboard + scoreboard UI) and spectating (read-only watchers, spectator lobby UI, intent no-ops)
 - Online leaderboards: SQLite-backed career stats (Phase 10)
 
@@ -27,6 +31,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Add per-step hop tick sound synced to token movement
 - Finished tokens in own yard, champion fanfare + confetti, per-corner dice with 3D tumble, remove top strip
 ### Fixed
+- Fix(changelog): skip merge-commit subjects in git-cliff
 - Fix(dice): stop tumble carrying across turns; settle spin-down ends after settle duration
 
 Semantics wrapper for the GestureDetector (accessibility label) with explicit
