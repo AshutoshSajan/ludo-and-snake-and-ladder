@@ -200,6 +200,10 @@ opens `index.html` in a tab.
       flow (code, lobby, spectate, reconnect). The server rolls and resolves
       the single forced move with the pure engine; the client auto-sends the
       move intent after a beat so the roll stays visible.
+- [x] Phase 8c — **quick match**: the online lobby's *Quick match* button
+      pairs you with the first waiting room of the chosen game type (or opens
+      one) and the game auto-starts as soon as two players are seated — no
+      room-code sharing needed. Reconnects still reclaim the matched seat.
 - [x] Phase 9 — mid-game reconnect: auto-reconnect with backoff, seat reclaim
       on the server, and a grace period for abandoned-but-started rooms.
 - [x] Phase 10 — online leaderboards: the server records every finished game

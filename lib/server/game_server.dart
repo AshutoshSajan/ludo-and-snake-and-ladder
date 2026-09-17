@@ -195,6 +195,17 @@ class GameAuthority {
     return joinRoom(code, host)!;
   }
 
+  /// Quick match: seats [member] in the first waiting (unstarted, not full)
+  /// room playing [game], creating a fresh room when none fits. Waiting
+  /// players thus pair up automatically instead of trading room codes.
+  Room findMatch(ServerMember member, {String game = 'ludo'}) {
+    for (final room in rooms.values) {
+      if (room.gameType != game || room.started || room.full) continue;
+      if (joinRoom(room.code, member) != null) return room;
+    }
+    return createRoom(member, game: game);
+  }
+
   Room? joinRoom(String code, ServerMember member) {
     final room = rooms[code.toUpperCase()];
     if (room == null || room.full || room.started) return null;

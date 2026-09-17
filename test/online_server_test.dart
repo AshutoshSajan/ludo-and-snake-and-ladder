@@ -326,6 +326,24 @@ void main() {
       await http.close(force: true);
     });
 
+    test('quick match auto-pairs two strangers and auto-starts', () async {
+      // Both players ask the server to match them — nobody shares a code.
+      host.sink.add(jsonEncode(
+          {'type': 'hello', 'seatId': 'qm-1', 'name': 'Solo', 'match': true}));
+      final hj = await nextMsg(hostBuf, 'joined');
+      expect(hj['game'], 'ludo');
+
+      guest.sink.add(jsonEncode(
+          {'type': 'hello', 'seatId': 'qm-2', 'name': 'Rival', 'match': true}));
+      final gj = await nextMsg(guestBuf, 'joined');
+      expect(gj['code'], hj['code'], reason: 'matched into the same room');
+
+      // The server started the game itself — no 'start' intent was sent.
+      final hs = await nextMsg(hostBuf, 'state');
+      await nextMsg(guestBuf, 'state');
+      expect((hs['state'] as Map)['players'], hasLength(2));
+    });
+
     test('hello -> joined -> lobby -> start -> state, full protocol', () async {
       // Host creates a room; guest joins by code.
       host.sink.add(jsonEncode(
@@ -696,6 +714,58 @@ void main() {
         returnsNormally,
       );
       expect(room.state.phase, LudoPhase.gameOver);
+    });
+  });
+
+  // ------------------------------------------------------------ matchmaking
+
+  group('GameAuthority: matchmaking (quick match)', () {
+    late GameAuthority auth;
+    setUp(() {
+      auth = GameAuthority(rng: Random(3), leaderboard: null);
+    });
+
+    test('pairs two quick-match players into one shared room', () {
+      final a = auth.findMatch(_member(LudoColor.red));
+      final b = auth.findMatch(_member(LudoColor.blue));
+      expect(a.code, b.code, reason: 'both players belong in the same room');
+      expect(a.members.length, 2);
+      expect(a.started, isFalse);
+      // Distinct seats even though both joined without a color preference.
+      expect(a.ownerOf(a.members.values.first.color), isNotNull);
+    });
+
+    test('respects the requested game type', () {
+      final ludo = auth.findMatch(_member(LudoColor.red), game: 'ludo');
+      final snakes = auth.findMatch(_member(LudoColor.blue), game: 'snakes');
+      expect(ludo.gameType, 'ludo');
+      expect(snakes.gameType, 'snakes');
+      expect(ludo.code, isNot(snakes.code),
+          reason: 'a snakes player must never land in a ludo room');
+      // A second snakes player pairs with the first snakes room.
+      final s2 = auth.findMatch(_member(LudoColor.green), game: 'snakes');
+      expect(s2.code, snakes.code);
+    });
+
+    test('fills a waiting room before opening a new one', () {
+      final first = auth.findMatch(_member(LudoColor.red));
+      auth.findMatch(_member(LudoColor.blue));
+      auth.findMatch(_member(LudoColor.yellow));
+      final fourth = auth.findMatch(_member(LudoColor.green));
+      expect(fourth.code, first.code);
+      expect(auth.rooms.values.where((r) => r.gameType == 'ludo').length, 1);
+    });
+
+    test('never matches into a started, full, or already-joined room', () {
+      final room = auth.findMatch(_member(LudoColor.red));
+      auth.findMatch(_member(LudoColor.blue));
+      auth.findMatch(_member(LudoColor.yellow));
+      auth.findMatch(_member(LudoColor.green));
+      room.start(); // full room started — must be invisible to matchmaking
+      final lateJoiner = auth.findMatch(
+          _member(LudoColor.red, seatId: 'late'));
+      expect(lateJoiner.code, isNot(room.code));
+      expect(lateJoiner.members.length, 1);
     });
   });
 
