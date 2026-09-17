@@ -8,7 +8,7 @@
 ///   WS   /ws?code=XXXX  -> join/create room, then JSON message protocol
 ///
 /// Client -> server messages:
-///   {type: 'hello', seatId, name, color?, game?, code?}  first message
+///   {type: 'hello', seatId, name, color?, game?, code?, match?}  first
 ///   {type: 'start'}
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
@@ -80,6 +80,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             final code = (msg['code'] as String? ?? '').trim();
             final spectate = msg['spectate'] as bool? ?? false;
             final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
+            final match = msg['match'] as bool? ?? false;
 
             member = ServerMember(
               id: connId,
@@ -108,6 +109,16 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
                 return;
               }
               room = watched;
+            } else if (code.isEmpty && match) {
+              // Quick match: join the first waiting room of this game
+              // type, or open one — then start as soon as two are seated.
+              room = authority.findMatch(member!, game: game);
+              if (!room.started && room.members.length >= 2) {
+                room.start();
+                // Push the initial snapshot to everyone — most importantly
+                // the first player who has been waiting in the lobby.
+                room.broadcastState();
+              }
             } else if (code.isEmpty) {
               room = authority.createRoom(member!, game: game);
             } else {
