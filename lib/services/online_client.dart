@@ -69,6 +69,7 @@ class OnlineClient extends ChangeNotifier {
     required this.seatId,
     required this.name,
     this.gameType = 'ludo',
+    this.quickMatch = false,
     WebSocketChannel Function(Uri uri)? channelFactory,
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
@@ -80,6 +81,11 @@ class OnlineClient extends ChangeNotifier {
   /// Which game to play when creating a room ('ludo' | 'snakes'). Joiners
   /// have their value overwritten by the room's real game type on 'joined'.
   String gameType;
+
+  /// Quick match: with no room code, the server pairs us with the first
+  /// waiting room of [gameType] (creating one if none exists) instead of
+  /// always opening a fresh room.
+  bool quickMatch;
 
   /// Overridable for tests (fake WebSocket channels).
   final WebSocketChannel Function(Uri) _channelFactory;
@@ -190,6 +196,8 @@ class OnlineClient extends ChangeNotifier {
         'seatId': seatId,
         'name': name,
         'game': gameType,
+        if (quickMatch && (_joinCode == null || _joinCode!.isEmpty))
+          'match': true,
         if (_joinCode != null && _joinCode!.isNotEmpty) 'code': _joinCode,
         if (preferredColor != null) 'color': preferredColor.name,
         if (_spectating) 'spectate': true,
@@ -238,6 +246,9 @@ class OnlineClient extends ChangeNotifier {
     switch (msg['type'] as String?) {
       case 'joined':
         roomCode = msg['code'] as String;
+        // Remember the room we were actually seated in so a quick-match
+        // reconnect lands back with the same strangers, not a new match.
+        _joinCode = roomCode;
         gameType = msg['game'] as String? ?? gameType;
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
