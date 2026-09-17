@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 """
 body = """
+{%- if version %}
+## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{%- else %}
+## Unreleased
+{%- endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 ### {{ group }}
 {%- for commit in commits %}
@@ -34,6 +39,7 @@ filter_commits = false
 protect_breaking_commits = true
 tag_pattern = "v[0-9].*"
 sort_commits = "newest"
+topo_order = true # required for tag-based release sections
 
 commit_parsers = [
   { message = "^feat", group = "Added" },
