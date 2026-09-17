@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
+## Unreleased
+### Documentation
+- Docs: add v1.0.0 release section to changelog
+### Other
+- Ci: generate changelog on main pushes only
 ## [v1.0.0] - 2026-09-17
 ### Added
 - Feat: online Snakes & Ladders multiplayer
