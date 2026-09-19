@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
+## [v1.1.0] - 2026-09-17
+### Added
+- Feat: quick match — auto-pair waiting players and auto-start at two
 ## [v1.0.0] - 2026-09-17
 ### Added
 - Feat: online Snakes & Ladders multiplayer
@@ -30,6 +33,8 @@ Rooms are now game-typed: the host picks Snakes & Ladders at creation and everyo
 - Finished pieces rest on their own color triangle in the center finish square
 - Add per-step hop tick sound synced to token movement
 - Finished tokens in own yard, champion fanfare + confetti, per-corner dice with 3D tumble, remove top strip
+### Documentation
+- Docs: add v1.0.0 release section to changelog
 ### Fixed
 - Fix(changelog): skip merge-commit subjects in git-cliff
 - Fix(dice): stop tumble carrying across turns; settle spin-down ends after settle duration
@@ -43,6 +48,7 @@ Track now runs counter-clockwise with each color's start cell adjacent to its ow
 - Fix blue home column misalignment (col 6 -> col 7) so all home runs connect to their matching center triangle
 - Fix Ludo center home triangles spanning the 3x3 block; draw ladder rails as parallel tracks
 ### Other
+- Ci: generate changelog on main pushes only
 - Mid-game reconnect: seat reclaim, auto-reconnect, grace period
 
 Server: persistent seatRegistry per room; rejoinRoom reclaims the original corner mid-game and evicts stale connections; started rooms with no members survive an emptyRoomGrace (default 5 min) before removal, emptied lobbies are dropped immediately; transport routes hello-through-rejoin and sends the current snapshot to a rejoining client. Client: OnlineClient auto-reconnects with exponential backoff (500ms..8s, 5 attempts) after an unplanned drop, reuses the join code/identity, and surfaces a reconnecting status; definitive server errors stop the loop; disconnect() reflects idle immediately. UI: reconnecting banner over the board and lobby spinner. Tests: 10 new (authority rejoin/grace, loopback mid-game rejoin, client backoff/give-up/rejection/disconnect via fake channels in fakeAsync). analyze clean; 91/91 tests; web release build OK.
