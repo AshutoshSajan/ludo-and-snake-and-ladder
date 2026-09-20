@@ -658,8 +658,8 @@ void main() {
   // ------------------------------------------------- leaderboard recording
 
   group('GameAuthority: leaderboard recording', () {
-    test('a finished game is recorded once with correct ranks', () {
-      final store = LeaderboardStore.inMemory();
+    test('a finished game is recorded once with correct ranks', () async {
+      final store = SqliteLeaderboardStore.inMemory();
       final auth = GameAuthority(rng: Random(1), leaderboard: store);
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
@@ -681,9 +681,9 @@ void main() {
 
       expect(s.phase, LudoPhase.gameOver);
       expect(s.rankings, ['red', 'blue']);
-      expect(store.totalGames, 1);
+      expect(await store.totalGames(), 1);
 
-      final rows = store.topPlayers();
+      final rows = await store.topPlayers();
       expect(rows.map((r) => r.name), ['Red', 'Blue']);
       expect(rows[0].wins, 1);
       expect(rows[0].games, 1);
@@ -692,8 +692,8 @@ void main() {
 
       // Anything after game over is rejected, so no double recording.
       auth.handleIntent(room: room, connectionId: 'red', msg: {'type': 'roll'});
-      expect(store.totalGames, 1);
-      expect(store.topPlayers().first.games, 1);
+      expect(await store.totalGames(), 1);
+      expect((await store.topPlayers()).first.games, 1);
     });
 
     test('without a store, completion stays a pure no-op', () {
@@ -774,15 +774,15 @@ void main() {
   group('GET /leaderboard (production handler)', () {
     test('serves recorded games as JSON and rejects non-GET', () async {
       // Swap the module globals for a clean, seeded pair.
-      final store = LeaderboardStore.inMemory();
+      final store = SqliteLeaderboardStore.inMemory();
       leaderboardStore = store;
       authority = GameAuthority(rng: Random(1), leaderboard: store);
-      store.recordResults(gameId: 'g1', results: [
+      await store.recordResults(gameId: 'g1', results: [
         GameResult(seatId: 'w', name: 'Winnie', color: 'red', rank: 1),
         GameResult(seatId: 'l', name: 'Louie', color: 'blue', rank: 2),
       ]);
 
-      final resp = leaderboardHandler(shelf.Request(
+      final resp = await leaderboardHandler(shelf.Request(
           'GET', Uri.parse('http://localhost/leaderboard')));
       expect(resp.statusCode, 200);
       final body =
@@ -795,7 +795,7 @@ void main() {
       expect(players.first['wins'], 1);
       expect(players.first['avgRank'], 1.0);
 
-      final post = leaderboardHandler(shelf.Request(
+      final post = await leaderboardHandler(shelf.Request(
           'POST', Uri.parse('http://localhost/leaderboard')));
       expect(post.statusCode, 405);
     });
