@@ -5,12 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
-## Unreleased
-### Documentation
-- Docs: fold quick-match entry into v1.1.0 release section
-## [v1.1.0] - 2026-09-17
+## [v1.1.0] - 2026-09-20
 ### Added
 - Feat: quick match — auto-pair waiting players and auto-start at two
+### Documentation
+- Docs: fold quick-match entry into v1.1.0 release section
 ## [v1.0.0] - 2026-09-17
 ### Added
 - Feat: online Snakes & Ladders multiplayer
