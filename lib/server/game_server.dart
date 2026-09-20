@@ -9,6 +9,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show stderr;
 import 'dart:math';
 
 import '../engine/ludo/ludo_board.dart';
@@ -427,7 +428,15 @@ class GameAuthority {
     }
 
     room.resultsRecorded = true;
-    store.recordResults(gameId: room.gameId!, results: results);
+    // Fire-and-forget: the write must not block the turn loop, and a
+    // failure must not kill the connection. Rows are idempotent per
+    // (gameId, seatId), so a retried write is safe.
+    unawaited(store
+        .recordResults(gameId: room.gameId!, results: results)
+        .catchError((Object e) {
+      room.resultsRecorded = false; // a later action in this room can retry
+      stderr.writeln('leaderboard write failed: $e');
+    }));
   }
 }
 
