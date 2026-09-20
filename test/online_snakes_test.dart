@@ -94,7 +94,7 @@ void main() {
         // Seeded PRNG: varied rolls (a constant roll eventually loops
         // through a snake forever) yet fully deterministic across runs.
         rng: Random(7),
-        leaderboard: LeaderboardStore.inMemory(),
+        leaderboard: SqliteLeaderboardStore.inMemory(),
       );
     });
 
@@ -112,7 +112,7 @@ void main() {
       expect(room.gameType, 'snakes');
     });
 
-    test('scripted game plays to completion via roll/move intents', () {
+    test('scripted game plays to completion via roll/move intents', () async {
       final room = seedRoom();
       final hostSink2 = hostSink;
 
@@ -155,7 +155,7 @@ void main() {
       // Snapshots are tagged with the game type so clients can route them.
       expect(hostSink2.states.last['game'], 'snakes');
       // Leaderboard recorded exactly once for the finished game.
-      expect(authority.leaderboard!.totalGames, 1);
+      expect(await authority.leaderboard!.totalGames(), 1);
     });
 
     test('move applies the engine-computed pending move and broadcasts it', () {

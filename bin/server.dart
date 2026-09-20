@@ -32,13 +32,15 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
+import 'package:game_club/server/turso_leaderboard_store.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
 
 /// Not final so tests can swap in an in-memory store. main() replaces this
-/// with the file-backed store before the server starts listening.
-LeaderboardStore leaderboardStore = LeaderboardStore.inMemory();
+/// with the Turso store (when TURSO_DATABASE_URL is set) or the file-backed
+/// store before the server starts listening.
+LeaderboardStore leaderboardStore = SqliteLeaderboardStore.inMemory();
 
 final _connections = <String, String>{}; // connId -> roomCode
 
@@ -198,16 +200,16 @@ void _lobby(Room room) {
   });
 }
 
-shelf.Response _health(shelf.Request req) => shelf.Response.ok(
+Future<shelf.Response> _health(shelf.Request req) async => shelf.Response.ok(
       jsonEncode({
         'ok': true,
         'rooms': authority.rooms.length,
-        'games': leaderboardStore.totalGames,
+        'games': await leaderboardStore.totalGames(),
       }),
       headers: {'content-type': 'application/json'},
     );
 
-shelf.Response leaderboardHandler(shelf.Request req) {
+Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
   if (req.method != 'GET') {
     return shelf.Response(405,
         body: jsonEncode({'ok': false, 'text': 'GET only'}),
@@ -216,8 +218,10 @@ shelf.Response leaderboardHandler(shelf.Request req) {
   return shelf.Response.ok(
     jsonEncode({
       'ok': true,
-      'games': leaderboardStore.totalGames,
-      'players': [for (final e in leaderboardStore.topPlayers()) e.toJson()],
+      'games': await leaderboardStore.totalGames(),
+      'players': [
+        for (final e in await leaderboardStore.topPlayers()) e.toJson()
+      ],
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -231,13 +235,17 @@ Future<void> main(List<String> args) async {
     if (args[i] == '--db') dbPath = args[i + 1];
   }
 
-  // File-backed persistence for production runs; tests swap the globals.
-  leaderboardStore = LeaderboardStore(dbPath);
+  // Persistence for production runs: a hosted Turso database when
+  // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
+  // survives on ephemeral hosts), otherwise the local SQLite file. Tests
+  // swap the globals.
+  final turso = TursoLeaderboardStore.fromEnvironment(Platform.environment);
+  leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
   authority = GameAuthority(leaderboard: leaderboardStore);
 
   final handler = const shelf.Pipeline()
       .addMiddleware(shelf.logRequests())
-      .addHandler((req) {
+      .addHandler((req) async {
         if (req.url.path == 'ws') return wsHandler()(req);
         if (req.url.path == 'leaderboard') return leaderboardHandler(req);
         return _health(req);
@@ -246,5 +254,5 @@ Future<void> main(List<String> args) async {
   final server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
   stdout.writeln('Game Club server listening on '
       'ws://${server.address.host}:${server.port}/ws '
-      '(leaderboard db: $dbPath)');
+      '(leaderboard: ${turso != null ? 'Turso' : dbPath})');
 }
