@@ -207,11 +207,17 @@ opens `index.html` in a tab.
 - [x] Phase 9 — mid-game reconnect: auto-reconnect with backoff, seat reclaim
       on the server, and a grace period for abandoned-but-started rooms.
 - [x] Phase 10 — online leaderboards: the server records every finished game
-      into SQLite (`lib/server/leaderboard_store.dart`, `--db FILE` to choose
-      the path, default `ludo_leaderboard.db`) and serves career stats
-      (wins / games / average placement) at `GET /leaderboard`. The home
-      screen's *Online Leaderboard* button shows the top players with a
-      medal podium — requires the server to be running.
+      and serves career stats (wins / games / average placement) at
+      `GET /leaderboard`. The home screen's *Online Leaderboard* button shows
+      the top players with a medal podium — requires the server to be running.
+      Storage is pluggable (`lib/server/leaderboard_store.dart`): a local
+      SQLite file by default (`--db FILE`, default `ludo_leaderboard.db`), or
+      a hosted **Turso** (libSQL) database when `TURSO_DATABASE_URL` and
+      `TURSO_AUTH_TOKEN` are set — the leaderboard then survives on ephemeral
+      free hosts since the data lives off-server (no native driver needed;
+      the store speaks Turso's SQL-over-HTTP API via `package:http`).
+      Setup: `turso db create <name>` then `turso db tokens create <name>`
+      (`lib/server/turso_leaderboard_store.dart`).
 - [x] Phase 11 — spectating: anyone can watch a running or waiting room via
       the lobby's *Spectate* option. Watchers receive every state broadcast,
       claim no seat, and their intents are ignored by the server (and the
