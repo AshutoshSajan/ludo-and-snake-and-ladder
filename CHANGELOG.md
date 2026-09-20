@@ -9,6 +9,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 ### Added
 - Feat: quick match — auto-pair waiting players and auto-start at two
 ### Documentation
+- Docs: fold the quick-match doc entry into the v1.1.0 release section
 - Docs: fold quick-match entry into v1.1.0 release section
 ## [v1.0.0] - 2026-09-17
 ### Added
