@@ -262,7 +262,7 @@ Future<shelf.Response> roomLookupHandler(shelf.Request req) async {
         body: jsonEncode({'ok': false, 'text': 'GET only'}),
         headers: {'content-type': 'application/json'});
   }
-  final code = req.url.queryParameters['code']?.trim() ?? '';
+  final code = (req.url.queryParameters['code'] ?? '').trim().toUpperCase();
   if (code.isEmpty) {
     return shelf.Response(400,
         body: jsonEncode({'ok': false, 'text': 'code query param required'}),

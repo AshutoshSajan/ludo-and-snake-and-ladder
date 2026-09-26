@@ -850,6 +850,22 @@ void main() {
       expect(body, {'ok': true, 'code': 'ABCD', 'instance': 'game-2'});
     });
 
+    test('rooms/lookup normalizes lowercase codes like joins do', () async {
+      // Joins uppercase the code (rooms[code.toUpperCase()]) while the
+      // registry stores the canonical uppercase room code, so an edge
+      // asking about the user-typed lowercase form must resolve too.
+      final registry = InMemoryRoomRegistry();
+      roomRegistry = registry;
+      await registry.register('AB12', 'game-3');
+
+      final resp = await roomLookupHandler(shelf.Request(
+          'GET', Uri.parse('http://localhost/rooms/lookup?code=ab12')));
+      expect(resp.statusCode, 200);
+      final body =
+          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+      expect(body, {'ok': true, 'code': 'AB12', 'instance': 'game-3'});
+    });
+
     test('rooms/lookup 404s unknown codes and 400s missing ones', () async {
       roomRegistry = InMemoryRoomRegistry();
 
