@@ -18,6 +18,7 @@ import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
+import 'package:game_club/server/room_registry.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -25,7 +26,15 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 // Reuses the real transport (WebSocket handler + protocol) from the
 // server entrypoint so the integration test exercises production code.
 import '../bin/server.dart'
-    show wsHandler, leaderboardHandler, leaderboardStore, authority;
+    show
+        wsHandler,
+        leaderboardHandler,
+        leaderboardStore,
+        authority,
+        statsHandler,
+        roomLookupHandler,
+        roomRegistry,
+        instanceId;
 
 ServerMember _member(LudoColor c,
         {String? seatId, String? id, void Function(String)? on}) =>
@@ -797,6 +806,63 @@ void main() {
 
       final post = await leaderboardHandler(shelf.Request(
           'POST', Uri.parse('http://localhost/leaderboard')));
+      expect(post.statusCode, 405);
+    });
+  });
+
+  // ------------------------------------------------- scaling endpoints
+
+  group('GET /stats and /rooms/lookup (production handlers)', () {
+    test('stats reports instance, connections, rooms, and spectators',
+        () async {
+      // Fresh authority with one room: two seated players + a spectator.
+      final auth = GameAuthority(rng: Random(1));
+      authority = auth;
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.spectateRoom(room.code, _member(LudoColor.green, seatId: 'spec'));
+
+      final resp = await statsHandler(
+          shelf.Request('GET', Uri.parse('http://localhost/stats')));
+      expect(resp.statusCode, 200);
+      final body =
+          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+      expect(body['ok'], isTrue);
+      expect(body['instance'], instanceId);
+      expect(body['rooms'], 1);
+      expect(body['spectators'], 1);
+      // Connections counts only live WebSockets in this process; a direct
+      // handler call has none, and the joined-room map is not double-counted.
+      expect(body['connections'], isA<int>());
+    });
+
+    test('rooms/lookup resolves a code registered by this instance',
+        () async {
+      final registry = InMemoryRoomRegistry();
+      roomRegistry = registry;
+      await registry.register('ABCD', 'game-2');
+
+      final resp = await roomLookupHandler(shelf.Request(
+          'GET', Uri.parse('http://localhost/rooms/lookup?code=ABCD')));
+      expect(resp.statusCode, 200);
+      final body =
+          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+      expect(body, {'ok': true, 'code': 'ABCD', 'instance': 'game-2'});
+    });
+
+    test('rooms/lookup 404s unknown codes and 400s missing ones', () async {
+      roomRegistry = InMemoryRoomRegistry();
+
+      final missing = await roomLookupHandler(shelf.Request('GET',
+          Uri.parse('http://localhost/rooms/lookup?code=ZZZZ')));
+      expect(missing.statusCode, 404);
+
+      final noCode = await roomLookupHandler(
+          shelf.Request('GET', Uri.parse('http://localhost/rooms/lookup')));
+      expect(noCode.statusCode, 400);
+
+      final post = await roomLookupHandler(shelf.Request('POST',
+          Uri.parse('http://localhost/rooms/lookup?code=ABCD')));
       expect(post.statusCode, 405);
     });
   });

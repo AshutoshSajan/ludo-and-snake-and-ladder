@@ -222,3 +222,14 @@ opens `index.html` in a tab.
       the lobby's *Spectate* option. Watchers receive every state broadcast,
       claim no seat, and their intents are ignored by the server (and the
       client). Seated players see who is watching in the roster.
+- [x] Phase 12 — **horizontal scaling**: the server is ready to run as N
+      replicas behind a load balancer (`deploy/nginx.conf` routes
+      `/ws?code=XXXX` with consistent hashing so a room's players always
+      reach the same replica). Each replica identifies itself via
+      `--instance-id` / `INSTANCE_ID`, advertises its rooms in a room
+      registry (`lib/server/room_registry.dart` — in-memory for single
+      instance, a TTL map in Turso when `TURSO_DATABASE_URL` is set), and
+      exposes `GET /stats` (connections / rooms / spectators) plus
+      `GET /rooms/lookup?code=XXXX` (the owning instance) so an edge can
+      forward a WS join that landed on the wrong replica. Entries expire
+      automatically, so a crashed replica leaves no stale routes.
