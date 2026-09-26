@@ -34,6 +34,7 @@ import '../bin/server.dart'
         statsHandler,
         roomLookupHandler,
         healthHandler,
+        registryRefreshInterval,
         roomRegistry,
         instanceId,
         serverEnv,
@@ -932,6 +933,26 @@ void main() {
       final post = await roomLookupHandler(shelf.Request('POST',
           Uri.parse('http://localhost/rooms/lookup?code=ABCD')));
       expect(post.statusCode, 405);
+    });
+  });
+
+  group('registry refresh cadence', () {
+    test('stays well under the configured TTL', () {
+      // Default (null -> 120 s TTL) keeps the historical 30 s sweep.
+      expect(registryRefreshInterval(null), const Duration(seconds: 30));
+      expect(registryRefreshInterval(const Duration(seconds: 120)),
+          const Duration(seconds: 30));
+      // A short TTL shortens the sweep; a fixed 30 s cadence with a 10 s
+      // TTL left live rooms expiring (lookup 404) for ~20 s per cycle.
+      expect(registryRefreshInterval(const Duration(seconds: 10)),
+          const Duration(seconds: 3));
+      expect(registryRefreshInterval(const Duration(seconds: 45)),
+          const Duration(seconds: 15));
+      // Degenerate TTLs still yield a valid, positive timer period.
+      expect(registryRefreshInterval(const Duration(seconds: 1)),
+          const Duration(seconds: 1));
+      expect(registryRefreshInterval(Duration.zero),
+          const Duration(seconds: 1));
     });
   });
 

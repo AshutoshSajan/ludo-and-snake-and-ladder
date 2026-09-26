@@ -355,8 +355,12 @@ Future<void> main(List<String> args) async {
 
   // Keep the registry truthful: refresh every live room's TTL. Rooms are
   // unregistered the moment they close (onRoomClosed above); entries from a
-  // crashed instance self-expire once their TTL passes.
-  Timer.periodic(const Duration(seconds: 30), (_) {
+  // crashed instance self-expire once their TTL passes. The cadence must
+  // stay well under the TTL — sweeping no more often than the TTL would
+  // let live rooms expire between sweeps (lookups 404 for rooms that
+  // still exist).
+  Timer.periodic(
+      registryRefreshInterval(tursoRegistry?.ttl), (_) {
     for (final room in authority.rooms.values) {
       roomRegistry
           .register(room.code, instanceId)
@@ -416,6 +420,25 @@ String? get webDir {
   if (!Directory(path).existsSync()) return null;
   if (File('$path/index.html').existsSync()) return path;
   return null;
+}
+
+/// How often the server re-registers its live rooms in the cluster
+/// registry. Must stay well under the registry TTL — sweeping no more
+/// often than the TTL would let live rooms expire between sweeps
+/// (`/rooms/lookup` would 404 for rooms that still exist). A third of
+/// the TTL leaves room for roughly two missed sweeps, clamped to a
+/// valid, bounded timer period of [1 s, 30 s] (30 s keeps the historical
+/// default cadence for the 120 s TTL).
+Duration registryRefreshInterval(Duration? ttl) {
+  var refresh = Duration(
+      seconds: (ttl ?? const Duration(seconds: 120)).inSeconds ~/ 3);
+  if (refresh < const Duration(seconds: 1)) {
+    refresh = const Duration(seconds: 1);
+  }
+  if (refresh > const Duration(seconds: 30)) {
+    refresh = const Duration(seconds: 30);
+  }
+  return refresh;
 }
 
 /// KEY=VALUE lines from an optional .env file, merged under the real
