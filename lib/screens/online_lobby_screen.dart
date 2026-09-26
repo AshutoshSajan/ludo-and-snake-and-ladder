@@ -20,7 +20,7 @@ class OnlineLobbyScreen extends StatefulWidget {
   /// The server the online screens target by default. Precedence:
   /// 1. `--dart-define=GAME_SERVER_URL=wss://host/ws` (build-time override,
   ///    for split client/server deployments)
-  /// 2. same-origin on web — `wss://<page host>/ws` on https (single
+  /// 2. same-origin on web — `wss://<page host[:port]>/ws` on https (single
   ///    service deploys like the Render blueprint) or the dev server on
   ///    :8080 over plain http
   /// 3. `ws://localhost:8080/ws` for desktop/mobile dev runs
@@ -28,11 +28,21 @@ class OnlineLobbyScreen extends StatefulWidget {
     const configured = String.fromEnvironment('GAME_SERVER_URL');
     if (configured.isNotEmpty) return configured;
     if (kIsWeb && Uri.base.host.isNotEmpty) {
-      return Uri.base.scheme == 'https'
-          ? 'wss://${Uri.base.host}/ws'
-          : 'ws://${Uri.base.host}:8080/ws';
+      return sameOriginServerUrl(Uri.base);
     }
     return 'ws://localhost:8080/ws';
+  }
+
+  /// Same-origin server URL for a web page URI. Uses the page's authority
+  /// (host plus any explicit port) so a nonstandard HTTPS port — e.g. a
+  /// load balancer on :8443 — reaches the server; the leaderboard derives
+  /// its HTTP origin from the same URL and stays correct too. Plain http
+  /// is the local dev case: the page comes from the Flutter dev server,
+  /// the game server from :8080.
+  static String sameOriginServerUrl(Uri page) {
+    return page.scheme == 'https'
+        ? 'wss://${page.authority}/ws'
+        : 'ws://${page.host}:8080/ws';
   }
 
   @override
