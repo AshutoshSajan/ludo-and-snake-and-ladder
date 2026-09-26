@@ -33,8 +33,11 @@ import '../bin/server.dart'
         authority,
         statsHandler,
         roomLookupHandler,
+        healthHandler,
         roomRegistry,
-        instanceId;
+        instanceId,
+        serverEnv,
+        webDir;
 
 ServerMember _member(LudoColor c,
         {String? seatId, String? id, void Function(String)? on}) =>
@@ -929,6 +932,49 @@ void main() {
       final post = await roomLookupHandler(shelf.Request('POST',
           Uri.parse('http://localhost/rooms/lookup?code=ABCD')));
       expect(post.statusCode, 405);
+    });
+  });
+
+  group('GET /health (production handler)', () {
+    test('health returns the documented JSON payload', () async {
+      final resp = await healthHandler(
+          shelf.Request('GET', Uri.parse('http://localhost/health')));
+      expect(resp.statusCode, 200);
+      final body =
+          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+      expect(body['ok'], isTrue);
+      expect(body['rooms'], isA<int>());
+      expect(body['games'], isA<int>());
+    });
+  });
+
+  group('WEB_DIR resolution (web UI serving)', () {
+    test('WEB_DIR set only via .env-style config is honored', () async {
+      // Deployments may configure the web build location in .env, not the
+      // process environment; the server must serve the UI in both cases.
+      final tmp = await Directory.systemTemp.createTemp('game-club-web');
+      File('${tmp.path}/index.html')
+          .writeAsStringSync('<html>game ui</html>');
+      final prev = serverEnv;
+      serverEnv = {'WEB_DIR': tmp.path};
+      addTearDown(() {
+        serverEnv = prev;
+        tmp.deleteSync(recursive: true);
+      });
+
+      expect(webDir, tmp.path);
+    });
+
+    test('a WEB_DIR without index.html is ignored', () async {
+      final tmp = await Directory.systemTemp.createTemp('game-club-empty');
+      final prev = serverEnv;
+      serverEnv = {'WEB_DIR': tmp.path};
+      addTearDown(() {
+        serverEnv = prev;
+        tmp.deleteSync(recursive: true);
+      });
+
+      expect(webDir, isNull);
     });
   });
 }

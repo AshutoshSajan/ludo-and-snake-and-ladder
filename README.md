@@ -253,3 +253,5 @@ connection cold-starts the instance.
       `GET /rooms/lookup?code=XXXX` (the owning instance) so an edge can
       forward a WS join that landed on the wrong replica. Entries expire
       automatically, so a crashed replica leaves no stale routes.
+      `GET /health` is the JSON health check; with a web build shipped,
+      `GET /` serves the game UI instead.

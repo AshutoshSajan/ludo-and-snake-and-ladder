@@ -3,7 +3,10 @@
 /// Run:  dart run bin/server.dart [--port 8080] [--db FILE]
 ///
 /// Endpoints:
-///   GET  /            -> health check
+///   GET  /            -> Flutter web UI when a build ships (WEB_DIR);
+///                        otherwise the JSON health check below
+///   GET  /health      -> JSON health check {ok, rooms, games} — the stable
+///                        health URL whatever the deployment mode
 ///   GET  /stats       -> capacity metrics {connections, rooms, spectators}
 ///   GET  /rooms/lookup?code=XXXX -> owning instance id (cross-instance routing)
 ///   GET  /leaderboard -> top players + total games recorded
@@ -50,6 +53,11 @@ LeaderboardStore leaderboardStore = SqliteLeaderboardStore.inMemory();
 /// main() swaps in a Turso-backed registry when TURSO_DATABASE_URL is set;
 /// tests use the in-memory one.
 RoomRegistry roomRegistry = InMemoryRoomRegistry();
+
+/// The merged environment: real process variables plus .env overrides
+/// (the real environment always wins). Captured at startup; tests may
+/// swap it to exercise .env-only configuration such as WEB_DIR.
+Map<String, String> serverEnv = const {};
 
 /// This instance's id in the room registry (see /rooms/lookup). Settable
 /// via --instance-id or INSTANCE_ID so replicas behind a load balancer are
@@ -224,7 +232,10 @@ void _lobby(Room room) {
   });
 }
 
-Future<shelf.Response> _health(shelf.Request req) async => shelf.Response.ok(
+/// The documented JSON health check. Always served at GET /health; at GET /
+/// only when no web build ships (with a build, / serves the game UI, so
+/// probes must use /health).
+Future<shelf.Response> healthHandler(shelf.Request req) async => shelf.Response.ok(
       jsonEncode({
         'ok': true,
         'rooms': authority.rooms.length,
@@ -365,6 +376,8 @@ Future<void> main(List<String> args) async {
             return statsHandler(req);
           case 'rooms/lookup':
             return roomLookupHandler(req);
+          case 'health':
+            return healthHandler(req);
         }
         // Serve the Flutter web build when one ships with the image, so a
         // single deployed service hosts both the game UI and the server
@@ -374,7 +387,9 @@ Future<void> main(List<String> args) async {
         if (staticHandler != null && req.method == 'GET') {
           return staticHandler(req);
         }
-        return _health(req);
+        // No web build: keep the historical JSON health response at /, so
+        // API-only deployments behave exactly as before.
+        return healthHandler(req);
       });
 
   final server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
@@ -394,7 +409,10 @@ shelf.Handler? _webStaticHandler() {
 }
 
 String? get webDir {
-  final path = Platform.environment['WEB_DIR'] ?? 'build/web';
+  // Real environment wins over .env, mirroring _loadEnvironment's merge.
+  final path = Platform.environment['WEB_DIR'] ??
+      serverEnv['WEB_DIR'] ??
+      'build/web';
   if (!Directory(path).existsSync()) return null;
   if (File('$path/index.html').existsSync()) return path;
   return null;
