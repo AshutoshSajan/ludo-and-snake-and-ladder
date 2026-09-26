@@ -17,12 +17,20 @@ import '../ui/theme.dart';
 class OnlineLobbyScreen extends StatefulWidget {
   const OnlineLobbyScreen({super.key});
 
-  /// On web the server is typically the same host the app was served from,
-  /// just on the dedicated WebSocket port. Shared with the online
-  /// leaderboard screen so both target the same server by default.
+  /// The server the online screens target by default. Precedence:
+  /// 1. `--dart-define=GAME_SERVER_URL=wss://host/ws` (build-time override,
+  ///    for split client/server deployments)
+  /// 2. same-origin on web — `wss://<page host>/ws` on https (single
+  ///    service deploys like the Render blueprint) or the dev server on
+  ///    :8080 over plain http
+  /// 3. `ws://localhost:8080/ws` for desktop/mobile dev runs
   static String defaultServerUrl() {
+    const configured = String.fromEnvironment('GAME_SERVER_URL');
+    if (configured.isNotEmpty) return configured;
     if (kIsWeb && Uri.base.host.isNotEmpty) {
-      return 'ws://${Uri.base.host}:8080/ws';
+      return Uri.base.scheme == 'https'
+          ? 'wss://${Uri.base.host}/ws'
+          : 'ws://${Uri.base.host}:8080/ws';
     }
     return 'ws://localhost:8080/ws';
   }

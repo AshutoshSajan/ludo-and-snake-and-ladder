@@ -29,6 +29,7 @@ import 'dart:io';
 
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
+import 'package:shelf_static/shelf_static.dart';
 import 'package:shelf_web_socket/shelf_web_socket.dart';
 
 import 'package:game_club/engine/ludo/ludo_models.dart';
@@ -301,29 +302,38 @@ Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
 Future<void> main(List<String> args) async {
   var port = 8080;
   var dbPath = 'ludo_leaderboard.db';
+  var portArg = false;
   for (var i = 0; i < args.length - 1; i++) {
-    if (args[i] == '--port') port = int.tryParse(args[i + 1]) ?? port;
+    if (args[i] == '--port') {
+      port = int.tryParse(args[i + 1]) ?? port;
+      portArg = true;
+    }
     if (args[i] == '--db') dbPath = args[i + 1];
     if (args[i] == '--instance-id') instanceId = args[i + 1];
   }
-  instanceId =
-      Platform.environment['INSTANCE_ID']?.trim().isNotEmpty == true
-          ? Platform.environment['INSTANCE_ID']!.trim()
-          : instanceId;
+
+  // Local development convenience: a .env file next to the server supplies
+  // TURSO_DATABASE_URL / TURSO_AUTH_TOKEN / PORT / INSTANCE_ID without
+  // shell exports. Real environment variables always win over .env.
+  final env = _loadEnvironment();
+
+  if (!portArg) port = int.tryParse(env['PORT'] ?? '') ?? port;
+  instanceId = env['INSTANCE_ID']?.trim().isNotEmpty == true
+      ? env['INSTANCE_ID']!.trim()
+      : instanceId;
 
   // Persistence for production runs: a hosted Turso database when
   // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
   // survives on ephemeral hosts), otherwise the local SQLite file. Tests
   // swap the globals.
-  final turso = TursoLeaderboardStore.fromEnvironment(Platform.environment);
+  final turso = TursoLeaderboardStore.fromEnvironment(env);
   leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
   authority = GameAuthority(leaderboard: leaderboardStore);
 
   // Same env vars drive the cross-instance room registry: with Turso,
   // rooms are discoverable by every replica behind the load balancer;
   // without it, the in-memory registry keeps single-instance behavior.
-  final tursoRegistry =
-      TursoRoomRegistry.fromEnvironment(Platform.environment);
+  final tursoRegistry = TursoRoomRegistry.fromEnvironment(env);
   roomRegistry = tursoRegistry ?? InMemoryRoomRegistry();
 
   // Keep the registry truthful: refresh every room's TTL, and drop entries
@@ -341,10 +351,24 @@ Future<void> main(List<String> args) async {
   final handler = const shelf.Pipeline()
       .addMiddleware(shelf.logRequests())
       .addHandler((req) async {
-        if (req.url.path == 'ws') return wsHandler()(req);
-        if (req.url.path == 'leaderboard') return leaderboardHandler(req);
-        if (req.url.path == 'stats') return statsHandler(req);
-        if (req.url.path == 'rooms/lookup') return roomLookupHandler(req);
+        switch (req.url.path) {
+          case 'ws':
+            return wsHandler()(req);
+          case 'leaderboard':
+            return leaderboardHandler(req);
+          case 'stats':
+            return statsHandler(req);
+          case 'rooms/lookup':
+            return roomLookupHandler(req);
+        }
+        // Serve the Flutter web build when one ships with the image, so a
+        // single deployed service hosts both the game UI and the server
+        // (the web client's same-origin default then just works). Existing
+        // but empty builds are ignored to catch a half-uploaded copy.
+        final staticHandler = _webStaticHandler();
+        if (staticHandler != null && req.method == 'GET') {
+          return staticHandler(req);
+        }
         return _health(req);
       });
 
@@ -353,5 +377,47 @@ Future<void> main(List<String> args) async {
       'ws://${server.address.host}:${server.port}/ws '
       '(instance: $instanceId, '
       'leaderboard: ${turso != null ? 'Turso' : dbPath}, '
-      'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'})');
+      'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
+      'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})');
+}
+
+/// A static handler for a Flutter web build (`flutter build web`), or null
+/// when WEB_DIR (default build/web) has no index.html.
+shelf.Handler? _webStaticHandler() {
+  final dir = webDir;
+  return dir == null ? null : createStaticHandler(dir, defaultDocument: 'index.html');
+}
+
+String? get webDir {
+  final path = Platform.environment['WEB_DIR'] ?? 'build/web';
+  if (!Directory(path).existsSync()) return null;
+  if (File('$path/index.html').existsSync()) return path;
+  return null;
+}
+
+/// KEY=VALUE lines from an optional .env file, merged under the real
+/// process environment (which always wins). Malformed lines are skipped.
+Map<String, String> _loadEnvironment() {
+  final env = {...Platform.environment};
+  try {
+    final file = File('.env');
+    if (!file.existsSync()) return env;
+    for (final raw in file.readAsLinesSync()) {
+      final line = raw.trim();
+      if (line.isEmpty || line.startsWith('#')) continue;
+      final eq = line.indexOf('=');
+      if (eq <= 0) continue;
+      var value = line.substring(eq + 1).trim();
+      final key = line.substring(0, eq).trim();
+      if (value.length >= 2 &&
+          ((value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'")))) {
+        value = value.substring(1, value.length - 1);
+      }
+      env.putIfAbsent(key, () => value);
+    }
+  } catch (_) {
+    // A broken .env must never keep the server from starting.
+  }
+  return env;
 }
