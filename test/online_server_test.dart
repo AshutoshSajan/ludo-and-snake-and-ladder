@@ -50,6 +50,31 @@ ServerMember _member(LudoColor c,
       sink: on ?? (_) {},
     );
 
+/// Cluster-registry stub that refuses the first claim — as if another
+/// replica already owns that code — then behaves like a normal CAS map.
+class _RefusingOnceRegistry implements RoomRegistry {
+  String? refusedCode;
+  final _owners = <String, String>{};
+
+  @override
+  Future<bool> register(String code, String instanceId) async {
+    if (refusedCode == null) {
+      refusedCode = code;
+      return false;
+    }
+    _owners[code] = instanceId;
+    return true;
+  }
+
+  @override
+  Future<String?> lookup(String code) async => _owners[code];
+
+  @override
+  Future<void> unregister(String code) async {
+    _owners.remove(code);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -404,6 +429,26 @@ void main() {
       final hs = await nextMsg(hostBuf, 'state');
       await nextMsg(guestBuf, 'state');
       expect((hs['state'] as Map)['players'], hasLength(2));
+    });
+
+    test('a code owned by another replica is abandoned, then regenerated',
+        () async {
+      final stubborn = _RefusingOnceRegistry();
+      final saved = roomRegistry;
+      roomRegistry = stubborn;
+      addTearDown(() => roomRegistry = saved);
+
+      host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'dup-1', 'name': 'Dup'}));
+      final joined = await nextMsg(hostBuf, 'joined');
+      final code = joined['code'] as String;
+
+      // The first generated code was claimed by another replica — the
+      // player must land in a freshly generated room, never the stolen one.
+      expect(code, isNot(stubborn.refusedCode));
+      expect(authority.rooms[code], isNotNull);
+      expect(authority.rooms[stubborn.refusedCode], isNull,
+          reason: 'the duplicate room was dropped, not leaked');
     });
 
     test('hello -> joined -> lobby -> start -> state, full protocol', () async {

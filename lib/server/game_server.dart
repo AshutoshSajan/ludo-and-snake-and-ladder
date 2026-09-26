@@ -290,6 +290,16 @@ class GameAuthority {
     return room;
   }
 
+  /// Drops a freshly created room whose cluster-registry claim was refused
+  /// (another replica already owns the code). Unlike the close paths in
+  /// [leaveRoom], the registry is NOT notified: the code's registry row —
+  /// if any — belongs to the other instance, and unregistering would
+  /// delete their routing entry.
+  void abandonRoom(Room room) {
+    rooms.remove(room.code);
+    room.removed = true;
+  }
+
   /// Removes the connection [connectionId] from a room's players or
   /// spectators. A room nobody is connected to at all is dropped right away
   /// if it never started; a started game lingers for [emptyRoomGrace] so a

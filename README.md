@@ -251,7 +251,10 @@ connection cold-starts the instance.
       instance, a TTL map in Turso when `TURSO_DATABASE_URL` is set), and
       exposes `GET /stats` (connections / rooms / spectators) plus
       `GET /rooms/lookup?code=XXXX` (the owning instance) so an edge can
-      forward a WS join that landed on the wrong replica. Entries expire
+      forward a WS join that landed on the wrong replica. Code claims are
+      compare-and-set: a replica never overwrites a live claim of another
+      replica — a rare cross-replica duplicate code is dropped and
+      regenerated instead of stealing the routing. Entries expire
       automatically, so a crashed replica leaves no stale routes.
       `GET /health` is the JSON health check; with a web build shipped,
       `GET /` serves the game UI instead.

@@ -25,14 +25,19 @@
 /// `ROOM_TTL_SECONDS` (default 120).
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
 /// Where clients should be routed for a room code.
 abstract class RoomRegistry {
-  /// Claims or refreshes `code -> instanceId`.
-  Future<void> register(String code, String instanceId);
+  /// Claims or refreshes `code -> instanceId`. Returns false when a live
+  /// entry owned by a DIFFERENT instance exists (a cross-replica duplicate
+  /// code): the claim is refused so routing stays stable instead of
+  /// flip-flopping between owners. Expired entries of other instances are
+  /// fair game. A false return means the caller must pick another code.
+  Future<bool> register(String code, String instanceId);
 
   /// The owning instance id, or null when the room is unknown (or its
   /// entry has expired).
@@ -49,8 +54,11 @@ class InMemoryRoomRegistry implements RoomRegistry {
   final Map<String, String> _owners = {};
 
   @override
-  Future<void> register(String code, String instanceId) async {
+  Future<bool> register(String code, String instanceId) async {
+    final current = _owners[code];
+    if (current != null && current != instanceId) return false;
     _owners[code] = instanceId;
+    return true;
   }
 
   @override
@@ -127,18 +135,35 @@ class TursoRoomRegistry implements RoomRegistry {
   static const _upsertSql = 'INSERT INTO room_registry (code, instance, '
       'expires_at) VALUES (?, ?, ?) '
       'ON CONFLICT(code) DO UPDATE SET instance = excluded.instance, '
-      'expires_at = excluded.expires_at';
+      'expires_at = excluded.expires_at '
+      'WHERE room_registry.instance = excluded.instance '
+      'OR room_registry.expires_at <= ?';
   static const _gcSql = 'DELETE FROM room_registry WHERE expires_at < ?';
   static const _selectSql =
       'SELECT instance FROM room_registry WHERE code = ?';
   static const _deleteSql = 'DELETE FROM room_registry WHERE code = ?';
 
+  /// Like the leaderboard pipelines, every pipeline ends with an explicit
+  /// `close` so the server-side statement stream is released immediately
+  /// instead of lingering until the server times it out.
+  static const _close = {'type': 'close'};
+
+  /// A CAS upsert: rows the pipeline already own (same instance) or that
+  /// no live entry holds (the GC has just removed expired rows; `<=`
+  /// covers the clock edge) may be claimed. A live foreign claim is left
+  /// untouched, and the trailing [_selectSql] reports who actually owns
+  /// the code afterwards.
   @override
-  Future<void> register(String code, String instanceId) => _pipeline([
-        ..._schema,
-        _execStmt(_gcSql, [_nowMs()]),
-        _execStmt(_upsertSql, [code, instanceId, _expiryMs()]),
-      ]);
+  Future<bool> register(String code, String instanceId) async {
+    final table = await _pipeline([
+      ..._schema,
+      _execStmt(_gcSql, [_nowMs()]),
+      _execStmt(_upsertSql, [code, instanceId, _expiryMs(), _nowMs()]),
+      _execStmt(_selectSql, [code]),
+      _close,
+    ]);
+    return table.rows.isNotEmpty && '${table.rows.first.first}' == instanceId;
+  }
 
   @override
   Future<String?> lookup(String code) async {
@@ -146,13 +171,14 @@ class TursoRoomRegistry implements RoomRegistry {
       ..._schema,
       _execStmt(_gcSql, [_nowMs()]),
       _execStmt(_selectSql, [code]),
+      _close,
     ]);
     return table.rows.isEmpty ? null : '${table.rows.first.first}';
   }
 
   @override
   Future<void> unregister(String code) =>
-      _pipeline([..._schema, _execStmt(_deleteSql, [code])]);
+      _pipeline([..._schema, _execStmt(_deleteSql, [code]), _close]);
 
   int _nowMs() => DateTime.now().millisecondsSinceEpoch;
   int _expiryMs() => _nowMs() + ttl.inMilliseconds;
@@ -164,17 +190,27 @@ class TursoRoomRegistry implements RoomRegistry {
 
   // ------------------------------------------------------- HTTP pipeline
 
+  /// Same bound as the leaderboard transport: a pipeline that never
+  /// finishes is abandoned after ten seconds instead of hanging forever
+  /// (periodic refreshes would otherwise pile up pending requests).
+  static const _timeout = Duration(seconds: 10);
+
   Future<_RegistryTable> _pipeline(List<Map<String, dynamic>> stmts) async {
     http.Response response;
     try {
-      response = await _client.post(
-        _baseUrl.replace(path: '${_baseUrl.path}/v2/pipeline'),
-        headers: {
-          'authorization': 'Bearer $authToken',
-          'content-type': 'application/json',
-        },
-        body: jsonEncode({'requests': stmts}),
-      );
+      response = await _client
+          .post(
+            _baseUrl.replace(path: '${_baseUrl.path}/v2/pipeline'),
+            headers: {
+              'authorization': 'Bearer $authToken',
+              'content-type': 'application/json',
+            },
+            body: jsonEncode({'requests': stmts}),
+          )
+          .timeout(_timeout);
+    } on TimeoutException {
+      throw RoomRegistryException(
+          'Turso request timed out after ${_timeout.inSeconds}s');
     } catch (e) {
       throw RoomRegistryException('Turso request failed: $e');
     }

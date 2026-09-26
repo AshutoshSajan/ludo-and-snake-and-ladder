@@ -71,6 +71,29 @@ final _connections = <String, String>{}; // connId -> roomCode
 
 int _connCounter = 0;
 
+/// Creates a room and claims its code in the cluster registry. Code
+/// uniqueness is checked against this instance's rooms only, so two
+/// replicas can generate the same 4-letter code; when the registry says
+/// another live instance owns the code, the fresh room is dropped (quietly
+/// — the row is the other instance's) and a new code is tried. After three
+/// attempts the room is kept best-effort; a registry outage never blocks
+/// creation — the room still hosts locally.
+Future<Room> _createRoomWithClaim(ServerMember host, {required String game}) async {
+  var room = authority.createRoom(host, game: game);
+  for (var attempt = 1; attempt < 3; attempt++) {
+    bool claimed;
+    try {
+      claimed = await roomRegistry.register(room.code, instanceId);
+    } on RoomRegistryException catch (_) {
+      return room; // registry down — host locally, as before
+    }
+    if (claimed) return room;
+    authority.abandonRoom(room);
+    room = authority.createRoom(host, game: game);
+  }
+  return room;
+}
+
 shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
       final connId = 'c${_connCounter++}';
       _openConnections.add(connId); // counted from the raw socket up
@@ -78,7 +101,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
       ServerMember? member;
 
       webSocket.stream.listen(
-        (data) {
+        (data) async {
           Map<String, dynamic> msg;
           try {
             msg = jsonDecode(data as String) as Map<String, dynamic>;
@@ -148,7 +171,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
                 room.broadcastState();
               }
             } else if (code.isEmpty) {
-              room = authority.createRoom(member!, game: game);
+              room = await _createRoomWithClaim(member!, game: game);
             } else {
               var joined = authority.joinWithColor(code, member!, color);
               // Not a fresh join — maybe a returning player reclaiming
@@ -167,8 +190,9 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             _connections[connId] = room.code;
             // Advertise the room immediately so a reconnect through any
             // edge can find this instance; the sweep keeps it fresh.
-            unawaited(
-                roomRegistry.register(room.code, instanceId).catchError((_) {}));
+            unawaited(roomRegistry
+                .register(room.code, instanceId)
+                .catchError((_) => false));
             webSocket.sink.add(jsonEncode({
               'type': 'joined',
               'code': room.code,
@@ -364,7 +388,7 @@ Future<void> main(List<String> args) async {
     for (final room in authority.rooms.values) {
       roomRegistry
           .register(room.code, instanceId)
-          .catchError((Object _) {});
+          .catchError((Object _) => false);
     }
   });
 
