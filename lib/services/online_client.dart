@@ -188,7 +188,19 @@ class OnlineClient extends ChangeNotifier {
 
   Future<void> _openAndHello({LudoColor? preferredColor}) async {
     try {
-      _channel = _channelFactory(Uri.parse(serverUrl));
+      // Carry the room code in the URL: a room-affinity load balancer
+      // (deploy/nginx.conf hashes the ?code= query parameter consistently)
+      // must route a join — and a reconnect — to the replica that owns the
+      // room. The code still rides in `hello`, which the server treats as
+      // authoritative. Unknown at first connect (room creation, quick
+      // match): we land anywhere, create the room there, and every later
+      // open carries the code learned from 'joined'.
+      var uri = Uri.parse(serverUrl);
+      if (_joinCode != null && _joinCode!.isNotEmpty) {
+        uri = uri
+            .replace(queryParameters: {...uri.queryParameters, 'code': _joinCode!});
+      }
+      _channel = _channelFactory(uri);
       _sub = _channel!.stream.listen(_onMessage, onDone: _onClosed,
           onError: (_) => _onClosed());
       _send({
