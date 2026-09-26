@@ -328,7 +328,13 @@ Future<void> main(List<String> args) async {
   // swap the globals.
   final turso = TursoLeaderboardStore.fromEnvironment(env);
   leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
-  authority = GameAuthority(leaderboard: leaderboardStore);
+  authority = GameAuthority(
+      leaderboard: leaderboardStore,
+      // Closing a room unregisters it from the cluster registry at once, so
+      // /rooms/lookup stops routing joins to rooms this instance dropped.
+      onRoomClosed: (code) {
+        roomRegistry.unregister(code).catchError((Object _) {});
+      });
 
   // Same env vars drive the cross-instance room registry: with Turso,
   // rooms are discoverable by every replica behind the load balancer;
@@ -336,12 +342,11 @@ Future<void> main(List<String> args) async {
   final tursoRegistry = TursoRoomRegistry.fromEnvironment(env);
   roomRegistry = tursoRegistry ?? InMemoryRoomRegistry();
 
-  // Keep the registry truthful: refresh every room's TTL, and drop entries
-  // for rooms that closed. Stale entries also self-expire, so a crashed
-  // instance leaves no permanent bad routes.
+  // Keep the registry truthful: refresh every live room's TTL. Rooms are
+  // unregistered the moment they close (onRoomClosed above); entries from a
+  // crashed instance self-expire once their TTL passes.
   Timer.periodic(const Duration(seconds: 30), (_) {
     for (final room in authority.rooms.values) {
-      if (room.removed) continue;
       roomRegistry
           .register(room.code, instanceId)
           .catchError((Object _) {});

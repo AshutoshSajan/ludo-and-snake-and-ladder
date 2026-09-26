@@ -166,6 +166,7 @@ class GameAuthority {
     Random? rng,
     this.emptyRoomGrace = const Duration(minutes: 5),
     this.leaderboard,
+    this.onRoomClosed,
   }) : rng = rng ?? Random.secure();
 
   final Random rng;
@@ -175,6 +176,12 @@ class GameAuthority {
 
   /// Optional persistence for finished games. Null = leaderboard disabled.
   final LeaderboardStore? leaderboard;
+
+  /// Notified with the code of every room fully removed from [rooms] —
+  /// immediately for an emptied lobby, after [emptyRoomGrace] for an
+  /// abandoned started room. The registry hook uses this to unregister
+  /// closed rooms right away instead of leaving stale routes to expire.
+  final void Function(String code)? onRoomClosed;
   final Map<String, Room> rooms = {};
 
   static String _newCode() {
@@ -298,6 +305,7 @@ class GameAuthority {
         // A lobby nobody is in any more is worthless — drop it now.
         rooms.remove(code);
         room.removed = true;
+        onRoomClosed?.call(code);
       } else {
         // A started game stays recoverable for a grace period so a flaky
         // connection (or the last one crashing) can still come back.
@@ -309,6 +317,7 @@ class GameAuthority {
             room.broadcast({'type': 'roomClosed'});
             rooms.remove(code);
             room.removed = true;
+            onRoomClosed?.call(code);
           }
         });
       }

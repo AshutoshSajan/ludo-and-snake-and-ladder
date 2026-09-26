@@ -152,6 +152,55 @@ void main() {
       );
     });
 
+    test('an emptied lobby closes and unregisters immediately', () async {
+      final registry = InMemoryRoomRegistry();
+      final closed = <String>[];
+      final auth = GameAuthority(rng: Random(1), onRoomClosed: (code) {
+        closed.add(code);
+        registry.unregister(code);
+      });
+      final room = auth.createRoom(_member(LudoColor.red));
+      await registry.register(room.code, 'game-1');
+
+      auth.leaveRoom(room.code, 'red');
+
+      expect(room.removed, isTrue);
+      expect(auth.rooms, isEmpty);
+      expect(closed, [room.code],
+          reason: 'the registry hook must fire at once, not on a later sweep');
+      expect(await registry.lookup(room.code), isNull,
+          reason: 'a stale route would send joins to a dead room');
+    });
+
+    test('an abandoned started room unregisters after the grace period',
+        () async {
+      final registry = InMemoryRoomRegistry();
+      final closed = <String>[];
+      final auth = GameAuthority(
+          rng: Random(1),
+          emptyRoomGrace: const Duration(milliseconds: 20),
+          onRoomClosed: (code) {
+            closed.add(code);
+            registry.unregister(code);
+          });
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      await registry.register(room.code, 'game-1');
+      auth.handleIntent(
+          room: room, connectionId: 'red', msg: {'type': 'start'});
+
+      // Everyone drops; a started room lingers for the grace period first.
+      auth.leaveRoom(room.code, 'red');
+      auth.leaveRoom(room.code, 'blue');
+      expect(room.removed, isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(room.removed, isTrue);
+      expect(auth.rooms, isEmpty);
+      expect(closed, [room.code]);
+      expect(await registry.lookup(room.code), isNull);
+    });
+
     test('a started room rejects new joiners', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
