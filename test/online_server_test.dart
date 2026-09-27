@@ -19,6 +19,7 @@ import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
+import 'package:http/http.dart' as http;
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -52,6 +53,12 @@ ServerMember _member(LudoColor c,
 
 /// Cluster-registry stub that refuses the first claim — as if another
 /// replica already owns that code — then behaves like a normal CAS map.
+/// Zone-local [HttpOverrides] that restores real HTTP clients: it inherits
+/// the base implementation, whose `createHttpClient` constructs the actual
+/// [HttpClient] — unlike the test binding's global mock, which stubs every
+/// client with empty 400 responses.
+class _RealHttpOverrides extends HttpOverrides {}
+
 class _RefusingOnceRegistry implements RoomRegistry {
   String? refusedCode;
   final _owners = <String, String>{};
@@ -363,7 +370,7 @@ void main() {
   // ------------------------------------------- loopback integration (real WS)
 
   group('loopback WebSocket integration (production wsHandler)', () {
-    late HttpServer http;
+    late HttpServer srv;
     late WebSocketChannel host;
     late WebSocketChannel guest;
     final hostBuf = <Map<String, dynamic>>[];
@@ -393,10 +400,11 @@ void main() {
       guestBuf.clear();
       final handler = const shelf.Pipeline().addHandler((req) {
         if (req.url.path == 'ws') return wsHandler()(req);
+        if (req.url.path == 'stats') return statsHandler(req);
         return shelf.Response.ok('ok');
       });
-      http = await shelf_io.serve(handler, InternetAddress.loopbackIPv4, 0);
-      final url = 'ws://127.0.0.1:${http.port}/ws';
+      srv = await shelf_io.serve(handler, InternetAddress.loopbackIPv4, 0);
+      final url = 'ws://127.0.0.1:${srv.port}/ws';
       host = WebSocketChannel.connect(Uri.parse(url));
       guest = WebSocketChannel.connect(Uri.parse(url));
       await host.ready;
@@ -410,7 +418,7 @@ void main() {
     tearDown(() async {
       await host.sink.close();
       await guest.sink.close();
-      await http.close(force: true);
+      await srv.close(force: true);
     });
 
     test('quick match auto-pairs two strangers and auto-starts', () async {
@@ -449,6 +457,46 @@ void main() {
       expect(authority.rooms[code], isNotNull);
       expect(authority.rooms[stubborn.refusedCode], isNull,
           reason: 'the duplicate room was dropped, not leaked');
+    });
+
+    test('/stats counts live WebSockets and drops them after close',
+        () async {
+      // The test binding stubs every HTTP client with empty 400 responses
+      // via a global HttpOverrides; a zone-local no-op override opts back
+      // into real networking (the base createHttpClient builds the real
+      // HttpClient) without touching the global mock.
+      Future<int?> connections() =>
+          HttpOverrides.runWithHttpOverrides<Future<int>>(
+            () async {
+              final resp = await http
+                  .get(Uri.parse('http://127.0.0.1:${srv.port}/stats'));
+              return jsonDecode(resp.body)['connections'] as int;
+            },
+            _RealHttpOverrides(),
+          );
+
+      // The setUp sockets (and any leftovers from a previous test) are the
+      // baseline — the gauge must react to deltas, not absolute values.
+      final before = (await connections())!;
+
+      // A raw socket counts before it even says hello: the gauge is the
+      // capacity metric, not the lobby roster.
+      final socket = WebSocketChannel.connect(
+          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
+      addTearDown(socket.sink.close);
+      await socket.ready;
+      expect(await connections(), before + 1);
+
+      // ...and it must drop again once the socket is gone.
+      await socket.sink.close();
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      var after = await connections();
+      while (after != before && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        after = await connections();
+      }
+      expect(after, before,
+          reason: 'closing the socket must decrement the gauge');
     });
 
     test('hello -> joined -> lobby -> start -> state, full protocol', () async {
@@ -516,7 +564,7 @@ void main() {
 
       // The watcher connects mid-game.
       final watcher = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${http.port}/ws'));
+          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
       await watcher.ready;
       final buf = <Map<String, dynamic>>[];
       watcher.stream
@@ -551,7 +599,7 @@ void main() {
 
     test('joining a bogus room code yields an error message', () async {
       final stranger = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${http.port}/ws'));
+          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
       await stranger.ready;
       final buf = <Map<String, dynamic>>[];
       stranger.stream
@@ -594,7 +642,7 @@ void main() {
 
       // Same profile comes back on a fresh socket.
       final guest2 = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${http.port}/ws'));
+          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
       await guest2.ready;
       final guest2Buf = <Map<String, dynamic>>[];
       guest2.stream.listen((d) => guest2Buf
