@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../engine/ludo/ludo_models.dart';
+import '../engine/snakes/snakes_engine.dart';
 
 /// One lobby seat as reported by the server.
 class LobbySeat {
@@ -67,6 +68,8 @@ class OnlineClient extends ChangeNotifier {
     this.serverUrl, {
     required this.seatId,
     required this.name,
+    this.gameType = 'ludo',
+    this.quickMatch = false,
     WebSocketChannel Function(Uri uri)? channelFactory,
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
@@ -74,6 +77,15 @@ class OnlineClient extends ChangeNotifier {
   final String serverUrl;
   final String seatId; // profile id — our identity across reconnects
   final String name;
+
+  /// Which game to play when creating a room ('ludo' | 'snakes'). Joiners
+  /// have their value overwritten by the room's real game type on 'joined'.
+  String gameType;
+
+  /// Quick match: with no room code, the server pairs us with the first
+  /// waiting room of [gameType] (creating one if none exists) instead of
+  /// always opening a fresh room.
+  bool quickMatch;
 
   /// Overridable for tests (fake WebSocket channels).
   final WebSocketChannel Function(Uri) _channelFactory;
@@ -114,6 +126,9 @@ class OnlineClient extends ChangeNotifier {
 
   /// Latest authoritative snapshot, decoded. Null until the game starts.
   LudoState? state;
+
+  /// Latest authoritative Snakes & Ladders snapshot (snakes rooms only).
+  SnakesState? snakesState;
   int _seenRollSeq = 0;
 
   /// Fire-and-forget chat lines: (from, text).
@@ -138,11 +153,22 @@ class OnlineClient extends ChangeNotifier {
   static const _maxReconnectAttempts = 5;
   static const _reconnectBaseDelay = Duration(milliseconds: 500);
 
+  /// The replica that owns our room, learned from a reroute error (the
+  /// server attaches `owner` when a join/reconnect lands on a replica that
+  /// does not hold the room). Sent back as `?owner=` so the load balancer
+  /// pins the connection to the owning replica instead of the hash slot.
+  String? _routeHint;
+
   bool get connected =>
       status == OnlineStatus.inLobby || status == OnlineStatus.playing;
 
   bool get isMyTurn =>
-      !_spectating && state != null && started && connected;
+      !_spectating &&
+      started &&
+      connected &&
+      (gameType == 'snakes'
+          ? snakesState != null
+          : state != null);
 
   void _send(Map<String, dynamic> msg) {
     final ch = _channel;
@@ -158,7 +184,11 @@ class OnlineClient extends ChangeNotifier {
     assert(status == OnlineStatus.idle || status == OnlineStatus.error);
     _userClosed = false;
     _reconnectAttempts = 0;
-    _joinCode = code;
+    _routeHint = null;
+    // Canonicalize up front: the server stores rooms under the uppercase
+    // code, and we hash-route by `?code=` — a lowercase-typed code must not
+    // be pinned to a different replica than the room's uppercase one.
+    _joinCode = code?.trim().toUpperCase();
     _spectating = spectate;
     status = OnlineStatus.connecting;
     errorText = null;
@@ -168,13 +198,42 @@ class OnlineClient extends ChangeNotifier {
 
   Future<void> _openAndHello({LudoColor? preferredColor}) async {
     try {
-      _channel = _channelFactory(Uri.parse(serverUrl));
+      // Carry the room code in the URL: a room-affinity load balancer
+      // (deploy/nginx.conf hashes the ?code= query parameter consistently)
+      // must route a join — and a reconnect — consistently. The code still
+      // rides in `hello`, which the server treats as authoritative.
+      //
+      // Hashing by code is not ownership, though: a room is created on
+      // whichever replica the code-less first connection landed on, so a
+      // later join/reconnect can hash to a replica that does not hold the
+      // room. When that happens the server answers with a reroute error
+      // carrying the owning instance, which we retry with as `?owner=` —
+      // nginx's map pins such requests to the owning replica directly.
+      // Unknown at first connect (room creation, quick match): we land
+      // anywhere, create the room there, and every later open carries the
+      // code learned from 'joined'.
+      var uri = Uri.parse(serverUrl);
+      final params = {...uri.queryParameters};
+      if (_joinCode != null && _joinCode!.isNotEmpty) {
+        // Always the canonical uppercase spelling: the load balancer hashes
+        // this value, and the room lives under the uppercase code the
+        // server stored — a lowercase copy would hash to another bucket.
+        params['code'] = _joinCode!.toUpperCase();
+      }
+      if (_routeHint != null) {
+        params['owner'] = _routeHint!;
+      }
+      if (params.isNotEmpty) uri = uri.replace(queryParameters: params);
+      _channel = _channelFactory(uri);
       _sub = _channel!.stream.listen(_onMessage, onDone: _onClosed,
           onError: (_) => _onClosed());
       _send({
         'type': 'hello',
         'seatId': seatId,
         'name': name,
+        'game': gameType,
+        if (quickMatch && (_joinCode == null || _joinCode!.isEmpty))
+          'match': true,
         if (_joinCode != null && _joinCode!.isNotEmpty) 'code': _joinCode,
         if (preferredColor != null) 'color': preferredColor.name,
         if (_spectating) 'spectate': true,
@@ -223,6 +282,10 @@ class OnlineClient extends ChangeNotifier {
     switch (msg['type'] as String?) {
       case 'joined':
         roomCode = msg['code'] as String;
+        // Remember the room we were actually seated in so a quick-match
+        // reconnect lands back with the same strangers, not a new match.
+        _joinCode = roomCode;
+        gameType = msg['game'] as String? ?? gameType;
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
         myColor = colorName == null ? null : LudoColor.values.byName(colorName);
@@ -245,15 +308,27 @@ class OnlineClient extends ChangeNotifier {
             for (final n in (msg['spectators'] as List? ?? [])) n as String,
           ]);
       case 'state':
-        final incoming = LudoState.fromJson(
-            Map<String, dynamic>.from(msg['state'] as Map));
-        // Dice sound on every new roll (rollSeq-based, like local play).
-        if (incoming.rollSeq != _seenRollSeq) {
-          _seenRollSeq = incoming.rollSeq;
-          onRoll?.call();
+        if ((msg['game'] as String?) == 'snakes') {
+          final incoming = SnakesState.fromJson(
+              Map<String, dynamic>.from(msg['state'] as Map));
+          // Dice sound on a fresh roll: phase moved roll -> move.
+          if (snakesState?.phase == SnakesPhase.awaitingRoll &&
+              incoming.phase == SnakesPhase.awaitingMove) {
+            onRoll?.call();
+          }
+          onSnakesState?.call(snakesState, incoming);
+          snakesState = incoming;
+        } else {
+          final incoming = LudoState.fromJson(
+              Map<String, dynamic>.from(msg['state'] as Map));
+          // Dice sound on every new roll (rollSeq-based, like local play).
+          if (incoming.rollSeq != _seenRollSeq) {
+            _seenRollSeq = incoming.rollSeq;
+            onRoll?.call();
+          }
+          onState?.call(state, incoming);
+          state = incoming;
         }
-        onState?.call(state, incoming);
-        state = incoming;
         started = true;
         status = OnlineStatus.playing;
       case 'chat':
@@ -270,6 +345,21 @@ class OnlineClient extends ChangeNotifier {
         _channel?.sink.close();
         _channel = null;
       case 'error':
+        final owner = msg['owner'] as String?;
+        if (owner != null && owner.isNotEmpty && !_userClosed) {
+          // The room lives on another replica — this is a routing problem,
+          // not a definitive rejection. Reroute: remember the owner and let
+          // the socket close so the normal reconnect path retries with
+          // `?owner=`, which the load balancer turns into a direct hop.
+          // Still counts against the reconnect budget, so a persistent
+          // failure (e.g. the owner replica dying mid-reroute) terminates.
+          _routeHint = owner;
+          status = OnlineStatus.reconnecting;
+          notifyListeners();
+          _channel?.sink.close();
+          _channel = null;
+          break;
+        }
         errorText = msg['text'] as String;
         status = OnlineStatus.error;
         // A definitive rejection (bad code, gone room) — stop retrying.
@@ -284,6 +374,7 @@ class OnlineClient extends ChangeNotifier {
   /// Hooks used by the session adapter (sounds, animation replay).
   void Function()? onRoll;
   void Function(LudoState? oldState, LudoState newState)? onState;
+  void Function(SnakesState? oldState, SnakesState newState)? onSnakesState;
   void Function()? onChat;
 
   // ------------------------------------------------------------ intents
@@ -293,6 +384,10 @@ class OnlineClient extends ChangeNotifier {
   void sendRoll() => _spectating ? _noop() : _send({'type': 'roll'});
   void sendMove(int tokenIndex) =>
       _spectating ? _noop() : _send({'type': 'move', 'token': tokenIndex});
+
+  /// Snakes & Ladders: the roll fully determines the move, so the intent
+  /// carries no token.
+  void sendSnakesMove() => _spectating ? _noop() : _send({'type': 'move'});
   void sendChat(String text) =>
       _spectating ? _noop() : _send({'type': 'chat', 'text': text});
 

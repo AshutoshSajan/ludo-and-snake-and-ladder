@@ -9,11 +9,13 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show stderr;
 import 'dart:math';
 
 import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
+import '../engine/snakes/snakes_engine.dart' as snakes;
 import 'leaderboard_store.dart';
 
 /// One connected participant.
@@ -36,15 +38,48 @@ class ServerMember {
   final void Function(String json) sink; // send-to-client callback
 }
 
+int _registryTokenCounter = 0;
+
+/// Monotonic per-process token for [Room.registryToken]. Deliberately NOT
+/// taken from a room's seeded [Random]: consuming rng values here would
+/// shift every deterministic test's dice sequence.
+String _nextRegistryToken() =>
+    'room-${DateTime.now().microsecondsSinceEpoch}-${++_registryTokenCounter}';
+
+/// Mints a fresh cluster-registry token for a room about to be created.
+/// Public so the server can claim a code in the registry *before* the
+/// [Room] exists (see bin/server.dart), then hand the same token to
+/// [GameAuthority.createRoom] so the room and its row stay one identity.
+String newRegistryToken() => _nextRegistryToken();
+
 /// A waiting/running game.
 class Room {
-  Room(this.code, {required this.rng});
+  Room(this.code,
+      {required this.rng, this.gameType = 'ludo', String? registryToken})
+      : registryToken = registryToken ?? _nextRegistryToken();
 
   final String code;
   final Random rng;
 
+  /// Which game this room plays: 'ludo' or 'snakes'. Chosen by the host at
+  /// room creation; joiners inherit it. Seats stay corner-color based, so
+  /// both games currently seat up to 4 players.
+  final String gameType;
+
   /// Built once at [start] from the seated members; never touched before.
-  late LudoState state;
+  /// A [LudoState] for ludo rooms, a [snakes.SnakesState] for snakes rooms.
+  late Object game;
+
+  /// Opaque token identifying THIS room in the cluster registry. Room codes
+  /// are recycled the moment a room closes, so the code alone cannot tell
+  /// the registry's rows apart: when this room closes, its unregister must
+  /// not delete the row a newer room (same code) has already claimed.
+  /// [gameId] is only assigned at [start], too late for registry rows
+  /// written at room creation — hence a dedicated token minted here (or
+  /// supplied by the server when the row was claimed before this room
+  /// existed, so room and row share one identity).
+  final String registryToken;
+
   final Map<String, ServerMember> members = {}; // by connection id
 
   /// Persistent seat claims: seatId -> color. Survives disconnects so a
@@ -86,15 +121,26 @@ class Room {
 
   /// Build the game state from seated members (called once at start).
   void start() {
-    final players = [
-      for (final m in orderedMembers)
-        LudoPlayer(
-          id: m.seatId,
-          name: m.name,
-          color: m.color,
-        ),
-    ];
-    state = createLudoState(players);
+    if (gameType == 'snakes') {
+      game = snakes.createSnakesState([
+        for (final m in orderedMembers)
+          snakes.SnakesPlayer(
+            id: m.seatId,
+            name: m.name,
+            // Pawn palette slot derived from the corner seat color.
+            tokenIndex: LudoBoard.colorOrder.indexOf(m.color),
+          ),
+      ]);
+    } else {
+      game = createLudoState([
+        for (final m in orderedMembers)
+          LudoPlayer(
+            id: m.seatId,
+            name: m.name,
+            color: m.color,
+          ),
+      ]);
+    }
     // One id per game: the store dedupes on (gameId, seatId), so a botched
     // double-completion cannot inflate a player's stats.
     gameId = '${DateTime.now().microsecondsSinceEpoch}-$code';
@@ -113,12 +159,30 @@ class Room {
     }
   }
 
-  void broadcastState() =>
-      broadcast({'type': 'state', 'state': state.toJson()});
+  void broadcastState() => broadcast({
+        'type': 'state',
+        'game': gameType,
+        'state': stateJson(),
+      });
 
-  /// The state, or null before [start] has built it. Keeps intent
-  /// handling from touching the [late] field too early.
-  LudoState? get stateOrNull => started ? state : null;
+  /// The serialized game state for the wire (see [broadcastState]).
+  Map<String, dynamic> stateJson() => switch (game) {
+        LudoState s => s.toJson(),
+        snakes.SnakesState s => s.toJson(),
+        _ => throw StateError('room game not started'),
+      };
+
+  /// The ludo state, or null before [start] (or in a snakes room). Keeps
+  /// intent handling from touching the [late] field too early.
+  LudoState? get stateOrNull =>
+      gameType == 'ludo' && started ? game as LudoState : null;
+
+  /// The ludo state (rooms created before snakes support used this name).
+  LudoState get state => game as LudoState;
+
+  /// The snakes state, or null before [start] (or in a ludo room).
+  snakes.SnakesState? get snakesState =>
+      gameType == 'snakes' && started ? game as snakes.SnakesState : null;
 }
 
 /// Server-side game logic shared by the transport layer (websockets) and
@@ -128,6 +192,7 @@ class GameAuthority {
     Random? rng,
     this.emptyRoomGrace = const Duration(minutes: 5),
     this.leaderboard,
+    this.onRoomClosed,
   }) : rng = rng ?? Random.secure();
 
   final Random rng;
@@ -137,6 +202,15 @@ class GameAuthority {
 
   /// Optional persistence for finished games. Null = leaderboard disabled.
   final LeaderboardStore? leaderboard;
+
+  /// Notified with the code and the registry token of every room fully
+  /// removed from [rooms] — immediately for an emptied lobby, after
+  /// [emptyRoomGrace] for an abandoned started room. The registry hook uses
+  /// this to unregister closed rooms right away instead of leaving stale
+  /// routes to expire; the token scopes the delete so a recycled code's
+  /// newer room is never erased by a stale close.
+  final void Function(String code, String registryToken)? onRoomClosed;
+
   final Map<String, Room> rooms = {};
 
   static String _newCode() {
@@ -146,16 +220,57 @@ class GameAuthority {
     ].join();
   }
 
-  /// Creates a room and seats [host] in the first free corner.
-  Room createRoom(ServerMember host) {
+  /// Draws a room code that is unique among [rooms]. Callers that claim
+  /// codes cluster-wide (bin/server.dart) use this to pick a candidate
+  /// before asking the registry; [createRoom] uses it as a fallback.
+  String newCode() {
     String code;
     do {
       code = _newCode();
     } while (rooms.containsKey(code));
-    final room = Room(code, rng: rng);
+    return code;
+  }
+
+  /// Creates a room and seats [host] in the first free corner. [game]
+  /// selects the room's game: 'ludo' (default) or 'snakes'. [code] and
+  /// [registryToken] let the caller create a room whose code was already
+  /// claimed cluster-wide under that exact token (reserve-then-create):
+  /// the room then only ever exists under a code this instance owns.
+  /// Throws [StateError] when an explicit [code] collides with a live
+  /// local room (a concurrent creation racing the remote claim).
+  Room createRoom(
+    ServerMember host, {
+    String game = 'ludo',
+    String? code,
+    String? registryToken,
+  }) {
+    if (code != null && rooms.containsKey(code)) {
+      throw StateError('a live room already uses code $code');
+    }
+    code ??= newCode();
+    final room = Room(code, rng: rng, gameType: game, registryToken: registryToken);
     rooms[code] = room;
     return joinRoom(code, host)!;
   }
+
+  /// Seats [member] in the first waiting (unstarted, not full) room playing
+  /// [game]; returns null when none fits. Only rooms that already exist
+  /// here are considered — their codes are, by construction, claimed (see
+  /// bin/server.dart for how fresh rooms get claimed).
+  Room? matchExisting(ServerMember member, {String game = 'ludo'}) {
+    for (final room in rooms.values) {
+      if (room.gameType != game || room.started || room.full) continue;
+      if (joinRoom(room.code, member) != null) return room;
+    }
+    return null;
+  }
+
+  /// Quick match: seats [member] in the first waiting (unstarted, not full)
+  /// room playing [game], creating a fresh room when none fits. Waiting
+  /// players thus pair up automatically instead of trading room codes.
+  Room findMatch(ServerMember member, {String game = 'ludo'}) =>
+      matchExisting(member, game: game) ??
+      createRoom(member, game: game);
 
   Room? joinRoom(String code, ServerMember member) {
     final room = rooms[code.toUpperCase()];
@@ -233,6 +348,16 @@ class GameAuthority {
     return room;
   }
 
+  /// Drops a room without any registry notification — unlike the close
+  /// paths in [leaveRoom]. For rooms that must never have existed under
+  /// this code (e.g. a duplicate generated while another replica owned it,
+  /// or a racing explicit-code creation in tests), unregistering would
+  /// delete a row that belongs to another instance.
+  void abandonRoom(Room room) {
+    rooms.remove(room.code);
+    room.removed = true;
+  }
+
   /// Removes the connection [connectionId] from a room's players or
   /// spectators. A room nobody is connected to at all is dropped right away
   /// if it never started; a started game lingers for [emptyRoomGrace] so a
@@ -248,6 +373,7 @@ class GameAuthority {
         // A lobby nobody is in any more is worthless — drop it now.
         rooms.remove(code);
         room.removed = true;
+        onRoomClosed?.call(code, room.registryToken);
       } else {
         // A started game stays recoverable for a grace period so a flaky
         // connection (or the last one crashing) can still come back.
@@ -259,6 +385,7 @@ class GameAuthority {
             room.broadcast({'type': 'roomClosed'});
             rooms.remove(code);
             room.removed = true;
+            onRoomClosed?.call(code, room.registryToken);
           }
         });
       }
@@ -275,8 +402,10 @@ class GameAuthority {
   }) {
     final member = room.members[connectionId];
     if (member == null) return;
-    final state = room.stateOrNull;
-    if (state == null && msg['type'] != 'start') return;
+    final isSnakes = room.gameType == 'snakes';
+    final state = isSnakes ? null : room.stateOrNull;
+    final snakesState = room.snakesState;
+    if (state == null && snakesState == null && msg['type'] != 'start') return;
 
     switch (msg['type'] as String?) {
       case 'start':
@@ -286,6 +415,17 @@ class GameAuthority {
         }
 
       case 'roll':
+        if (isSnakes) {
+          if (snakesState == null ||
+              snakesState.phase != snakes.SnakesPhase.awaitingRoll) {
+            return;
+          }
+          if (snakesState.currentPlayer.id != member.seatId) return;
+          snakes.rollDice(snakesState, rng.nextInt(6) + 1);
+          room.broadcastState();
+          _recordResultsIfFinished(room, snakesState);
+          return;
+        }
         if (state == null || state.phase != LudoPhase.awaitingRoll) return;
         if (state.currentPlayer.id != member.seatId) return;
         rollDice(state, rng.nextInt(6) + 1);
@@ -293,6 +433,19 @@ class GameAuthority {
         _recordResultsIfFinished(room, state);
 
       case 'move':
+        if (isSnakes) {
+          // Snakes & Ladders has exactly one move per roll — no choice to
+          // validate, just resolve it for the current player.
+          if (snakesState == null ||
+              snakesState.phase != snakes.SnakesPhase.awaitingMove) {
+            return;
+          }
+          if (snakesState.currentPlayer.id != member.seatId) return;
+          snakes.applyMove(snakesState);
+          room.broadcastState();
+          _recordResultsIfFinished(room, snakesState);
+          return;
+        }
         if (state == null || state.phase != LudoPhase.awaitingMove) return;
         if (state.currentPlayer.id != member.seatId) return;
         final idx = msg['token'] as int?;
@@ -313,25 +466,54 @@ class GameAuthority {
 
   /// Persists the result when a game just reached completion. A no-op
   /// without a leaderboard store, before start, or once already recorded.
-  void _recordResultsIfFinished(Room room, LudoState state) {
+  void _recordResultsIfFinished(Room room, Object state) {
     final store = leaderboard;
     if (store == null || room.gameId == null || room.resultsRecorded) return;
-    if (state.phase != LudoPhase.gameOver) return;
-    final rankings = state.rankings;
-    if (rankings.length < state.players.length) return;
+
+    List<GameResult>? results;
+    switch (state) {
+      case LudoState s when s.phase == LudoPhase.gameOver:
+        final rankings = s.rankings;
+        if (rankings.length < s.players.length) return;
+        results = [
+          for (final p in s.players)
+            GameResult(
+              seatId: p.id,
+              name: p.name,
+              color: p.color.name,
+              rank: rankings.indexOf(p.id) + 1,
+            ),
+        ];
+      case snakes.SnakesState s when s.phase == snakes.SnakesPhase.gameOver:
+        // The classic ruleset ranks everyone the moment the first pawn
+        // reaches square 100, so all players should be present.
+        if (s.rankings.length < s.players.length) return;
+        results = [
+          for (final p in s.players)
+            GameResult(
+              seatId: p.id,
+              name: p.name,
+              // Pawn slot -> corner seat color, stable across reconnects.
+              color: LudoBoard
+                  .colorOrder[p.tokenIndex.clamp(0, 3)]
+                  .name,
+              rank: s.rankings.indexOf(p.id) + 1,
+            ),
+        ];
+      default:
+        return; // game not over yet
+    }
+
     room.resultsRecorded = true;
-    store.recordResults(
-      gameId: room.gameId!,
-      results: [
-        for (final p in state.players)
-          GameResult(
-            seatId: p.id,
-            name: p.name,
-            color: p.color.name,
-            rank: rankings.indexOf(p.id) + 1,
-          ),
-      ],
-    );
+    // Fire-and-forget: the write must not block the turn loop, and a
+    // failure must not kill the connection. Rows are idempotent per
+    // (gameId, seatId), so a retried write is safe.
+    unawaited(store
+        .recordResults(gameId: room.gameId!, results: results)
+        .catchError((Object e) {
+      room.resultsRecorded = false; // a later action in this room can retry
+      stderr.writeln('leaderboard write failed: $e');
+    }));
   }
 }
 

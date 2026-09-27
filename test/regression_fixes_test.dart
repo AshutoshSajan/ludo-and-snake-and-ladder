@@ -26,6 +26,7 @@ import 'package:game_club/engine/ludo/ludo_board.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/providers/app_providers.dart';
+import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/sound_service.dart';
 import 'package:game_club/ui/shared/dice_widget.dart';
 
@@ -509,6 +510,41 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(painterOf(tester), same(settled));
+    });
+  });
+
+  group('same-origin server URL derivation', () {
+    test('keeps a nonstandard HTTPS port so WS and leaderboard work', () {
+      // Page served over HTTPS on a port other than 443 (e.g. a load
+      // balancer on :8443): the game WS and the leaderboard origin (which
+      // is derived from the same URL via Uri.replace, preserving the
+      // authority) must both target that port.
+      final page = Uri.parse('https://game.example.com:8443/');
+      expect(OnlineLobbyScreen.sameOriginServerUrl(page),
+          'wss://game.example.com:8443/ws');
+
+      final ws =
+          Uri.parse(OnlineLobbyScreen.sameOriginServerUrl(page));
+      expect(
+        ws.replace(scheme: 'https', path: '/leaderboard'),
+        Uri.parse('https://game.example.com:8443/leaderboard'),
+      );
+    });
+
+    test('a standard HTTPS page gets no explicit port', () {
+      expect(
+        OnlineLobbyScreen.sameOriginServerUrl(
+            Uri.parse('https://game.example.com/')),
+        'wss://game.example.com/ws',
+      );
+    });
+
+    test('plain http stays on the local dev server port', () {
+      expect(
+        OnlineLobbyScreen.sameOriginServerUrl(
+            Uri.parse('http://localhost:5000/')),
+        'ws://localhost:8080/ws',
+      );
     });
   });
 }

@@ -1,10 +1,16 @@
-/// SQLite-backed leaderboard persistence for the game server.
+/// Leaderboard persistence for the game server.
 ///
 /// The server records every finished online game — one row per player with
 /// their finishing rank — and answers HTTP leaderboard queries from it.
-/// Storage uses the `sqlite3` package directly (the process runs on the
-/// same host as the DB file), so there is no ORM and no native plugin
-/// machinery on the client side.
+/// Two backends implement [LeaderboardStore]:
+///
+/// * [SqliteLeaderboardStore] — a local SQLite file (the default). Storage
+///   uses the `sqlite3` package directly (the process runs on the same host
+///   as the DB file), so there is no ORM and no native plugin machinery on
+///   the client side.
+/// * [TursoLeaderboardStore] (`turso_leaderboard_store.dart`) — a hosted
+///   Turso/libSQL database over its HTTP pipeline API, so the leaderboard
+///   survives even when the server runs on an ephemeral free host.
 library;
 
 import 'package:sqlite3/sqlite3.dart';
@@ -49,26 +55,51 @@ class LeaderboardEntry {
       };
 }
 
-/// Reads and writes finished-game results. Open with a file path for
-/// persistence or [LeaderboardStore.inMemory] for tests.
-class LeaderboardStore {
-  LeaderboardStore._(this._db, {required bool owns}) : _ownsDb = owns {
+/// Reads and writes finished-game results.
+///
+/// All methods are async so a remote backend (Turso over HTTP) can slot in
+/// behind the same interface; the local SQLite implementation does its work
+/// synchronously and returns completed futures.
+abstract interface class LeaderboardStore {
+  /// Records the full result of one game. Safe to call twice for the same
+  /// [gameId] — replays are ignored row by row, so a crash between the
+  /// broadcast and the write can be recovered on the next completion.
+  Future<void> recordResults({
+    required String gameId,
+    required List<GameResult> results,
+  });
+
+  /// Career stats, best first: most wins, then better average rank, then
+  /// more games played.
+  Future<List<LeaderboardEntry>> topPlayers({int limit = 10});
+
+  /// Number of distinct finished games on record.
+  Future<int> totalGames();
+
+  /// Releases backend resources (database handles, HTTP clients).
+  void close();
+}
+
+/// SQLite-backed implementation: open with a file path for persistence or
+/// [SqliteLeaderboardStore.inMemory] for tests.
+class SqliteLeaderboardStore implements LeaderboardStore {
+  SqliteLeaderboardStore._(this._db, {required bool owns}) : _ownsDb = owns {
     _migrate();
   }
 
   /// Opens (or creates) the database at [path]. Parent directories must
   /// already exist.
-  factory LeaderboardStore(String path) =>
-      LeaderboardStore._(sqlite3.open(path), owns: true);
+  factory SqliteLeaderboardStore(String path) =>
+      SqliteLeaderboardStore._(sqlite3.open(path), owns: true);
 
   /// A throwaway store that vanishes with the process — used by tests.
-  factory LeaderboardStore.inMemory() =>
-      LeaderboardStore._(sqlite3.openInMemory(), owns: true);
+  factory SqliteLeaderboardStore.inMemory() =>
+      SqliteLeaderboardStore._(sqlite3.openInMemory(), owns: true);
 
   /// Wraps an existing [Database] (the caller keeps ownership) — for tests
   /// that pre-populate or share a database.
-  factory LeaderboardStore.fromDb(Database db) =>
-      LeaderboardStore._(db, owns: false);
+  factory SqliteLeaderboardStore.fromDb(Database db) =>
+      SqliteLeaderboardStore._(db, owns: false);
 
   final Database _db;
   final bool _ownsDb;
@@ -94,10 +125,17 @@ class LeaderboardStore {
     ''');
   }
 
-  /// Records the full result of one game. Safe to call twice for the same
-  /// [gameId] — replays are ignored row by row, so a crash between the
-  /// broadcast and the write can be recovered on the next completion.
-  void recordResults({required String gameId, required List<GameResult> results}) {
+  @override
+  Future<void> recordResults({
+    required String gameId,
+    required List<GameResult> results,
+  }) {
+    // Committed synchronously — the future only smooths the interface.
+    _record(gameId, results);
+    return Future.value();
+  }
+
+  void _record(String gameId, List<GameResult> results) {
     final now = DateTime.now().millisecondsSinceEpoch;
     _db.execute('BEGIN');
     try {
@@ -124,9 +162,8 @@ class LeaderboardStore {
     }
   }
 
-  /// Career stats, best first: most wins, then better average rank, then
-  /// more games played.
-  List<LeaderboardEntry> topPlayers({int limit = 10}) {
+  @override
+  Future<List<LeaderboardEntry>> topPlayers({int limit = 10}) async {
     final rows = _db.select('''
       SELECT r.seat_id AS seat_id,
              p.name AS name,
@@ -151,10 +188,12 @@ class LeaderboardStore {
     ];
   }
 
-  /// Number of distinct finished games on record.
-  int get totalGames => _db.select(
-      'SELECT COUNT(DISTINCT game_id) AS n FROM results').first['n'] as int;
+  @override
+  Future<int> totalGames() async => _db
+      .select('SELECT COUNT(DISTINCT game_id) AS n FROM results')
+      .first['n'] as int;
 
+  @override
   void close() {
     if (_ownsDb) _db.close();
   }
