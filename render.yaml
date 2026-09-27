@@ -1,0 +1,36 @@
+# Render blueprint — deploys the full multiplayer Game Club app as ONE
+# service: the compiled Flutter web client, the WebSocket game transport,
+# /stats, /rooms/lookup, and the leaderboard API on the same origin.
+#
+#   1. Push this branch (or merge it), then in Render: New + -> Blueprint,
+#      pick this repo — the service below is created automatically.
+#   2. When prompted, fill in the two `sync: false` values from Turso:
+#          turso db create game-club
+#          turso db tokens create game-club
+#      (Optionally pre-provision the schema: see deploy/turso_schema.sql —
+#      the stores also create their tables lazily, so this is optional.)
+#   3. The web client defaults to wss://<your-app>.onrender.com/ws (same
+#      origin), so no client configuration is needed.
+#
+# Note: Render's free plan sleeps a web service after ~15 idle minutes and
+# cold starts take a bit — the first player may wait a few seconds.
+services:
+  - type: web
+    name: game-club
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    # Cheap, local-only gauges: instance id + connection/room/spectator counts.
+    healthCheckPath: /stats
+    autoDeploy: true
+    envVars:
+      - key: TURSO_DATABASE_URL
+        sync: false # your libsql://... URL
+      - key: TURSO_AUTH_TOKEN
+        sync: false # your database token — keep it out of git
+      - key: ROOM_TTL_SECONDS
+        value: '120'
+      - key: INSTANCE_ID
+        value: game-1
+      - key: PORT
+        value: '8080'

@@ -153,6 +153,12 @@ class OnlineClient extends ChangeNotifier {
   static const _maxReconnectAttempts = 5;
   static const _reconnectBaseDelay = Duration(milliseconds: 500);
 
+  /// The replica that owns our room, learned from a reroute error (the
+  /// server attaches `owner` when a join/reconnect lands on a replica that
+  /// does not hold the room). Sent back as `?owner=` so the load balancer
+  /// pins the connection to the owning replica instead of the hash slot.
+  String? _routeHint;
+
   bool get connected =>
       status == OnlineStatus.inLobby || status == OnlineStatus.playing;
 
@@ -178,7 +184,11 @@ class OnlineClient extends ChangeNotifier {
     assert(status == OnlineStatus.idle || status == OnlineStatus.error);
     _userClosed = false;
     _reconnectAttempts = 0;
-    _joinCode = code;
+    _routeHint = null;
+    // Canonicalize up front: the server stores rooms under the uppercase
+    // code, and we hash-route by `?code=` — a lowercase-typed code must not
+    // be pinned to a different replica than the room's uppercase one.
+    _joinCode = code?.trim().toUpperCase();
     _spectating = spectate;
     status = OnlineStatus.connecting;
     errorText = null;
@@ -188,7 +198,33 @@ class OnlineClient extends ChangeNotifier {
 
   Future<void> _openAndHello({LudoColor? preferredColor}) async {
     try {
-      _channel = _channelFactory(Uri.parse(serverUrl));
+      // Carry the room code in the URL: a room-affinity load balancer
+      // (deploy/nginx.conf hashes the ?code= query parameter consistently)
+      // must route a join — and a reconnect — consistently. The code still
+      // rides in `hello`, which the server treats as authoritative.
+      //
+      // Hashing by code is not ownership, though: a room is created on
+      // whichever replica the code-less first connection landed on, so a
+      // later join/reconnect can hash to a replica that does not hold the
+      // room. When that happens the server answers with a reroute error
+      // carrying the owning instance, which we retry with as `?owner=` —
+      // nginx's map pins such requests to the owning replica directly.
+      // Unknown at first connect (room creation, quick match): we land
+      // anywhere, create the room there, and every later open carries the
+      // code learned from 'joined'.
+      var uri = Uri.parse(serverUrl);
+      final params = {...uri.queryParameters};
+      if (_joinCode != null && _joinCode!.isNotEmpty) {
+        // Always the canonical uppercase spelling: the load balancer hashes
+        // this value, and the room lives under the uppercase code the
+        // server stored — a lowercase copy would hash to another bucket.
+        params['code'] = _joinCode!.toUpperCase();
+      }
+      if (_routeHint != null) {
+        params['owner'] = _routeHint!;
+      }
+      if (params.isNotEmpty) uri = uri.replace(queryParameters: params);
+      _channel = _channelFactory(uri);
       _sub = _channel!.stream.listen(_onMessage, onDone: _onClosed,
           onError: (_) => _onClosed());
       _send({
@@ -309,6 +345,21 @@ class OnlineClient extends ChangeNotifier {
         _channel?.sink.close();
         _channel = null;
       case 'error':
+        final owner = msg['owner'] as String?;
+        if (owner != null && owner.isNotEmpty && !_userClosed) {
+          // The room lives on another replica — this is a routing problem,
+          // not a definitive rejection. Reroute: remember the owner and let
+          // the socket close so the normal reconnect path retries with
+          // `?owner=`, which the load balancer turns into a direct hop.
+          // Still counts against the reconnect budget, so a persistent
+          // failure (e.g. the owner replica dying mid-reroute) terminates.
+          _routeHint = owner;
+          status = OnlineStatus.reconnecting;
+          notifyListeners();
+          _channel?.sink.close();
+          _channel = null;
+          break;
+        }
         errorText = msg['text'] as String;
         status = OnlineStatus.error;
         // A definitive rejection (bad code, gone room) — stop retrying.
