@@ -34,12 +34,16 @@ import 'package:http/http.dart' as http;
 abstract class RoomRegistry {
   /// Claims or refreshes `code -> instanceId`. Returns false when a live
   /// entry owned by a DIFFERENT instance exists (a cross-replica duplicate
-  /// code): the claim is refused so routing stays stable instead of
-  /// flip-flopping between owners. Expired entries of other instances are
-  /// fair game. A false return means the caller must pick another code.
-  /// [owner] is an opaque per-room token: codes are recycled the moment a
-  /// room closes, so two rooms can briefly share one code and the token is
-  /// what later lets [unregister] tell them apart.
+  /// code) — or when the same instance owns it under a DIFFERENT [owner]
+  /// token (two concurrent creations on one replica drawing the same code):
+  /// a live route belongs to exactly one room, so the claim must not
+  /// replace the row's owner. Were both claims answered with true, the
+  /// loser's cleanup would [unregister] the winner's live route. The claim
+  /// is refused so routing stays stable instead of flip-flopping between
+  /// owners. Expired entries are fair game. A false return means the caller
+  /// must pick another code. [owner] is an opaque per-room token: codes are
+  /// recycled the moment a room closes, so two rooms can briefly share one
+  /// code and the token is what later lets [unregister] tell them apart.
   Future<bool> register(String code, String instanceId, {String? owner});
 
   /// The owning instance id, or null when the room is unknown (or its
@@ -66,6 +70,11 @@ class InMemoryRoomRegistry implements RoomRegistry {
       {String? owner}) async {
     final current = _owners[code];
     if (current != null && current != instanceId) return false;
+    // A live row is refreshable only by the room that owns it: a competing
+    // claim (same instance, different token) must not take over the owner,
+    // or the refused creation's cleanup would delete the live route when it
+    // unregisters the token it thought it had claimed.
+    if (current != null && _rowOwners[code] != owner) return false;
     _owners[code] = instanceId;
     _rowOwners[code] = owner;
     return true;
@@ -151,11 +160,12 @@ class TursoRoomRegistry implements RoomRegistry {
       'owner, expires_at) VALUES (?, ?, ?, ?) '
       'ON CONFLICT(code) DO UPDATE SET instance = excluded.instance, '
       'owner = excluded.owner, expires_at = excluded.expires_at '
-      'WHERE room_registry.instance = excluded.instance '
+      'WHERE (room_registry.instance = excluded.instance '
+      'AND room_registry.owner IS excluded.owner) '
       'OR room_registry.expires_at <= ?';
   static const _gcSql = 'DELETE FROM room_registry WHERE expires_at < ?';
   static const _selectSql =
-      'SELECT instance FROM room_registry WHERE code = ?';
+      'SELECT instance, owner FROM room_registry WHERE code = ?';
 
   /// Scoped to the closing room's [owner] token: a code is recycled the
   /// moment its room closes, so by the time this slow delete lands a newer
@@ -169,11 +179,13 @@ class TursoRoomRegistry implements RoomRegistry {
   /// instead of lingering until the server times it out.
   static const _close = {'type': 'close'};
 
-  /// A CAS upsert: rows the pipeline already own (same instance) or that
-  /// no live entry holds (the GC has just removed expired rows; `<=`
-  /// covers the clock edge) may be claimed. A live foreign claim is left
-  /// untouched, and the trailing [_selectSql] reports who actually owns
-  /// the code afterwards.
+  /// A CAS upsert: only the row's current owner — the same instance AND the
+  /// same room token — may refresh it, or a row nobody live holds (the GC
+  /// has just removed expired rows; `<=` covers the clock edge). A live
+  /// foreign claim AND a live claim of another local room are left
+  /// untouched, and the trailing [_selectSql] reports who actually owns the
+  /// code afterwards — including which token, so a refused competing claim
+  /// can never masquerade as a success.
   @override
   Future<bool> register(String code, String instanceId,
       {String? owner}) async {
@@ -184,7 +196,11 @@ class TursoRoomRegistry implements RoomRegistry {
       _execStmt(_selectSql, [code]),
       _close,
     ]);
-    return table.rows.isNotEmpty && '${table.rows.first.first}' == instanceId;
+    if (table.rows.isEmpty) return false;
+    final row = table.rows.first;
+    return row.length > 1 &&
+        '${row.first}' == instanceId &&
+        row[1] == owner;
   }
 
   @override

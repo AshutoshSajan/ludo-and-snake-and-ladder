@@ -308,26 +308,39 @@ void main() {
       expect(await registry.lookup(room.code), isNull);
     });
 
-    test('a late close never erases a newer room that recycled the code',
+    test('a late close delete never erases a newer room on the same code',
         () async {
       final registry = InMemoryRoomRegistry();
-      final auth = GameAuthority(rng: Random(1), onRoomClosed: (code, token) {
-        // Model the slow Turso delete: it lands AFTER a newer room has
-        // already claimed the same code's route.
-        Future<void>.delayed(const Duration(milliseconds: 10))
-            .then((_) => registry.unregister(code, owner: token));
-      });
+      final auth = GameAuthority(rng: Random(1));
       final old = auth.createRoom(_member(LudoColor.red));
       await registry.register(old.code, 'game-1', owner: old.registryToken);
 
-      auth.leaveRoom(old.code, 'red'); // close → delete is now in flight
-      // A newer room (same instance, same code) claims the route first.
+      // The old room closes: its scoped delete frees the code (in the Turso
+      // registry the row could equally have expired and been GC'd).
+      await registry.unregister(old.code, owner: old.registryToken);
+      expect(await registry.lookup(old.code), isNull);
+
+      // A newer room recycles the code and claims the live route ...
       final newer = auth.createRoom(_member(LudoColor.blue, seatId: 'blue2'));
       await registry.register(old.code, 'game-1', owner: newer.registryToken);
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(await registry.lookup(old.code), 'game-1');
 
+      // ... and only now does a late (or retried) delete from the old close
+      // land — the slow Turso pipeline. It is scoped to the closed room's
+      // token, so the live route survives.
+      await registry.unregister(old.code, owner: old.registryToken);
       expect(await registry.lookup(old.code), 'game-1',
           reason: 'the stale delete must not erase the newer room');
+
+      // A competing claim while the newer row is live is refused outright:
+      // the two creations must never both believe they own the code, or the
+      // loser's cleanup would delete the winner's live route.
+      expect(
+        await registry.register(old.code, 'game-1',
+            owner: '${newer.registryToken}-other'),
+        isFalse,
+      );
+      expect(await registry.lookup(old.code), 'game-1');
     });
 
     test('a started room rejects new joiners', () {

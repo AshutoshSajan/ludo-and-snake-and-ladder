@@ -100,9 +100,19 @@ Future<Room> _createClaimedRoom(ServerMember host, {required String game}) async
           game: game, code: code, registryToken: token);
     } on StateError catch (_) {
       // Astronomically rare: a concurrent local creation took the code
-      // while the remote claim was in flight. Release the reservation and
-      // try another code.
+      // while the remote claim was in flight (only reachable when the
+      // registry had marked our row expired, letting this claim through).
+      // Release OUR claim — scoped to the token, so a row that meanwhile
+      // moved back to the live room's token is untouched — and hand the
+      // route straight back to that room, so lookups do not go dark (and a
+      // third replica cannot grab the code) until its next sweep refresh.
       await roomRegistry.unregister(code, owner: token).catchError((Object _) {});
+      final winner = authority.rooms[code];
+      if (winner != null) {
+        await roomRegistry
+            .register(code, instanceId, owner: winner.registryToken)
+            .catchError((_) => false);
+      }
       token = newRegistryToken();
     }
   }

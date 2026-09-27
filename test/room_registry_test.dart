@@ -65,8 +65,9 @@ http.Response _rowsResult(List<List<dynamic>> rows, List<String> names) =>
     ]);
 
 /// Reply for a register pipeline: schema + GC + upsert executes, then the
-/// owner SELECT — returning [instance] (or no rows when null) — then close.
-http.Response _registerReply(String? instance) => _pipeline([
+/// owner SELECT — returning [instance] and its row [owner] (or no rows
+/// when the instance is null) — then close.
+http.Response _registerReply(String? instance, {String? owner}) => _pipeline([
       _execResult(),
       _execResult(),
       _execResult(),
@@ -79,10 +80,14 @@ http.Response _registerReply(String? instance) => _pipeline([
                 'result': {
                   'cols': [
                     {'name': 'instance', 'decltype': 'TEXT'},
+                    {'name': 'owner', 'decltype': 'TEXT'},
                   ],
                   'rows': [
                     [
                       {'type': 'text', 'value': instance},
+                      owner == null
+                          ? {'type': 'null', 'value': null}
+                          : {'type': 'text', 'value': owner},
                     ],
                   ],
                   'affected_row_count': 0,
@@ -137,14 +142,46 @@ void main() {
       expect(await registry.register('ABCD', 'game-2'), isTrue);
     });
 
+    test('a competing claim for a live code is refused on the same instance',
+        () async {
+      // Two concurrent creations on one replica can draw the same code. If
+      // both claims reported success the row's owner would be replaced, and
+      // the loser's cleanup — which unregisters the token it believes it
+      // claimed — would delete the winner's live route: lookups would 404
+      // and another replica could take the code before a refresh restored
+      // it.
+      final registry = InMemoryRoomRegistry();
+      await registry.register('ABCD', 'game-1', owner: 'room-1');
+
+      expect(await registry.register('ABCD', 'game-1', owner: 'room-2'),
+          isFalse,
+          reason: 'a live route belongs to exactly one room token');
+      expect(await registry.lookup('ABCD'), 'game-1');
+
+      // The winner's own refresh and close still work.
+      expect(
+          await registry.register('ABCD', 'game-1', owner: 'room-1'), isTrue);
+      await registry.unregister('ABCD', owner: 'room-1');
+      expect(await registry.lookup('ABCD'), isNull);
+
+      // Only a freed code can be claimed by the other creation.
+      expect(
+          await registry.register('ABCD', 'game-1', owner: 'room-2'), isTrue);
+    });
+
     test('unregister honours the room token when codes are recycled', () async {
       final registry = InMemoryRoomRegistry();
       await registry.register('ABCD', 'game-1', owner: 'room-1');
 
-      // Same instance, same code, new room (the old room is closing while
-      // the newer one already claimed the code): the stale close must not
-      // drop the live room's route.
+      // The old room closes and its row goes away (the scoped delete, or
+      // TTL expiry + GC in the Turso registry).
+      await registry.unregister('ABCD', owner: 'room-1');
+      expect(await registry.lookup('ABCD'), isNull);
+
+      // A newer room recycles the code and claims the live route.
       await registry.register('ABCD', 'game-1', owner: 'room-2');
+
+      // A late (or retried) delete from the old close must not drop it.
       await registry.unregister('ABCD', owner: 'room-1');
       expect(await registry.lookup('ABCD'), 'game-1',
           reason: 'a stale close never erases a newer room on the same code');
@@ -176,7 +213,7 @@ void main() {
         () async {
       final requests = <http.Request>[];
       final registry = _registry(requests,
-          reply: (_) async => _registerReply('game-1'));
+          reply: (_) async => _registerReply('game-1', owner: 'room-42'));
       expect(await registry.register('ABCD', 'game-1', owner: 'room-42'),
           isTrue);
 
@@ -200,11 +237,17 @@ void main() {
           reason: 'expired entries are garbage-collected');
       final upsert = sql[2];
       expect(upsert, contains('ON CONFLICT(code) DO UPDATE'));
-      expect(upsert, contains('WHERE room_registry.instance = excluded.instance'),
-          reason: 'a live foreign claim is never overwritten');
+      expect(
+          upsert,
+          contains('WHERE (room_registry.instance = excluded.instance '
+              'AND room_registry.owner IS excluded.owner)'),
+          reason: 'only the owning room token may refresh a live claim — a '
+              'competing creation on the same instance must not take over '
+              'the row and then unregister the live route');
       expect(upsert, contains('OR room_registry.expires_at <= ?'),
           reason: 'an expired foreign entry may be taken over');
-      expect(sql[3], 'SELECT instance FROM room_registry WHERE code = ?');
+      expect(sql[3], 'SELECT instance, owner FROM room_registry WHERE code = ?',
+          reason: 'the owner is re-read to verify the claim truly landed');
 
       final upsertArgs = execs[2]['stmt']['args'] as List<dynamic>;
       expect((upsertArgs[0] as Map)['value'], 'ABCD');
@@ -223,15 +266,29 @@ void main() {
     test('register claims a free code and refreshes its own claim', () async {
       final requests = <http.Request>[];
       final registry = _registry(requests,
-          reply: (_) async => _registerReply('game-1'));
-      expect(await registry.register('ABCD', 'game-1'), isTrue);
+          reply: (_) async => _registerReply('game-1', owner: 'room-1'));
+      expect(await registry.register('ABCD', 'game-1', owner: 'room-1'), isTrue,
+          reason: 'the owning room refreshes its own row');
+    });
+
+    test('register refuses a competing claim on the same instance', () async {
+      // The row is ours but belongs to another room token: two creations
+      // drew the same code, and accepting the second claim would let its
+      // cleanup unregister the first room's live route.
+      final requests = <http.Request>[];
+      final registry = _registry(requests,
+          reply: (_) async => _registerReply('game-1', owner: 'room-1'));
+      expect(await registry.register('ABCD', 'game-1', owner: 'room-2'),
+          isFalse,
+          reason: 'same instance is not enough — the room token must match');
     });
 
     test('register refuses to overwrite a live foreign claim', () async {
       final requests = <http.Request>[];
       final registry = _registry(requests,
-          reply: (_) async => _registerReply('game-9'));
-      expect(await registry.register('ABCD', 'game-1'), isFalse,
+          reply: (_) async => _registerReply('game-9', owner: 'room-9'));
+      expect(await registry.register('ABCD', 'game-1', owner: 'room-1'),
+          isFalse,
           reason: 'the row still belongs to game-9 — routing must not move');
     });
 
