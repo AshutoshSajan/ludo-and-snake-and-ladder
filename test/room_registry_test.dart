@@ -130,6 +130,14 @@ List<dynamic> _allStmts(List<http.Request> requests) => [
             as List<dynamic>,
     ];
 
+/// All schema-upgrade ALTER statements across the captured [requests].
+List<dynamic> _upgradeStmts(List<http.Request> requests) => [
+      for (final s in _allStmts(requests))
+        if (((s as Map)['stmt'] as Map?)?['sql'] ==
+            'ALTER TABLE room_registry ADD COLUMN owner TEXT')
+          s,
+    ];
+
 TursoRoomRegistry _registry(
   List<http.Request> requests, {
   Future<http.Response> Function(http.Request request)? reply,
@@ -274,14 +282,42 @@ void main() {
       // The upgrade is a one-time cost per process.
       await registry.lookup('ABCD');
       await registry.unregister('ABCD', owner: 'room-1');
-      final upgrades = [
-        for (final s in _allStmts(requests))
-          if (((s as Map)['stmt'] as Map?)?['sql'] ==
-              'ALTER TABLE room_registry ADD COLUMN owner TEXT')
-            s,
-      ];
-      expect(upgrades, hasLength(1),
+      expect(_upgradeStmts(requests), hasLength(1),
           reason: 'the ALTER must not ride along on every call');
+    });
+
+    test('a non-duplicate upgrade failure is retried, not memoized', () async {
+      final requests = <http.Request>[];
+      // The first ALTER hits a transient database problem; only the
+      // "duplicate column name" answer counts as done.
+      var alterAttempts = 0;
+      final registry = _registry(
+          requests,
+          reply: (req) => _scriptedReply(req, (sql) {
+                if (sql.startsWith('ALTER TABLE')) {
+                  alterAttempts++;
+                  if (alterAttempts == 1) {
+                    return _errorResult('database is locked');
+                  }
+                  return _execResult();
+                }
+                if (sql.startsWith('SELECT instance, owner')) {
+                  return _rowsEntry([
+                    [
+                      {'type': 'text', 'value': 'game-1'},
+                      {'type': 'text', 'value': 'room-1'},
+                    ],
+                  ], ['instance', 'owner']);
+                }
+                return _execResult();
+              }));
+
+      expect(await registry.register('ABCD', 'game-1', owner: 'room-1'), isTrue,
+          reason: 'the swallowed upgrade error still lets the call through');
+      await registry.lookup('ABCD');
+      expect(alterAttempts, 2,
+          reason: 'a failure that is not "duplicate column" leaves the '
+              'upgrade pending for the next call');
     });
 
     test('the upgrade tolerates a table that already has the column',
@@ -308,6 +344,11 @@ void main() {
 
       expect(await registry.register('ABCD', 'game-1'), isTrue,
           reason: 'the duplicate-column answer is the migration succeeding');
+      await registry.lookup('ABCD');
+      await registry.unregister('ABCD');
+      expect(_upgradeStmts(requests), hasLength(1),
+          reason: 'a duplicate-column answer counts as done — one ALTER '
+              'per process, not one per call');
     });
 
     test(

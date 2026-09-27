@@ -162,23 +162,36 @@ class TursoRoomRegistry implements RoomRegistry {
   /// register, lookup, and unregister with "no such column: owner" — rooms
   /// would then be created locally, where no other replica could find them.
   /// The ALTER runs once before the first call and its failure is
-  /// tolerated, because the answer is expected whenever the column already
-  /// exists (fresh tables are created with it; replicas migrating
-  /// concurrently race the same way). Real problems still surface: the
-  /// caller's own statement fails loudly right after.
+  /// tolerated: a "duplicate column name" answer means the column is already
+  /// there (fresh tables are created with it; replicas migrating
+  /// concurrently race the same way) and marks the upgrade complete, so it
+  /// is never sent again. Any other failure (registry down, auth, a timeout)
+  /// leaves the upgrade pending and is retried by the next call — and the
+  /// caller's own statement then fails loudly right after, so a persistent
+  /// problem still surfaces immediately.
   static const _upgradeSql =
       'ALTER TABLE room_registry ADD COLUMN owner TEXT';
 
   Future<void>? _upgrades;
 
-  /// Runs the schema upgrade once per process. A failed attempt (registry
-  /// unreachable) is retried by the next call; errors are swallowed here
-  /// because the caller's own pipeline reports a persistent problem.
+  /// Runs the schema upgrade once per process. The "duplicate column name"
+  /// failure is the expected answer on an already-migrated table and counts
+  /// as done — memoizing it avoids resending a doomed ALTER (a full extra
+  /// round trip) on every register, lookup, and unregister. It is safe to
+  /// scope this match to the message text: within this pipeline the only
+  /// statement that can answer that way is the ALTER itself (CREATE TABLE
+  /// IF NOT EXISTS never does). Any other error is swallowed here and
+  /// retried by the next call, because the caller's own pipeline reports a
+  /// persistent problem.
   Future<void> _upgradeSchema() => _upgrades ??= _pipeline([
         ..._schema,
         _execStmt(_upgradeSql),
         _close,
-      ]).then<void>((_) {}, onError: (Object _, StackTrace _) {
+      ]).then<void>((_) {}, onError: (Object e, StackTrace _) {
+        if (e is RoomRegistryException &&
+            e.toString().toLowerCase().contains('duplicate column')) {
+          return;
+        }
         _upgrades = null;
       });
 
