@@ -71,7 +71,9 @@ class _FakeSink implements WebSocketSink {
 
 class FakeChannelFactory {
   final channels = <FakeChannel>[];
+  final uris = <Uri>[];
   FakeChannel create(Uri uri) {
+    uris.add(uri);
     final ch = FakeChannel();
     channels.add(ch);
     return ch;
@@ -87,6 +89,25 @@ Map<String, dynamic> _startedState() => createLudoState([
     ]).toJson();
 
 void main() {
+  test('a lowercase-typed code is canonicalized in the hashed ?code= URL',
+      () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+
+      client.connect(code: ' ab2c ');
+      async.flushMicrotasks();
+
+      // The load balancer hashes ?code= against the room's canonical
+      // uppercase spelling — the URL must never carry a lowercase copy.
+      expect(factory.uris.single.queryParameters['code'], 'AB2C');
+      // hello carries the same canonical code (the server stores rooms
+      // under code.toUpperCase()).
+      expect(factory.last.sent.first['code'], 'AB2C');
+    });
+  });
+
   test('a dropped socket triggers reconnect and restores the room', () {
     fakeAsync((async) {
       final factory = FakeChannelFactory();
@@ -230,6 +251,54 @@ void main() {
       expect(client.status, OnlineStatus.idle);
       async.elapse(const Duration(seconds: 30));
       expect(factory.channels, hasLength(1));
+    });
+  });
+
+  test('join-by-code and reconnect carry the code in the WS URL', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+
+      // Joining an existing room: affinity from the very first connection —
+      // the room-affinity LB hashes ?code= to the replica that owns the room.
+      client.connect(code: 'ABCD');
+      async.flushMicrotasks();
+      expect(factory.uris.last.queryParameters['code'], 'ABCD');
+
+      // Network blip: the retry must reach the same replica, so the URL
+      // keeps carrying the code — not just the hello frame.
+      factory.last.dropConnection();
+      async.elapse(const Duration(milliseconds: 500));
+      expect(factory.channels, hasLength(2));
+      expect(factory.uris.last.queryParameters['code'], 'ABCD');
+    });
+  });
+
+  test('reconnects after quick match carry the code learned from joined', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1',
+          name: 'A',
+          quickMatch: true,
+          channelFactory: factory.create);
+
+      // No code yet: we may land on any replica and create the match there.
+      client.connect();
+      async.flushMicrotasks();
+      expect(factory.uris.last.queryParameters.containsKey('code'), isFalse);
+
+      // Seated; the code is now known and every later open — in particular
+      // reconnects — must target the owning replica.
+      factory.last
+          .serverAdd({'type': 'joined', 'code': 'QK1', 'color': 'red'});
+      async.flushMicrotasks();
+
+      factory.last.dropConnection();
+      async.elapse(const Duration(milliseconds: 500));
+      expect(factory.channels, hasLength(2));
+      expect(factory.uris.last.queryParameters['code'], 'QK1');
     });
   });
 }

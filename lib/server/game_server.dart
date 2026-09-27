@@ -38,9 +38,25 @@ class ServerMember {
   final void Function(String json) sink; // send-to-client callback
 }
 
+int _registryTokenCounter = 0;
+
+/// Monotonic per-process token for [Room.registryToken]. Deliberately NOT
+/// taken from a room's seeded [Random]: consuming rng values here would
+/// shift every deterministic test's dice sequence.
+String _nextRegistryToken() =>
+    'room-${DateTime.now().microsecondsSinceEpoch}-${++_registryTokenCounter}';
+
+/// Mints a fresh cluster-registry token for a room about to be created.
+/// Public so the server can claim a code in the registry *before* the
+/// [Room] exists (see bin/server.dart), then hand the same token to
+/// [GameAuthority.createRoom] so the room and its row stay one identity.
+String newRegistryToken() => _nextRegistryToken();
+
 /// A waiting/running game.
 class Room {
-  Room(this.code, {required this.rng, this.gameType = 'ludo'});
+  Room(this.code,
+      {required this.rng, this.gameType = 'ludo', String? registryToken})
+      : registryToken = registryToken ?? _nextRegistryToken();
 
   final String code;
   final Random rng;
@@ -53,6 +69,16 @@ class Room {
   /// Built once at [start] from the seated members; never touched before.
   /// A [LudoState] for ludo rooms, a [snakes.SnakesState] for snakes rooms.
   late Object game;
+
+  /// Opaque token identifying THIS room in the cluster registry. Room codes
+  /// are recycled the moment a room closes, so the code alone cannot tell
+  /// the registry's rows apart: when this room closes, its unregister must
+  /// not delete the row a newer room (same code) has already claimed.
+  /// [gameId] is only assigned at [start], too late for registry rows
+  /// written at room creation — hence a dedicated token minted here (or
+  /// supplied by the server when the row was claimed before this room
+  /// existed, so room and row share one identity).
+  final String registryToken;
 
   final Map<String, ServerMember> members = {}; // by connection id
 
@@ -166,6 +192,7 @@ class GameAuthority {
     Random? rng,
     this.emptyRoomGrace = const Duration(minutes: 5),
     this.leaderboard,
+    this.onRoomClosed,
   }) : rng = rng ?? Random.secure();
 
   final Random rng;
@@ -175,6 +202,15 @@ class GameAuthority {
 
   /// Optional persistence for finished games. Null = leaderboard disabled.
   final LeaderboardStore? leaderboard;
+
+  /// Notified with the code and the registry token of every room fully
+  /// removed from [rooms] — immediately for an emptied lobby, after
+  /// [emptyRoomGrace] for an abandoned started room. The registry hook uses
+  /// this to unregister closed rooms right away instead of leaving stale
+  /// routes to expire; the token scopes the delete so a recycled code's
+  /// newer room is never erased by a stale close.
+  final void Function(String code, String registryToken)? onRoomClosed;
+
   final Map<String, Room> rooms = {};
 
   static String _newCode() {
@@ -184,28 +220,57 @@ class GameAuthority {
     ].join();
   }
 
-  /// Creates a room and seats [host] in the first free corner. [game]
-  /// selects the room's game: 'ludo' (default) or 'snakes'.
-  Room createRoom(ServerMember host, {String game = 'ludo'}) {
+  /// Draws a room code that is unique among [rooms]. Callers that claim
+  /// codes cluster-wide (bin/server.dart) use this to pick a candidate
+  /// before asking the registry; [createRoom] uses it as a fallback.
+  String newCode() {
     String code;
     do {
       code = _newCode();
     } while (rooms.containsKey(code));
-    final room = Room(code, rng: rng, gameType: game);
+    return code;
+  }
+
+  /// Creates a room and seats [host] in the first free corner. [game]
+  /// selects the room's game: 'ludo' (default) or 'snakes'. [code] and
+  /// [registryToken] let the caller create a room whose code was already
+  /// claimed cluster-wide under that exact token (reserve-then-create):
+  /// the room then only ever exists under a code this instance owns.
+  /// Throws [StateError] when an explicit [code] collides with a live
+  /// local room (a concurrent creation racing the remote claim).
+  Room createRoom(
+    ServerMember host, {
+    String game = 'ludo',
+    String? code,
+    String? registryToken,
+  }) {
+    if (code != null && rooms.containsKey(code)) {
+      throw StateError('a live room already uses code $code');
+    }
+    code ??= newCode();
+    final room = Room(code, rng: rng, gameType: game, registryToken: registryToken);
     rooms[code] = room;
     return joinRoom(code, host)!;
+  }
+
+  /// Seats [member] in the first waiting (unstarted, not full) room playing
+  /// [game]; returns null when none fits. Only rooms that already exist
+  /// here are considered — their codes are, by construction, claimed (see
+  /// bin/server.dart for how fresh rooms get claimed).
+  Room? matchExisting(ServerMember member, {String game = 'ludo'}) {
+    for (final room in rooms.values) {
+      if (room.gameType != game || room.started || room.full) continue;
+      if (joinRoom(room.code, member) != null) return room;
+    }
+    return null;
   }
 
   /// Quick match: seats [member] in the first waiting (unstarted, not full)
   /// room playing [game], creating a fresh room when none fits. Waiting
   /// players thus pair up automatically instead of trading room codes.
-  Room findMatch(ServerMember member, {String game = 'ludo'}) {
-    for (final room in rooms.values) {
-      if (room.gameType != game || room.started || room.full) continue;
-      if (joinRoom(room.code, member) != null) return room;
-    }
-    return createRoom(member, game: game);
-  }
+  Room findMatch(ServerMember member, {String game = 'ludo'}) =>
+      matchExisting(member, game: game) ??
+      createRoom(member, game: game);
 
   Room? joinRoom(String code, ServerMember member) {
     final room = rooms[code.toUpperCase()];
@@ -283,6 +348,16 @@ class GameAuthority {
     return room;
   }
 
+  /// Drops a room without any registry notification — unlike the close
+  /// paths in [leaveRoom]. For rooms that must never have existed under
+  /// this code (e.g. a duplicate generated while another replica owned it,
+  /// or a racing explicit-code creation in tests), unregistering would
+  /// delete a row that belongs to another instance.
+  void abandonRoom(Room room) {
+    rooms.remove(room.code);
+    room.removed = true;
+  }
+
   /// Removes the connection [connectionId] from a room's players or
   /// spectators. A room nobody is connected to at all is dropped right away
   /// if it never started; a started game lingers for [emptyRoomGrace] so a
@@ -298,6 +373,7 @@ class GameAuthority {
         // A lobby nobody is in any more is worthless — drop it now.
         rooms.remove(code);
         room.removed = true;
+        onRoomClosed?.call(code, room.registryToken);
       } else {
         // A started game stays recoverable for a grace period so a flaky
         // connection (or the last one crashing) can still come back.
@@ -309,6 +385,7 @@ class GameAuthority {
             room.broadcast({'type': 'roomClosed'});
             rooms.remove(code);
             room.removed = true;
+            onRoomClosed?.call(code, room.registryToken);
           }
         });
       }

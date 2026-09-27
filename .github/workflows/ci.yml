@@ -13,9 +13,9 @@ jobs:
     # Note: squash-merging PRs into main will fail this guard — use merge
     # commits for staging -> main.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -30,9 +30,9 @@ jobs:
           echo "main head is a merge commit — OK"
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: subosito/flutter-action@v2
         with:
@@ -61,12 +61,12 @@ jobs:
     # regeneration would flip-flop the file). It never pushes to main: it
     # opens a pull request targeting staging instead.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # full history so git-cliff sees every commit
 
@@ -81,7 +81,7 @@ jobs:
         run: git-cliff -o CHANGELOG.md
 
       - name: Open PR with CHANGELOG.md if changed
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: chore/changelog-update
           base: staging # never main
