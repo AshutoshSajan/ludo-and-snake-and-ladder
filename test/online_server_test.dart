@@ -62,14 +62,17 @@ class _RealHttpOverrides extends HttpOverrides {}
 class _RefusingOnceRegistry implements RoomRegistry {
   String? refusedCode;
   final _owners = <String, String>{};
+  final _tokens = <String, String?>{};
 
   @override
-  Future<bool> register(String code, String instanceId) async {
+  Future<bool> register(String code, String instanceId,
+      {String? owner}) async {
     if (refusedCode == null) {
       refusedCode = code;
       return false;
     }
     _owners[code] = instanceId;
+    _tokens[code] = owner;
     return true;
   }
 
@@ -77,8 +80,56 @@ class _RefusingOnceRegistry implements RoomRegistry {
   Future<String?> lookup(String code) async => _owners[code];
 
   @override
-  Future<void> unregister(String code) async {
+  Future<void> unregister(String code, {String? owner}) async {
+    // Mirror the real registries: a stale close never drops a newer room.
+    if (owner != null && _tokens[code] != owner) return;
     _owners.remove(code);
+    _tokens.remove(code);
+  }
+}
+
+/// Cluster-registry stub that refuses every claim — as if another replica
+/// keeps winning the race for each code this instance generates.
+class _RefusingAlwaysRegistry implements RoomRegistry {
+  final attempted = <String>[];
+
+  @override
+  Future<bool> register(String code, String instanceId,
+      {String? owner}) async {
+    attempted.add(code);
+    return false;
+  }
+
+  @override
+  Future<String?> lookup(String code) async => 'game-other';
+
+  @override
+  Future<void> unregister(String code, {String? owner}) async {}
+}
+
+/// Cluster-registry stub whose claims take [delay] to answer — a stand-in
+/// for a remote Turso round-trip during which the connecting socket may
+/// die. Delegates to a real in-memory registry after the wait.
+class _SlowClaimRegistry implements RoomRegistry {
+  _SlowClaimRegistry(this.delay);
+  final Duration delay;
+  final _inner = InMemoryRoomRegistry();
+  final unregistered = <String>[];
+
+  @override
+  Future<bool> register(String code, String instanceId,
+      {String? owner}) async {
+    await Future<void>.delayed(delay);
+    return _inner.register(code, instanceId, owner: owner);
+  }
+
+  @override
+  Future<String?> lookup(String code) => _inner.lookup(code);
+
+  @override
+  Future<void> unregister(String code, {String? owner}) async {
+    unregistered.add(code);
+    await _inner.unregister(code, owner: owner);
   }
 }
 
@@ -145,6 +196,26 @@ void main() {
       expect(room.code.length, 4);
     });
 
+    test('createRoom accepts a pre-claimed code and registry token', () {
+      // The server reserves a code cluster-wide BEFORE creating the room;
+      // the room must adopt that exact code and token.
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red),
+          code: 'ZZ99', registryToken: 'room-pre-claimed');
+      expect(room.code, 'ZZ99');
+      expect(room.registryToken, 'room-pre-claimed');
+      expect(auth.rooms['ZZ99'], same(room));
+    });
+
+    test('createRoom refuses an explicit code that already lives locally', () {
+      final auth = GameAuthority(rng: Random(1));
+      final first = auth.createRoom(_member(LudoColor.red), code: 'DUPE');
+      expect(() => auth.createRoom(_member(LudoColor.blue), code: 'DUPE'),
+          throwsStateError);
+      expect(auth.rooms['DUPE'], same(first),
+          reason: 'the racing creation must never overwrite the original');
+    });
+
     test('joinWithColor honors a free preferred corner', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
@@ -191,12 +262,12 @@ void main() {
     test('an emptied lobby closes and unregisters immediately', () async {
       final registry = InMemoryRoomRegistry();
       final closed = <String>[];
-      final auth = GameAuthority(rng: Random(1), onRoomClosed: (code) {
+      final auth = GameAuthority(rng: Random(1), onRoomClosed: (code, token) {
         closed.add(code);
-        registry.unregister(code);
+        registry.unregister(code, owner: token);
       });
       final room = auth.createRoom(_member(LudoColor.red));
-      await registry.register(room.code, 'game-1');
+      await registry.register(room.code, 'game-1', owner: room.registryToken);
 
       auth.leaveRoom(room.code, 'red');
 
@@ -215,13 +286,13 @@ void main() {
       final auth = GameAuthority(
           rng: Random(1),
           emptyRoomGrace: const Duration(milliseconds: 20),
-          onRoomClosed: (code) {
+          onRoomClosed: (code, token) {
             closed.add(code);
-            registry.unregister(code);
+            registry.unregister(code, owner: token);
           });
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
-      await registry.register(room.code, 'game-1');
+      await registry.register(room.code, 'game-1', owner: room.registryToken);
       auth.handleIntent(
           room: room, connectionId: 'red', msg: {'type': 'start'});
 
@@ -235,6 +306,28 @@ void main() {
       expect(auth.rooms, isEmpty);
       expect(closed, [room.code]);
       expect(await registry.lookup(room.code), isNull);
+    });
+
+    test('a late close never erases a newer room that recycled the code',
+        () async {
+      final registry = InMemoryRoomRegistry();
+      final auth = GameAuthority(rng: Random(1), onRoomClosed: (code, token) {
+        // Model the slow Turso delete: it lands AFTER a newer room has
+        // already claimed the same code's route.
+        Future<void>.delayed(const Duration(milliseconds: 10))
+            .then((_) => registry.unregister(code, owner: token));
+      });
+      final old = auth.createRoom(_member(LudoColor.red));
+      await registry.register(old.code, 'game-1', owner: old.registryToken);
+
+      auth.leaveRoom(old.code, 'red'); // close → delete is now in flight
+      // A newer room (same instance, same code) claims the route first.
+      final newer = auth.createRoom(_member(LudoColor.blue, seatId: 'blue2'));
+      await registry.register(old.code, 'game-1', owner: newer.registryToken);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(await registry.lookup(old.code), 'game-1',
+          reason: 'the stale delete must not erase the newer room');
     });
 
     test('a started room rejects new joiners', () {
@@ -439,8 +532,7 @@ void main() {
       expect((hs['state'] as Map)['players'], hasLength(2));
     });
 
-    test('a code owned by another replica is abandoned, then regenerated',
-        () async {
+    test('a code owned by another replica is never handed out', () async {
       final stubborn = _RefusingOnceRegistry();
       final saved = roomRegistry;
       roomRegistry = stubborn;
@@ -452,11 +544,100 @@ void main() {
       final code = joined['code'] as String;
 
       // The first generated code was claimed by another replica — the
-      // player must land in a freshly generated room, never the stolen one.
+      // player must land in a freshly claimed room, never the stolen one.
       expect(code, isNot(stubborn.refusedCode));
       expect(authority.rooms[code], isNotNull);
       expect(authority.rooms[stubborn.refusedCode], isNull,
-          reason: 'the duplicate room was dropped, not leaked');
+          reason: 'the duplicate code was never turned into a room');
+    });
+
+    test('a registry that refuses every code fails the hello cleanly',
+        () async {
+      final refusing = _RefusingAlwaysRegistry();
+      final saved = roomRegistry;
+      roomRegistry = refusing;
+      addTearDown(() => roomRegistry = saved);
+      final before = authority.rooms.keys.toSet();
+
+      host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'ex-1', 'name': 'Ex'}));
+      final err = await nextMsg(hostBuf, 'error');
+      expect(err['text'], contains('could not create a room'));
+      expect(refusing.attempted, hasLength(3),
+          reason: 'three codes are tried, then the creation gives up');
+      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
+          reason: 'no room may exist under an unclaimed code');
+    });
+
+    test('quick match fails cleanly when every generated code is refused',
+        () async {
+      final refusing = _RefusingAlwaysRegistry();
+      final saved = roomRegistry;
+      roomRegistry = refusing;
+      addTearDown(() => roomRegistry = saved);
+      final before = authority.rooms.keys.toSet();
+
+      host.sink.add(jsonEncode(
+          {'type': 'hello', 'seatId': 'ex-2', 'name': 'Ex', 'match': true}));
+      final err = await nextMsg(hostBuf, 'error');
+      expect(err['text'], contains('could not open a room'));
+      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
+          reason: 'a quick-matcher must never be seated in an '
+              'unroutable room');
+    });
+
+    test('a created room only becomes visible after its claim succeeds',
+        () async {
+      final slow = _SlowClaimRegistry(const Duration(milliseconds: 200));
+      final saved = roomRegistry;
+      roomRegistry = slow;
+      addTearDown(() => roomRegistry = saved);
+      final before = authority.rooms.keys.toSet();
+
+      host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'vis-1', 'name': 'Vis'}));
+      // Mid-claim: nobody can join, match, or watch a room whose code is
+      // not claimed yet — a refused claim must never strand a joiner in a
+      // room the server would then drop.
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
+          reason: 'a room awaiting its claim is not visible to anyone yet');
+      final joined = await nextMsg(hostBuf, 'joined');
+      expect(authority.rooms[joined['code']], isNotNull,
+          reason: 'once the claim lands the room opens normally');
+    });
+
+    test('a disconnect during the claim leaves no phantom room or stale route',
+        () async {
+      final slow = _SlowClaimRegistry(const Duration(milliseconds: 250));
+      final saved = roomRegistry;
+      roomRegistry = slow;
+      addTearDown(() => roomRegistry = saved);
+      // The production onRoomClosed wiring lives in main(); mirror it here
+      // so the test can observe the room's row being released on close.
+      final savedAuthority = authority;
+      authority = GameAuthority(onRoomClosed: (code, token) {
+        roomRegistry.unregister(code, owner: token).catchError((Object _) {});
+      });
+      addTearDown(() => authority = savedAuthority);
+      final before = authority.rooms.keys.toSet();
+
+      final dying = WebSocketChannel.connect(
+          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
+      await dying.ready;
+      dying.sink.add(jsonEncode(
+          {'type': 'hello', 'seatId': 'ghost', 'name': 'Ghost'}));
+      // Hang up while the remote claim is still in flight.
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await dying.sink.close();
+      // Let the claim answer, the cleanup notice the dead socket, and the
+      // room close its registry row.
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+
+      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
+          reason: 'no phantom occupied room may survive the dead host');
+      expect(slow.unregistered, isNotEmpty,
+          reason: 'the freshly claimed code must be released again');
     });
 
     test('/stats counts live WebSockets and drops them after close',

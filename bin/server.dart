@@ -71,27 +71,43 @@ final _connections = <String, String>{}; // connId -> roomCode
 
 int _connCounter = 0;
 
-/// Creates a room and claims its code in the cluster registry. Code
-/// uniqueness is checked against this instance's rooms only, so two
-/// replicas can generate the same 4-letter code; when the registry says
-/// another live instance owns the code, the fresh room is dropped (quietly
-/// — the row is the other instance's) and a new code is tried. After three
-/// attempts the room is kept best-effort; a registry outage never blocks
-/// creation — the room still hosts locally.
-Future<Room> _createRoomWithClaim(ServerMember host, {required String game}) async {
-  var room = authority.createRoom(host, game: game);
-  for (var attempt = 1; attempt < 3; attempt++) {
-    bool claimed;
+/// Creates a room whose code is claimed in the cluster registry BEFORE the
+/// room exists, so the code handed to the host always routes back to this
+/// replica: a registry refusal is answered with a different code (nothing
+/// to abandon — no room was ever created), never with an unroutable room.
+/// A registry outage still never blocks creation — the room opens locally
+/// with a self-minted token, exactly as before cluster routing, and the
+/// periodic sweep claims it once the registry returns. Throws
+/// [RoomRegistryException] when three consecutive codes are refused: that
+/// means the registry keeps handing our codes to other replicas, and
+/// creating anyway would strand the host's code on a foreign route.
+Future<Room> _createClaimedRoom(ServerMember host, {required String game}) async {
+  var token = newRegistryToken();
+  for (var attempt = 0; attempt < 3; attempt++) {
+    final code = authority.newCode();
+    final bool claimed;
     try {
-      claimed = await roomRegistry.register(room.code, instanceId);
+      claimed = await roomRegistry.register(code, instanceId, owner: token);
     } on RoomRegistryException catch (_) {
-      return room; // registry down — host locally, as before
+      return authority.createRoom(host, game: game); // registry down — host locally
     }
-    if (claimed) return room;
-    authority.abandonRoom(room);
-    room = authority.createRoom(host, game: game);
+    if (!claimed) {
+      token = newRegistryToken(); // the row belongs to another replica
+      continue;
+    }
+    try {
+      return authority.createRoom(host,
+          game: game, code: code, registryToken: token);
+    } on StateError catch (_) {
+      // Astronomically rare: a concurrent local creation took the code
+      // while the remote claim was in flight. Release the reservation and
+      // try another code.
+      await roomRegistry.unregister(code, owner: token).catchError((Object _) {});
+      token = newRegistryToken();
+    }
   }
-  return room;
+  throw RoomRegistryException(
+      'every generated room code is already owned by another replica');
 }
 
 shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
@@ -152,10 +168,12 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
               }
               final watched = authority.spectateRoom(code, member!);
               if (watched == null) {
+                final owner = await _foreignOwnerOf(code);
                 webSocket.sink.add(jsonEncode({
                   'type': 'error',
                   'text': "room '$code' not found "
                       '(or you are already playing in it)',
+                  'owner': ?owner,
                 }));
                 return;
               }
@@ -163,7 +181,22 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             } else if (code.isEmpty && match) {
               // Quick match: join the first waiting room of this game
               // type, or open one — then start as soon as two are seated.
-              room = authority.findMatch(member!, game: game);
+              // Matched rooms are already claimed (they predate this
+              // connection); opened ones go through _createClaimedRoom, so
+              // the code the player receives always routes back here. If
+              // every generated code is refused, the hello fails with an
+              // error instead of stranding the player on an unroutable
+              // room.
+              try {
+                room = authority.matchExisting(member!, game: game) ??
+                    await _createClaimedRoom(member!, game: game);
+              } on RoomRegistryException catch (_) {
+                webSocket.sink.add(jsonEncode({
+                  'type': 'error',
+                  'text': 'could not open a room — try again in a moment',
+                }));
+                return;
+              }
               if (!room.started && room.members.length >= 2) {
                 room.start();
                 // Push the initial snapshot to everyone — most importantly
@@ -171,27 +204,53 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
                 room.broadcastState();
               }
             } else if (code.isEmpty) {
-              room = await _createRoomWithClaim(member!, game: game);
+              try {
+                room = await _createClaimedRoom(member!, game: game);
+              } on RoomRegistryException catch (_) {
+                webSocket.sink.add(jsonEncode({
+                  'type': 'error',
+                  'text': 'could not create a room — try again in a moment',
+                }));
+                return;
+              }
             } else {
               var joined = authority.joinWithColor(code, member!, color);
               // Not a fresh join — maybe a returning player reclaiming
               // their seat (lobby or mid-game).
               joined ??= authority.rejoinRoom(code, member!);
               if (joined == null) {
+                final owner = await _foreignOwnerOf(code);
                 webSocket.sink.add(jsonEncode({
                   'type': 'error',
                   'text': roomFullOrMissing(code),
+                  'owner': ?owner,
                 }));
                 return;
               }
               room = joined;
             }
+            // The hello above can await the registry (creation claim,
+            // foreign-owner lookup), which gives the socket time to die.
+            // If it did, undo the seating instead of announcing into a
+            // dead connection: leaveRoom drops the just-created (empty)
+            // room — closing it and unregistering the freshly claimed
+            // code — or simply removes this player from a room that keeps
+            // living without them.
+            if (!_openConnections.contains(connId)) {
+              authority.leaveRoom(room.code, connId);
+              return;
+            }
             roomCode = room.code;
             _connections[connId] = room.code;
             // Advertise the room immediately so a reconnect through any
-            // edge can find this instance; the sweep keeps it fresh.
+            // edge can find this instance; the sweep keeps it fresh. For
+            // claimed creations this is a no-op refresh under the same
+            // token; for join/spectate/match paths it re-asserts a room
+            // that may predate a registry outage. A refusal here is a
+            // stale conflicting row for an already-live local room —
+            // nothing this connection can fix, so it is ignored.
             unawaited(roomRegistry
-                .register(room.code, instanceId)
+                .register(room.code, instanceId, owner: room.registryToken)
                 .catchError((_) => false));
             webSocket.sink.add(jsonEncode({
               'type': 'joined',
@@ -240,6 +299,24 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
 
 String roomFullOrMissing(String code) =>
     "room '$code' not found, already started, or full";
+
+/// The instance that owns [code] when this replica does not. Attached to
+/// "room not found" errors so the client can retry against the true owner:
+/// room-affinity hashing routes by the code, but a room is created on
+/// whichever replica the code-less first connection landed on, so a join
+/// or reconnect carrying `?code=` can hash to a replica that never saw the
+/// room. Returns null when the room is owned here, unknown cluster-wide
+/// (truly gone — the plain error is definitive), or the registry is
+/// unreachable (then behave exactly as before the reroute existed).
+Future<String?> _foreignOwnerOf(String code) async {
+  try {
+    final owner = await roomRegistry.lookup(code.trim().toUpperCase());
+    if (owner == null || owner == instanceId) return null;
+    return owner;
+  } on RoomRegistryException {
+    return null;
+  }
+}
 
 void _lobby(Room room) {
   room.broadcast({
@@ -351,6 +428,10 @@ Future<void> main(List<String> args) async {
   // TURSO_DATABASE_URL / TURSO_AUTH_TOKEN / PORT / INSTANCE_ID without
   // shell exports. Real environment variables always win over .env.
   final env = _loadEnvironment();
+  // Expose the merged environment to getters like [webDir], so .env-only
+  // settings (e.g. WEB_DIR) are honored too — the real environment still
+  // wins because _loadEnvironment merges .env under Platform.environment.
+  serverEnv = env;
 
   if (!portArg) port = int.tryParse(env['PORT'] ?? '') ?? port;
   instanceId = env['INSTANCE_ID']?.trim().isNotEmpty == true
@@ -367,8 +448,13 @@ Future<void> main(List<String> args) async {
       leaderboard: leaderboardStore,
       // Closing a room unregisters it from the cluster registry at once, so
       // /rooms/lookup stops routing joins to rooms this instance dropped.
-      onRoomClosed: (code) {
-        roomRegistry.unregister(code).catchError((Object _) {});
+      // The delete is scoped to the closing room's token: its code can be
+      // recycled into a new room before the slow Turso delete lands, and
+      // that live room's route must survive.
+      onRoomClosed: (code, registryToken) {
+        roomRegistry
+            .unregister(code, owner: registryToken)
+            .catchError((Object _) {});
       });
 
   // Same env vars drive the cross-instance room registry: with Turso,
@@ -387,7 +473,7 @@ Future<void> main(List<String> args) async {
       registryRefreshInterval(tursoRegistry?.ttl), (_) {
     for (final room in authority.rooms.values) {
       roomRegistry
-          .register(room.code, instanceId)
+          .register(room.code, instanceId, owner: room.registryToken)
           .catchError((Object _) => false);
     }
   });
