@@ -136,6 +136,27 @@ void main() {
       // A released code can be claimed by anyone again.
       expect(await registry.register('ABCD', 'game-2'), isTrue);
     });
+
+    test('unregister honours the room token when codes are recycled', () async {
+      final registry = InMemoryRoomRegistry();
+      await registry.register('ABCD', 'game-1', owner: 'room-1');
+
+      // Same instance, same code, new room (the old room is closing while
+      // the newer one already claimed the code): the stale close must not
+      // drop the live room's route.
+      await registry.register('ABCD', 'game-1', owner: 'room-2');
+      await registry.unregister('ABCD', owner: 'room-1');
+      expect(await registry.lookup('ABCD'), 'game-1',
+          reason: 'a stale close never erases a newer room on the same code');
+
+      await registry.unregister('ABCD', owner: 'room-2');
+      expect(await registry.lookup('ABCD'), isNull);
+
+      // A token-less unregister stays unconditional.
+      await registry.register('ABCD', 'game-1', owner: 'room-3');
+      await registry.unregister('ABCD');
+      expect(await registry.lookup('ABCD'), isNull);
+    });
   });
 
   group('TursoRoomRegistry over the HTTP pipeline API', () {
@@ -156,7 +177,8 @@ void main() {
       final requests = <http.Request>[];
       final registry = _registry(requests,
           reply: (_) async => _registerReply('game-1'));
-      expect(await registry.register('ABCD', 'game-1'), isTrue);
+      expect(await registry.register('ABCD', 'game-1', owner: 'room-42'),
+          isTrue);
 
       final stmts = _allStmts(requests);
       // Every pipeline ends by closing the stream (leaderboard-style).
@@ -187,11 +209,13 @@ void main() {
       final upsertArgs = execs[2]['stmt']['args'] as List<dynamic>;
       expect((upsertArgs[0] as Map)['value'], 'ABCD');
       expect((upsertArgs[1] as Map)['value'], 'game-1');
-      expect(int.parse('${(upsertArgs[2] as Map)['value']}'),
+      expect((upsertArgs[2] as Map)['value'], 'room-42',
+          reason: 'the room token rides along as the row owner');
+      expect(int.parse('${(upsertArgs[3] as Map)['value']}'),
           greaterThan(DateTime.now().millisecondsSinceEpoch),
           reason: 'expiry is in the future (the TTL)');
       expect(
-          int.parse('${(upsertArgs[3] as Map)['value']}'),
+          int.parse('${(upsertArgs[4] as Map)['value']}'),
           lessThan(DateTime.now().millisecondsSinceEpoch + 1000),
           reason: 'the CAS watermark is "now"');
     });
@@ -273,19 +297,22 @@ void main() {
       expect(await registry.lookup('NOPE'), isNull);
     });
 
-    test('unregister deletes the mapping', () async {
+    test('unregister deletes only the row owned by the closing room', () async {
       final requests = <http.Request>[];
       await _registry(requests, reply: (_) async => _okExecutes(2))
-          .unregister('ABCD');
+          .unregister('ABCD', owner: 'room-7');
 
       final execs = [
         for (final s in _allStmts(requests))
           if ((s as Map)['type'] == 'execute') s,
       ];
       expect(execs.last['stmt']['sql'],
-          'DELETE FROM room_registry WHERE code = ?');
+          'DELETE FROM room_registry WHERE code = ? AND owner IS ?',
+          reason: 'scoped to the token: a recycled code must survive a '
+              'stale close');
       final args = execs.last['stmt']['args'] as List<dynamic>;
-      expect((args.single as Map)['value'], 'ABCD');
+      expect((args[0] as Map)['value'], 'ABCD');
+      expect((args[1] as Map)['value'], 'room-7');
     });
 
     test('a failed pipeline step surfaces as RoomRegistryException',

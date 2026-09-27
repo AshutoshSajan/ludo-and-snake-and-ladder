@@ -8,6 +8,8 @@
 -- `results`/`players` are the leaderboard (lib/server/turso_leaderboard_store.dart),
 -- `room_registry` is the cross-instance routing map with a TTL column
 -- (lib/server/room_registry.dart) — expired rows are GC'd on every call.
+-- `owner` is the per-room token that scopes a close's delete so a recycled
+-- code's newer room is never erased by a stale unregister.
 
 CREATE TABLE IF NOT EXISTS results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,5 +31,6 @@ CREATE TABLE IF NOT EXISTS players (
 CREATE TABLE IF NOT EXISTS room_registry (
   code TEXT PRIMARY KEY,
   instance TEXT NOT NULL,
+  owner TEXT,
   expires_at INTEGER NOT NULL
 );

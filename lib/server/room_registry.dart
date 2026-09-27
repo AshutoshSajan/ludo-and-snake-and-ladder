@@ -37,14 +37,21 @@ abstract class RoomRegistry {
   /// code): the claim is refused so routing stays stable instead of
   /// flip-flopping between owners. Expired entries of other instances are
   /// fair game. A false return means the caller must pick another code.
-  Future<bool> register(String code, String instanceId);
+  /// [owner] is an opaque per-room token: codes are recycled the moment a
+  /// room closes, so two rooms can briefly share one code and the token is
+  /// what later lets [unregister] tell them apart.
+  Future<bool> register(String code, String instanceId, {String? owner});
 
   /// The owning instance id, or null when the room is unknown (or its
   /// entry has expired).
   Future<String?> lookup(String code);
 
-  /// Drops the mapping (e.g. the room closed cleanly).
-  Future<void> unregister(String code);
+  /// Drops the mapping (e.g. the room closed cleanly). When [owner] is
+  /// given, only the row still owned by THAT room is deleted: a close's
+  /// delete is asynchronous, and a newer room may already have claimed the
+  /// same code by the time it lands — deleting unconditionally would erase
+  /// the live room's route. A null [owner] drops unconditionally.
+  Future<void> unregister(String code, {String? owner});
 }
 
 /// Single-process registry: every lookup in this process succeeds. Used
@@ -52,12 +59,15 @@ abstract class RoomRegistry {
 /// tests.
 class InMemoryRoomRegistry implements RoomRegistry {
   final Map<String, String> _owners = {};
+  final Map<String, String?> _rowOwners = {};
 
   @override
-  Future<bool> register(String code, String instanceId) async {
+  Future<bool> register(String code, String instanceId,
+      {String? owner}) async {
     final current = _owners[code];
     if (current != null && current != instanceId) return false;
     _owners[code] = instanceId;
+    _rowOwners[code] = owner;
     return true;
   }
 
@@ -65,8 +75,12 @@ class InMemoryRoomRegistry implements RoomRegistry {
   Future<String?> lookup(String code) async => _owners[code];
 
   @override
-  Future<void> unregister(String code) async {
+  Future<void> unregister(String code, {String? owner}) async {
+    // A stale close (one whose room's code has already been recycled) must
+    // not drop the newer room's row — same protection as the Turso delete.
+    if (owner != null && _rowOwners[code] != owner) return;
     _owners.remove(code);
+    _rowOwners.remove(code);
   }
 }
 
@@ -129,19 +143,26 @@ class TursoRoomRegistry implements RoomRegistry {
     _execStmt('CREATE TABLE IF NOT EXISTS room_registry ('
         'code TEXT PRIMARY KEY, '
         'instance TEXT NOT NULL, '
+        'owner TEXT, '
         'expires_at INTEGER NOT NULL)'),
   ];
 
   static const _upsertSql = 'INSERT INTO room_registry (code, instance, '
-      'expires_at) VALUES (?, ?, ?) '
+      'owner, expires_at) VALUES (?, ?, ?, ?) '
       'ON CONFLICT(code) DO UPDATE SET instance = excluded.instance, '
-      'expires_at = excluded.expires_at '
+      'owner = excluded.owner, expires_at = excluded.expires_at '
       'WHERE room_registry.instance = excluded.instance '
       'OR room_registry.expires_at <= ?';
   static const _gcSql = 'DELETE FROM room_registry WHERE expires_at < ?';
   static const _selectSql =
       'SELECT instance FROM room_registry WHERE code = ?';
-  static const _deleteSql = 'DELETE FROM room_registry WHERE code = ?';
+
+  /// Scoped to the closing room's [owner] token: a code is recycled the
+  /// moment its room closes, so by the time this slow delete lands a newer
+  /// room may own the code — this must not erase the live room's route.
+  /// `owner IS ?` (not `= ?`) also matches rows with a NULL owner.
+  static const _deleteSql =
+      'DELETE FROM room_registry WHERE code = ? AND owner IS ?';
 
   /// Like the leaderboard pipelines, every pipeline ends with an explicit
   /// `close` so the server-side statement stream is released immediately
@@ -154,11 +175,12 @@ class TursoRoomRegistry implements RoomRegistry {
   /// untouched, and the trailing [_selectSql] reports who actually owns
   /// the code afterwards.
   @override
-  Future<bool> register(String code, String instanceId) async {
+  Future<bool> register(String code, String instanceId,
+      {String? owner}) async {
     final table = await _pipeline([
       ..._schema,
       _execStmt(_gcSql, [_nowMs()]),
-      _execStmt(_upsertSql, [code, instanceId, _expiryMs(), _nowMs()]),
+      _execStmt(_upsertSql, [code, instanceId, owner, _expiryMs(), _nowMs()]),
       _execStmt(_selectSql, [code]),
       _close,
     ]);
@@ -177,8 +199,8 @@ class TursoRoomRegistry implements RoomRegistry {
   }
 
   @override
-  Future<void> unregister(String code) =>
-      _pipeline([..._schema, _execStmt(_deleteSql, [code]), _close]);
+  Future<void> unregister(String code, {String? owner}) =>
+      _pipeline([..._schema, _execStmt(_deleteSql, [code, owner]), _close]);
 
   int _nowMs() => DateTime.now().millisecondsSinceEpoch;
   int _expiryMs() => _nowMs() + ttl.inMilliseconds;
