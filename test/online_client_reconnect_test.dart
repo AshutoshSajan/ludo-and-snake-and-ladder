@@ -89,6 +89,25 @@ Map<String, dynamic> _startedState() => createLudoState([
     ]).toJson();
 
 void main() {
+  test('a lowercase-typed code is canonicalized in the hashed ?code= URL',
+      () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+
+      client.connect(code: ' ab2c ');
+      async.flushMicrotasks();
+
+      // The load balancer hashes ?code= against the room's canonical
+      // uppercase spelling — the URL must never carry a lowercase copy.
+      expect(factory.uris.single.queryParameters['code'], 'AB2C');
+      // hello carries the same canonical code (the server stores rooms
+      // under code.toUpperCase()).
+      expect(factory.last.sent.first['code'], 'AB2C');
+    });
+  });
+
   test('a dropped socket triggers reconnect and restores the room', () {
     fakeAsync((async) {
       final factory = FakeChannelFactory();
