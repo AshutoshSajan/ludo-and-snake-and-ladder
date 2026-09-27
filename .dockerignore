@@ -1,0 +1,11 @@
+.git
+.github
+build
+.dart_tool
+.idea
+*.db
+.env
+deploy
+extension
+test
+tools
