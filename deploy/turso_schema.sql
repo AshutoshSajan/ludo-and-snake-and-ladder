@@ -9,7 +9,10 @@
 -- `room_registry` is the cross-instance routing map with a TTL column
 -- (lib/server/room_registry.dart) — expired rows are GC'd on every call.
 -- `owner` is the per-room token that scopes a close's delete so a recycled
--- code's newer room is never erased by a stale unregister.
+-- code's newer room is never erased by a stale unregister. Databases created
+-- by an earlier revision of the server are upgraded in place on first use
+-- (TursoRoomRegistry runs ALTER TABLE ... ADD COLUMN owner once), so this
+-- file is only needed for a brand-new database.
 
 CREATE TABLE IF NOT EXISTS results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

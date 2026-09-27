@@ -34,6 +34,12 @@ Map<String, dynamic> _execResult() => {
       },
     };
 
+/// A failed statement, as the pipeline API reports it.
+Map<String, dynamic> _errorResult(String message) => {
+      'type': 'error',
+      'error': {'message': message},
+    };
+
 const Map<String, dynamic> _closeResult = {
   'type': 'ok',
   'response': {'type': 'close'},
@@ -44,25 +50,44 @@ http.Response _okExecutes(int n) => _pipeline([
       _closeResult,
     ]);
 
-http.Response _rowsResult(List<List<dynamic>> rows, List<String> names) =>
-    _pipeline([
-      {
-        'type': 'ok',
-        'response': {
-          'type': 'execute',
-          'result': {
-            'cols': [
-              for (final n in names)
-                {'name': n, 'decltype': 'TEXT'},
-            ],
-            'rows': rows,
-            'affected_row_count': 0,
-            'last_insert_rowid': null,
-          },
+/// One SELECT result carrying [rows] under the given column [names].
+Map<String, dynamic> _rowsEntry(List<List<dynamic>> rows, List<String> names) =>
+    {
+      'type': 'ok',
+      'response': {
+        'type': 'execute',
+        'result': {
+          'cols': [
+            for (final n in names)
+              {'name': n, 'decltype': 'TEXT'},
+          ],
+          'rows': rows,
+          'affected_row_count': 0,
+          'last_insert_rowid': null,
         },
       },
-      _closeResult,
-    ]);
+    };
+
+http.Response _rowsResult(List<List<dynamic>> rows, List<String> names) =>
+    _pipeline([_rowsEntry(rows, names), _closeResult]);
+
+/// A scripted pipeline reply: [resultFor] answers each statement's SQL, the
+/// close step keeps its standard reply. Lets a test model database state —
+/// e.g. a table without the `owner` column, or a concurrent migration —
+/// while staying aligned with the request pipeline.
+Future<http.Response> _scriptedReply(
+    http.Request req, Object? Function(String sql) resultFor) async {
+  final results = <dynamic>[];
+  for (final s in _allStmts([req])) {
+    final stmt = s as Map;
+    if (stmt['type'] == 'close') {
+      results.add(_closeResult);
+    } else {
+      results.add(resultFor((stmt['stmt'] as Map)['sql'] as String));
+    }
+  }
+  return _pipeline(results);
+}
 
 /// Reply for a register pipeline: schema + GC + upsert executes, then the
 /// owner SELECT — returning [instance] and its row [owner] (or no rows
@@ -201,11 +226,88 @@ void main() {
       final requests = <http.Request>[];
       await _registry(requests).register('ABCD', 'game-1');
 
-      expect(requests, hasLength(1));
-      final r = requests.single;
-      expect(r.url.toString(), 'https://routes-acme.turso.io/v2/pipeline');
-      expect(r.headers['authorization'], 'Bearer tok');
-      expect(r.headers['content-type'], startsWith('application/json'));
+      // Two calls: the one-time schema upgrade, then the register itself.
+      expect(requests, hasLength(2));
+      for (final r in requests) {
+        expect(r.url.toString(), 'https://routes-acme.turso.io/v2/pipeline');
+        expect(r.headers['authorization'], 'Bearer tok');
+        expect(r.headers['content-type'], startsWith('application/json'));
+      }
+    });
+
+    test('an older table is migrated before the first statement needs owner',
+        () async {
+      final requests = <http.Request>[];
+      // Model a database created by an earlier revision: the table exists
+      // without the owner column, so CREATE IF NOT EXISTS is a no-op and
+      // every statement referencing owner fails until the ALTER lands.
+      var hasOwnerColumn = false;
+      final registry = _registry(
+          requests,
+          reply: (req) => _scriptedReply(req, (sql) {
+                if (sql.startsWith('CREATE TABLE')) return _execResult();
+                if (sql.startsWith('ALTER TABLE')) {
+                  if (hasOwnerColumn) {
+                    return _errorResult('duplicate column name: owner');
+                  }
+                  hasOwnerColumn = true;
+                  return _execResult();
+                }
+                if (sql.contains('owner') && !hasOwnerColumn) {
+                  return _errorResult('no such column: owner');
+                }
+                if (sql.startsWith('SELECT instance, owner')) {
+                  return _rowsEntry([
+                    [
+                      {'type': 'text', 'value': 'game-1'},
+                      {'type': 'text', 'value': 'room-1'},
+                    ],
+                  ], ['instance', 'owner']);
+                }
+                return _execResult();
+              }));
+
+      expect(await registry.register('ABCD', 'game-1', owner: 'room-1'), isTrue,
+          reason: 'the claim uses the owner column the upgrade just added');
+      expect(hasOwnerColumn, isTrue);
+
+      // The upgrade is a one-time cost per process.
+      await registry.lookup('ABCD');
+      await registry.unregister('ABCD', owner: 'room-1');
+      final upgrades = [
+        for (final s in _allStmts(requests))
+          if (((s as Map)['stmt'] as Map?)?['sql'] ==
+              'ALTER TABLE room_registry ADD COLUMN owner TEXT')
+            s,
+      ];
+      expect(upgrades, hasLength(1),
+          reason: 'the ALTER must not ride along on every call');
+    });
+
+    test('the upgrade tolerates a table that already has the column',
+        () async {
+      final requests = <http.Request>[];
+      // Fresh tables are created WITH owner, so the ALTER is answered with
+      // "duplicate column name" — expected, and must not fail the call.
+      final registry = _registry(
+          requests,
+          reply: (req) => _scriptedReply(req, (sql) {
+                if (sql.startsWith('ALTER TABLE')) {
+                  return _errorResult('duplicate column name: owner');
+                }
+                if (sql.startsWith('SELECT instance, owner')) {
+                  return _rowsEntry([
+                    [
+                      {'type': 'text', 'value': 'game-1'},
+                      {'type': 'null', 'value': null},
+                    ],
+                  ], ['instance', 'owner']);
+                }
+                return _execResult();
+              }));
+
+      expect(await registry.register('ABCD', 'game-1'), isTrue,
+          reason: 'the duplicate-column answer is the migration succeeding');
     });
 
     test(
@@ -217,7 +319,19 @@ void main() {
       expect(await registry.register('ABCD', 'game-1', owner: 'room-42'),
           isTrue);
 
-      final stmts = _allStmts(requests);
+      // The process-wide schema upgrade leads (see its own test), so the
+      // register pipeline is the last request.
+      final upgrade = _allStmts([requests.first]);
+      expect(
+          [
+            for (final s in upgrade)
+              if (((s as Map)['stmt'] as Map?)?['sql'] != null)
+                (s)['stmt']['sql'] as String,
+          ],
+          contains('ALTER TABLE room_registry ADD COLUMN owner TEXT'),
+          reason: 'tables from an earlier revision must gain the column');
+
+      final stmts = _allStmts([requests.last]);
       // Every pipeline ends by closing the stream (leaderboard-style).
       expect(stmts.last, {'type': 'close'});
       final execs = [
@@ -308,7 +422,8 @@ void main() {
       await registry.register('ABCD', 'game-1');
       await registry.lookup('ABCD');
       await registry.unregister('ABCD');
-      expect(requests, hasLength(3));
+      // The upgrade call, then one per call above.
+      expect(requests, hasLength(4));
       for (final r in requests) {
         final body = jsonDecode(r.body) as Map<String, dynamic>;
         expect((body['requests'] as List<dynamic>).last, {'type': 'close'},
@@ -330,7 +445,11 @@ void main() {
           throwsA(isA<RoomRegistryException>()
               .having((e) => '$e', 'message', contains('timed out after 10s'))),
         );
-        async.elapse(const Duration(seconds: 11));
+        // The one-time schema upgrade hangs first and is abandoned after
+        // its own 10s (its failure is swallowed — the register call below
+        // is what reports the outage), then the register pipeline hangs
+        // and is abandoned after another 10s.
+        async.elapse(const Duration(seconds: 21));
       });
     });
 

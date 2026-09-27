@@ -156,6 +156,32 @@ class TursoRoomRegistry implements RoomRegistry {
         'expires_at INTEGER NOT NULL)'),
   ];
 
+  /// Upgrade for tables created by an earlier revision: `CREATE TABLE IF
+  /// NOT EXISTS` cannot add a column to a table that already exists, so a
+  /// database whose `room_registry` predates [owner] would answer every
+  /// register, lookup, and unregister with "no such column: owner" — rooms
+  /// would then be created locally, where no other replica could find them.
+  /// The ALTER runs once before the first call and its failure is
+  /// tolerated, because the answer is expected whenever the column already
+  /// exists (fresh tables are created with it; replicas migrating
+  /// concurrently race the same way). Real problems still surface: the
+  /// caller's own statement fails loudly right after.
+  static const _upgradeSql =
+      'ALTER TABLE room_registry ADD COLUMN owner TEXT';
+
+  Future<void>? _upgrades;
+
+  /// Runs the schema upgrade once per process. A failed attempt (registry
+  /// unreachable) is retried by the next call; errors are swallowed here
+  /// because the caller's own pipeline reports a persistent problem.
+  Future<void> _upgradeSchema() => _upgrades ??= _pipeline([
+        ..._schema,
+        _execStmt(_upgradeSql),
+        _close,
+      ]).then<void>((_) {}, onError: (Object _, StackTrace _) {
+        _upgrades = null;
+      });
+
   static const _upsertSql = 'INSERT INTO room_registry (code, instance, '
       'owner, expires_at) VALUES (?, ?, ?, ?) '
       'ON CONFLICT(code) DO UPDATE SET instance = excluded.instance, '
@@ -189,6 +215,7 @@ class TursoRoomRegistry implements RoomRegistry {
   @override
   Future<bool> register(String code, String instanceId,
       {String? owner}) async {
+    await _upgradeSchema();
     final table = await _pipeline([
       ..._schema,
       _execStmt(_gcSql, [_nowMs()]),
@@ -205,6 +232,7 @@ class TursoRoomRegistry implements RoomRegistry {
 
   @override
   Future<String?> lookup(String code) async {
+    await _upgradeSchema();
     final table = await _pipeline([
       ..._schema,
       _execStmt(_gcSql, [_nowMs()]),
@@ -215,8 +243,10 @@ class TursoRoomRegistry implements RoomRegistry {
   }
 
   @override
-  Future<void> unregister(String code, {String? owner}) =>
-      _pipeline([..._schema, _execStmt(_deleteSql, [code, owner]), _close]);
+  Future<void> unregister(String code, {String? owner}) async {
+    await _upgradeSchema();
+    await _pipeline([..._schema, _execStmt(_deleteSql, [code, owner]), _close]);
+  }
 
   int _nowMs() => DateTime.now().millisecondsSinceEpoch;
   int _expiryMs() => _nowMs() + ttl.inMilliseconds;
