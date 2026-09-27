@@ -106,18 +106,43 @@ Future<Room> _createClaimedRoom(ServerMember host, {required String game}) async
       // moved back to the live room's token is untouched — and hand the
       // route straight back to that room, so lookups do not go dark (and a
       // third replica cannot grab the code) until its next sweep refresh.
+      // advertiseRoom re-checks the room afterwards: should it close while
+      // the hand-back is in flight, the route is dropped again instead of
+      // pointing at a dead room.
       await roomRegistry.unregister(code, owner: token).catchError((Object _) {});
       final winner = authority.rooms[code];
-      if (winner != null) {
-        await roomRegistry
-            .register(code, instanceId, owner: winner.registryToken)
-            .catchError((_) => false);
-      }
+      if (winner != null) await advertiseRoom(winner);
       token = newRegistryToken();
     }
   }
   throw RoomRegistryException(
       'every generated room code is already owned by another replica');
+}
+
+/// (Re)advertises [room]'s route in the cluster registry. Every route
+/// upkeep funnels through here: the claim made before the room existed,
+/// the refresh when a player joins or returns, and the periodic sweep.
+///
+/// A route must never outlive its room. A registration is a slow round
+/// trip, and the room can close while it is in flight — its close callback
+/// then removes the registry row first, and this late registration would
+/// restore the row (or create one) pointing at a room that no longer
+/// exists, sending `/rooms/lookup` joins to a dead room until the entry
+/// expires. The room is therefore re-checked once the round trip finishes,
+/// and the route dropped again when it is gone. The delete is scoped to
+/// the room's token, so a recycled code's newer room is never touched, and
+/// a registry outage simply leaves the route to the sweep's next attempt.
+Future<void> advertiseRoom(Room room) async {
+  try {
+    await roomRegistry.register(room.code, instanceId,
+        owner: room.registryToken);
+  } on RoomRegistryException {
+    return; // registry down — nothing was advertised; the sweep retries
+  }
+  if (!room.removed && authority.rooms[room.code] == room) return;
+  await roomRegistry
+      .unregister(room.code, owner: room.registryToken)
+      .catchError((Object _) {});
 }
 
 shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
@@ -258,10 +283,10 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             // token; for join/spectate/match paths it re-asserts a room
             // that may predate a registry outage. A refusal here is a
             // stale conflicting row for an already-live local room —
-            // nothing this connection can fix, so it is ignored.
-            unawaited(roomRegistry
-                .register(room.code, instanceId, owner: room.registryToken)
-                .catchError((_) => false));
+            // nothing this connection can fix, so it is ignored — and a
+            // room that closes while the registration is in flight has its
+            // route withdrawn again by [advertiseRoom].
+            unawaited(advertiseRoom(room));
             webSocket.sink.add(jsonEncode({
               'type': 'joined',
               'code': room.code,
@@ -482,9 +507,9 @@ Future<void> main(List<String> args) async {
   Timer.periodic(
       registryRefreshInterval(tursoRegistry?.ttl), (_) {
     for (final room in authority.rooms.values) {
-      roomRegistry
-          .register(room.code, instanceId, owner: room.registryToken)
-          .catchError((Object _) => false);
+      // A room can close mid-round-trip; advertiseRoom withdraws the route
+      // again when that happens, so the sweep never revives a dead room.
+      unawaited(advertiseRoom(room));
     }
   });
 

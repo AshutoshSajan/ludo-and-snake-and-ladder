@@ -8,6 +8,7 @@
 ///    the actual transport in `bin/server.dart`
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -39,7 +40,8 @@ import '../bin/server.dart'
         roomRegistry,
         instanceId,
         serverEnv,
-        webDir;
+        webDir,
+        advertiseRoom;
 
 ServerMember _member(LudoColor c,
         {String? seatId, String? id, void Function(String)? on}) =>
@@ -130,6 +132,40 @@ class _SlowClaimRegistry implements RoomRegistry {
   Future<void> unregister(String code, {String? owner}) async {
     unregistered.add(code);
     await _inner.unregister(code, owner: owner);
+  }
+}
+
+/// Cluster-registry stub that can hold its [register] calls open until the
+/// test releases it — models a remote round trip during which the room
+/// being advertised can close.
+class _HeldRegisterRegistry implements RoomRegistry {
+  final inner = InMemoryRoomRegistry();
+  final unregistered = <String>[];
+  Completer<void>? _held;
+
+  /// Makes every [register] wait until [release].
+  void holdNext() => _held = Completer<void>();
+
+  void release() {
+    _held?.complete();
+    _held = null;
+  }
+
+  @override
+  Future<bool> register(String code, String instanceId,
+      {String? owner}) async {
+    final gate = _held;
+    if (gate != null) await gate.future;
+    return inner.register(code, instanceId, owner: owner);
+  }
+
+  @override
+  Future<String?> lookup(String code) => inner.lookup(code);
+
+  @override
+  Future<void> unregister(String code, {String? owner}) async {
+    unregistered.add(code);
+    await inner.unregister(code, owner: owner);
   }
 }
 
@@ -1240,6 +1276,56 @@ void main() {
           const Duration(seconds: 1));
       expect(registryRefreshInterval(Duration.zero),
           const Duration(seconds: 1));
+    });
+  });
+
+  // ------------------------------------------------- registry advertisements
+
+  group('advertiseRoom (production route upkeep)', () {
+    test('a route is never restored for a room that closed mid-registration',
+        () async {
+      final registry = _HeldRegisterRegistry();
+      final savedRegistry = roomRegistry;
+      roomRegistry = registry;
+      addTearDown(() => roomRegistry = savedRegistry);
+      // Mirror the production wiring: closing a room drops its route.
+      final savedAuthority = authority;
+      final auth = GameAuthority(onRoomClosed: (code, token) {
+        registry.unregister(code, owner: token);
+      });
+      authority = auth;
+      addTearDown(() => authority = savedAuthority);
+
+      final room = auth.createRoom(_member(LudoColor.red));
+      registry.holdNext();
+      final advertising = advertiseRoom(room);
+      // The room closes while the registration is still in flight: its
+      // close callback removes the row first, so the registration that
+      // lands afterwards would otherwise put a route to a dead room back
+      // (and /rooms/lookup would keep sending joins there until the entry
+      // expired).
+      auth.leaveRoom(room.code, 'red');
+      expect(room.removed, isTrue);
+      registry.release();
+      await advertising;
+
+      expect(await registry.lookup(room.code), isNull,
+          reason: 'lookups must not route joins to a closed room');
+      expect(registry.unregistered, contains(room.code));
+    });
+
+    test('a live room keeps its route across the advertisement', () async {
+      final registry = _HeldRegisterRegistry();
+      final savedRegistry = roomRegistry;
+      roomRegistry = registry;
+      addTearDown(() => roomRegistry = savedRegistry);
+
+      final room = authority.createRoom(_member(LudoColor.green));
+      addTearDown(() => authority.leaveRoom(room.code, 'green'));
+      await advertiseRoom(room);
+
+      expect(await registry.lookup(room.code), instanceId,
+          reason: 'a live room stays advertised');
     });
   });
 
