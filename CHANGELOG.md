@@ -38,6 +38,55 @@ LeaderboardStore is now an abstract interface with two backends: the local SQLit
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Move the app providers onto Riverpod 3 notifiers
+
+Riverpod 3 moved StateNotifierProvider/StateNotifier out of the main import, and all four app notifiers were built on them, so flutter_riverpod 2.6.1 -> 3.4.3 needed a migration rather than a version bump.
+
+The setup that used to sit in each constructor now lives in build(), which is where 3.x expects it: return the default synchronously, apply the persisted value when storage answers. Ref is no longer passed through the constructor - a Notifier owns one as the protected `ref` - so the constructors and the injected `_ref` fields are gone. Every async callback checks `ref.mounted` first, because 3.x refuses to let a disposed Ref be touched and these loads can outlive the provider; the services used after the await are captured before it.
+
+ProfilesNotifier.load() disappeared: reading the provider runs build(), which starts the load, and nothing else called it. The two tests that hand-built a ProfilesNotifier with a Ref from a throwaway Provider<Ref> now read profilesProvider.notifier from a container overriding storageProvider with an inert storage whose load never completes, which keeps the old "never load(), never touch SharedPreferences" guarantee.
+
+Checked rather than assumed: NotifierProvider defaults to isAutoDispose false, and the repo uses no ref.listen, StateProvider, ChangeNotifierProvider, .autoDispose or ProviderObserver, so none of the 3.x lifecycle changes reach anything here.
+
+Analyze clean with --fatal-infos, 190 tests pass, web release build succeeds.
+- Refresh the locked dependency versions and CI action pins
+
+pub upgrade moved sqlite3 3.5.2 -> 3.6.0, meta 1.18.3 -> 1.19.0, vector_math 2.4.0 -> 2.4.3, platform 3.1.6 -> 3.2.0, synchronized 3.4.1+2 -> 3.4.2, objective_c 9.5.0 -> 9.6.0 and the sqlite3 build-hook chain (hooks, code_assets, native_toolchain_c, record_use, process). No pubspec constraint changed: every bump was already allowed by the existing carets, the lock had only drifted. flutter_riverpod 2.6.1 stays put on purpose - 3.x is a major release with provider lifecycle changes and needs its own migration.
+
+CI: actions/checkout v6 -> v7, git-cliff 2.14.1 -> 2.14.2. Checked against each repo release API: checkout v7.0.1 is current, flutter-action is at v2.23.0 so the v2 pin is current, create-pull-request is at v8.1.1 so the v8 pin is current.
+
+Analyze clean with --fatal-infos, 190 tests pass, web release build succeeds.
+- Say which part of the leaderboard path is broken
+
+The screen had one message for every failure, so a server that answered 500 --
+up, reachable, its own store broken -- told the player to check whether
+'dart run bin/server.dart' is running. That is the wrong errand, and it is what
+the deployed app does today.
+
+fetchLeaderboard now throws LeaderboardServerException when the server answers
+with a non-200 status, which is the point where 'reachable' and 'unreachable'
+actually split, and the screen words the two apart. A third state was already
+right and is now pinned by tests: zero finished games is an empty board, not an
+outage. The loader is injectable so the widget tests can show each state
+without a live server.
+- Answer a failing route as JSON, not as a bare shelf 500
+
+/leaderboard calls its store unguarded, so a revoked Turso token throws out of
+the handler. shelf then writes its own error page -- plain text, and from
+*outside* the middleware chain, which means no CORS headers either. A browser
+cannot read that response at all, so it reports a cross-origin block and the
+app blames the connection, while the fault is the server's own database.
+
+jsonErrorMiddleware now sits inside corsMiddleware and turns any throw into a
+500 JSON body with the CORS headers still applied, so the client sees a status
+it can name. The cause is logged rather than sent: the route is public and a
+store failure can quote the database URL. The log line names the method and
+path, because the deployed log previously showed a lone 500 with nothing to
+trace.
+
+Tested through the real middleware chain with a store whose reads fail, and
+live against a server pointed at an unreachable Turso host: JSON 500 carrying
+access-control-allow-origin, and '!! 500 on GET /leaderboard: ...' logged.
 - Let the browser read the JSON API: CORS on the server
 
 The Leaderboard screen failed on web even with the server up and
