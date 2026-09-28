@@ -1,10 +1,11 @@
 /// Tests for how a Snakes & Ladders game starts and how fast it plays:
 ///
-/// 1. Home area: every seat starts parked in its own garage, each marked with
-///    a house, in the strip directly under the board. The board itself numbers
-///    1..100, so a pawn at square 0 has no cell of its own and used to be drawn
-///    outside the board, where it was clipped and invisible.
-/// 2. The animated walk visibly leaves that garage and then enters the board.
+/// 1. Home area: every seat starts in ONE shared home area — a single panel
+///    under the board marked with one house, holding a colour chip per pawn
+///    that has not entered yet — not a separate "home" per player. The board
+///    itself numbers 1..100, so a pawn at square 0 has no cell of its own and
+///    used to be drawn outside the board, where it was clipped and invisible.
+/// 2. The animated walk visibly leaves that area and then enters the board.
 /// 3. Autoplay rolls and moves on its own, and stops when switched off — and
 ///    switching it at any moment still lands the move that is in flight.
 /// 4. Pacing: the timing constants shared by the session and the view keep a
@@ -22,6 +23,7 @@ import 'package:game_club/services/sound_service.dart';
 import 'package:game_club/ui/shared/dice_widget.dart';
 import 'package:game_club/ui/snakes/snakes_board_painter.dart';
 import 'package:game_club/ui/snakes/snakes_view.dart';
+import 'package:game_club/ui/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Haptics fire real platform channels during a move; swallow them so no
@@ -69,71 +71,98 @@ void main() {
 
   Finder board() => find.byWidgetPredicate(
       (w) => w is CustomPaint && w.painter is SnakesBoardPainter);
-  Finder garage(int seat) => find.byKey(ValueKey('garage-$seat'));
+  Finder homeArea() => find.byKey(const ValueKey('home-area'));
+  Finder homePawn(int seat) => find.byKey(ValueKey('home-pawn-$seat'));
   Finder ghost() => find.byKey(const ValueKey('ghost'));
   double screenHeight(WidgetTester tester) =>
       tester.view.physicalSize.height / tester.view.devicePixelRatio;
 
-  /// The painted garage of [seat]: filled (gradient) while its pawn waits at
-  /// home, only an empty ring once the pawn has left.
-  BoxDecoration garageDecoration(WidgetTester tester, int seat) => tester
-      .widget<Container>(
-          find.descendant(of: garage(seat), matching: find.byType(Container)))
-      .decoration! as BoxDecoration;
+  /// Colour of [seat]'s chip while its pawn waits at home.
+  Color chipColor(WidgetTester tester, int seat) {
+    final box = tester
+        .widget<Container>(
+            find.descendant(of: homePawn(seat), matching: find.byType(Container)))
+        .decoration! as BoxDecoration;
+    return (box.gradient! as RadialGradient).colors.last;
+  }
 
   group('1. home area', () {
-    testWidgets('every seat starts parked in its own house-marked garage',
+    testWidgets('all seats share ONE home area, each as a colour chip',
         (tester) async {
       await pumpGame(tester, 4);
-      expect(find.text('Home — waiting to enter'), findsOneWidget);
-
       final b = tester.getRect(board());
+      final area = tester.getRect(homeArea());
+
+      // One area for the table — not a separate home per player.
+      expect(homeArea(), findsOneWidget);
+      expect(find.byKey(const ValueKey('garage-0')), findsNothing,
+          reason: 'the per-seat garages are gone');
+      expect(
+        find.descendant(
+            of: homeArea(), matching: find.byIcon(Icons.home_rounded)),
+        findsOneWidget,
+        reason: 'exactly one house marks the area',
+      );
+      expect(find.text('Home'), findsOneWidget);
+      expect(find.text('4 of 4 waiting to enter'), findsOneWidget);
+
+      // It hangs directly under the board and never leaves the screen.
+      expect(area.top, greaterThanOrEqualTo(b.bottom - 1),
+          reason: 'the area sits under the board, not on top of it');
+      expect(area.bottom, lessThan(screenHeight(tester)),
+          reason: 'the area is never clipped off screen');
+      expect(area.width, closeTo(b.width, 0.5));
+
+      // Every seat's pawn waits in that one area, in the seat's own colour.
       for (var i = 0; i < 4; i++) {
-        expect(garage(i), findsOneWidget, reason: 'garage of seat ${i + 1}');
-        expect(
-          find.descendant(
-              of: garage(i), matching: find.byIcon(Icons.home_rounded)),
-          findsOneWidget,
-          reason: 'garage ${i + 1} is marked with a house, not a seat number',
-        );
-        expect(garageDecoration(tester, i).gradient, isNotNull,
-            reason: 'seat ${i + 1} still holds its pawn at home');
-        final r = tester.getRect(garage(i));
-        expect(r.top, greaterThanOrEqualTo(b.bottom - 1),
-            reason: 'the strip hangs under the board, not on top of it');
-        expect(r.bottom, lessThan(screenHeight(tester)),
-            reason: 'garages are never clipped off screen');
+        expect(homePawn(i), findsOneWidget, reason: 'pawn of seat ${i + 1}');
+        expect(chipColor(tester, i), AppColors.snakesColors[i]);
+        final r = tester.getRect(homePawn(i));
+        expect(area.contains(r.topLeft), isTrue,
+            reason: 'chip ${i + 1} is inside the one home area');
+        expect(area.contains(r.bottomRight - const Offset(0.01, 0.01)), isTrue,
+            reason: 'chip ${i + 1} is inside the one home area');
       }
     });
 
-    testWidgets('a ten seat game wraps the strip into a second row',
+    testWidgets('ten seats still share the one home area, in a single row',
         (tester) async {
       await pumpGame(tester, 10);
-      expect(garage(9), findsOneWidget);
-      expect(tester.getRect(garage(9)).top,
-          greaterThan(tester.getRect(garage(0)).top),
-          reason: 'seats past the first row drop below it');
-      expect(tester.getRect(garage(9)).bottom, lessThan(screenHeight(tester)));
-      expect(tester.getRect(board()).width, greaterThan(0));
+      expect(homeArea(), findsOneWidget);
+      final b = tester.getRect(board());
+      final tops = <double>{};
+      for (var i = 0; i < 10; i++) {
+        expect(homePawn(i), findsOneWidget, reason: 'pawn of seat ${i + 1}');
+        final r = tester.getRect(homePawn(i));
+        tops.add(r.top);
+        expect(r.left, greaterThanOrEqualTo(b.left - 0.5));
+        expect(r.right, lessThanOrEqualTo(b.right + 0.5));
+        expect(r.bottom, lessThan(screenHeight(tester)));
+      }
+      expect(tops.length, 1, reason: 'ten seats never grow a second area/row');
+      expect(find.text('10 of 10 waiting to enter'), findsOneWidget);
     });
   });
 
   group('2. the walk leaves home', () {
-    testWidgets('the pawn starts on its garage and then enters the board',
+    testWidgets('the pawn starts on its chip and then enters the board',
         (tester) async {
       await pumpGame(tester, 2);
       final b = tester.getRect(board());
-      final g0 = tester.getRect(garage(0));
+      final chip0 = tester.getRect(homePawn(0));
+      expect(chipColor(tester, 0), AppColors.snakesColors[0]);
       expect(ghost(), findsNothing, reason: 'nothing animates before a roll');
 
       await tester.tap(find.widgetWithText(FilledButton, 'ROLL'));
       await tester.pump(); // animation is live, still on its first waypoint
       expect(ghost(), findsOneWidget);
       expect(
-        (tester.getRect(ghost()).center - g0.center).distance,
+        (tester.getRect(ghost()).center - chip0.center).distance,
         lessThan(2),
-        reason: 'the first hop rests on the home garage, not off-screen',
+        reason: 'the first hop rests on the chip it left, not off-screen',
       );
+      expect(homePawn(0), findsNothing,
+          reason: 'the moving pawn is drawn by the ghost, not twice');
 
       await tester.pump(const Duration(milliseconds: 130)); // one hop later
       await tester.pump();
@@ -143,8 +172,9 @@ void main() {
       await tester.pump(const Duration(seconds: 2)); // walk + settle tail done
       await tester.pump();
       expect(ghost(), findsNothing);
-      expect(garageDecoration(tester, 0).gradient, isNull,
-          reason: 'the garage empties once the pawn has left home');
+      expect(homePawn(0), findsNothing,
+          reason: 'the pawn is gone from home once it has entered');
+      expect(find.text('1 of 2 waiting to enter'), findsOneWidget);
     });
   });
 

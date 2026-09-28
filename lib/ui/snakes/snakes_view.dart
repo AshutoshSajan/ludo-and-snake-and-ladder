@@ -187,12 +187,12 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
             _playerStrip(s),
             Expanded(
               child: LayoutBuilder(builder: (context, cons) {
-                // The board keeps its square shape and the home strip sits
+                // The board keeps its square shape and the home area sits
                 // directly under it — inside the SAME Stack. A pawn leaving
-                // home is drawn by the ghost hop, so the garages and the ghost
-                // must share one coordinate space or the pawn would appear to
-                // start from nowhere.
-                final homeH = _homeStripH(s.players.length);
+                // home is drawn by the ghost hop, so the home area and the
+                // ghost must share one coordinate space or the pawn would
+                // appear to start from nowhere.
+                final homeH = _homeStripH;
                 final boardSize = math.min(
                   cons.biggest.width,
                   math.max(cons.biggest.height - homeH, 0.0),
@@ -222,7 +222,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
                           ),
                         ),
                         ..._pawnWidgets(boardSize, s, movingToken),
-                        ..._homeWidgets(boardSize, s, movingToken),
+                        _homeArea(boardSize, s, movingToken),
                         if (session.activeAnim != null) _ghost(boardSize),
                       ],
                     ),
@@ -239,82 +239,131 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
 
   // ------------------------------------------------------------- home area
 
-  /// Garage geometry of the strip under the board. Fixed sizes so the drawn
-  /// garages and the ghost's square-0 rest position come out of one formula.
-  static const double _garageSize = 40;
-  static const double _garageGap = 8;
-  static const int _garagesPerRow = 5;
-  static const double _homeLabelH = 20;
+  /// One home area for the whole table: every player starts here, in a single
+  /// panel under the board instead of a separate garage per seat. Fixed sizes
+  /// so the painted pawns and the ghost's square-0 rest position come out of
+  /// one formula.
+  static const double _homePad = 8;
+  static const double _homeCaptionH = 20;
+  static const double _homeRowH = 40;
+  static const double _chipGap = 6;
+  static const double _chipMax = 34;
 
-  /// Height reserved for the strip: a label plus one row of garages per five
-  /// seats (up to two rows for the 10-seat maximum).
-  static double _homeStripH(int players) {
-    final rows = (players + _garagesPerRow - 1) ~/ _garagesPerRow;
-    return _homeLabelH + rows * (_garageSize + _garageGap) + 4;
+  /// Height reserved for the home area: a caption row plus one row of pawns,
+  /// whatever the seat count — ten seats share the panel by shrinking their
+  /// chips, never by growing a second area.
+  static const double _homeStripH = _homePad * 2 + _homeCaptionH + _homeRowH;
+
+  /// Diameter of a pawn chip, shrunk so every seat fits the panel's width.
+  static double _chipSize(double boardSize, int players) {
+    final n = math.max(players, 1);
+    final avail = boardSize - _homePad * 2 - _chipGap * (n - 1);
+    return math.min(_chipMax, math.max(avail / n, 12));
   }
 
-  /// Top-left of seat [slot]'s garage, in the shared board/strip coordinates.
-  static double _garageX(int slot) =>
-      (slot % _garagesPerRow) * (_garageSize + _garageGap);
-  static double _garageY(double boardSize, int slot) =>
-      boardSize + _homeLabelH + (slot ~/ _garagesPerRow) * (_garageSize + _garageGap);
+  /// Centre of seat [slot]'s pawn while it waits at home, in the coordinate
+  /// space it shares with the board. The chips are centred as one row, so the
+  /// same call places the ghost that hops out of the panel.
+  static Offset _chipCenter(double boardSize, int slot, int players) {
+    final d = _chipSize(boardSize, players);
+    final left =
+        (boardSize - (players * d + (players - 1) * _chipGap)) / 2;
+    return Offset(
+      left + slot * (d + _chipGap) + d / 2,
+      boardSize + _homePad + _homeCaptionH + _homeRowH / 2,
+    );
+  }
 
-  /// The home area: one house-marked garage per seat, drawn directly under the
-  /// board. Every pawn starts off-board at square 0 — the board itself numbers
-  /// 1..100, so square 0 has no cell and used to render the starting pawns
-  /// outside the board where they were clipped and invisible. A seat whose
-  /// pawn has left home keeps an empty ring so the layout never jumps, and the
-  /// pawn being animated stays out of its garage because the ghost hop draws it.
-  List<Widget> _homeWidgets(
-      double boardSize, SnakesState s, int? movingToken) {
-    return [
-      Positioned(
-        left: 0,
-        top: boardSize,
-        child: Text(
-          'Home — waiting to enter',
-          style: const TextStyle(fontSize: 11, color: Colors.white70),
+  /// The home area: ONE panel for the whole table, drawn directly under the
+  /// board in the same coordinate space as the board and the ghost hop. Every
+  /// pawn starts off-board at square 0 — the board itself numbers 1..100, so
+  /// square 0 has no cell and used to render the starting pawns outside the
+  /// board where they were clipped and invisible. Every seat's pawn waits
+  /// here as its own colour chip; a pawn that has left is simply gone from the
+  /// panel, and the pawn being animated is omitted because the ghost draws it.
+  Widget _homeArea(double boardSize, SnakesState s, int? movingToken) {
+    final waiting = [
+      for (final p in s.players)
+        if (p.square == 0 && p.tokenIndex != movingToken) p,
+    ];
+    final chip = _chipSize(boardSize, s.players.length);
+    return Positioned(
+      key: const ValueKey('home-area'),
+      left: 0,
+      top: boardSize,
+      width: boardSize,
+      height: _homeStripH,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: AppColors.feltLight.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: _homePad,
+              right: _homePad,
+              top: _homePad * 0.7,
+              child: Row(
+                children: [
+                  const Icon(Icons.home_rounded,
+                      size: 15, color: AppColors.gold),
+                  const SizedBox(width: 5),
+                  const Text(
+                    'Home',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.ivory,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      waiting.isEmpty
+                          ? 'every pawn is out'
+                          : '${waiting.length} of ${s.players.length} waiting to enter',
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.white60),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            for (final p in waiting)
+              // `_chipCenter` is in board space; the panel's own Stack starts
+              // at the panel, so shift it up by the board's height.
+              Positioned(
+                key: ValueKey('home-pawn-${p.tokenIndex}'),
+                left: _chipCenter(boardSize, p.tokenIndex, s.players.length).dx -
+                    chip / 2,
+                top: _chipCenter(boardSize, p.tokenIndex, s.players.length).dy -
+                    boardSize - chip / 2,
+                child: _pawnChip(p, chip),
+              ),
+          ],
         ),
       ),
-      for (var i = 0; i < s.players.length; i++)
-        Positioned(
-          key: ValueKey('garage-$i'),
-          left: _garageX(i),
-          top: _garageY(boardSize, i),
-          child: _garageSlot(s.players[i], s.players[i].square == 0 &&
-              s.players[i].tokenIndex != movingToken),
-        ),
-    ];
+    );
   }
 
-  Widget _garageSlot(SnakesPlayer p, bool occupied) {
+  /// A player's pawn waiting at home: just the player's colour. The one house
+  /// in the caption is what marks the area — no per-seat houses, no numbers.
+  Widget _pawnChip(SnakesPlayer p, double size) {
     final color = AppColors.snakesColors[p.tokenIndex];
     return Container(
-      width: _garageSize,
-      height: _garageSize,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: occupied
-            ? RadialGradient(
-                colors: [color.withValues(alpha: 0.95), color],
-                stops: const [0.4, 1],
-              )
-            : null,
-        color: occupied ? null : Colors.transparent,
-        border: Border.all(
-          color: occupied ? Colors.white : Colors.white24,
-          width: occupied ? 1.5 : 1,
+        gradient: RadialGradient(
+          colors: [color.withValues(alpha: 0.95), color],
+          stops: const [0.4, 1],
         ),
-      ),
-      child: Center(
-        // Every garage is marked with a house rather than the seat's number:
-        // the strip is where pawns start, so "home" reads at a glance and the
-        // number stays where it matters — on the seat card in the strip above.
-        child: Icon(
-          Icons.home_rounded,
-          size: _garageSize * 0.5,
-          color: occupied ? Colors.white : Colors.white38,
-        ),
+        border: Border.all(color: Colors.white, width: 1.5),
       ),
     );
   }
@@ -392,14 +441,14 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     final step = _animStep.clamp(0, anim.waypoints.length - 1);
     final sq = anim.waypoints[step];
     final cell = boardSize / 10;
-    // Waypoint 0 is "still at home": rest on that seat's garage, in the strip
-    // under the board, so the walk visibly starts from home.
+    // Waypoint 0 is "still at home": rest on that seat's chip in the shared
+    // home area, so the walk visibly starts from home.
     final atHome = sq <= 0;
+    final players = session.state.players.length;
     final c = atHome
-        ? Offset(_garageX(anim.tokenIndex) + _garageSize / 2,
-            _garageY(boardSize, anim.tokenIndex) + _garageSize / 2)
+        ? _chipCenter(boardSize, anim.tokenIndex, players)
         : SnakesBoardPainter.squareCenter(sq, Size.square(boardSize));
-    final size = atHome ? _garageSize * 0.82 : cell * 0.62;
+    final size = atHome ? _chipSize(boardSize, players) : cell * 0.62;
     final color =
         AppColors.snakesColors[anim.tokenIndex % AppColors.snakesColors.length];
     return Positioned(
