@@ -10,42 +10,49 @@ import '../services/storage_service.dart';
 final storageProvider = Provider<StorageService>((ref) => StorageService());
 
 final soundEnabledProvider =
-    StateNotifierProvider<SoundToggle, bool>((ref) => SoundToggle(ref));
+    NotifierProvider<SoundToggle, bool>(SoundToggle.new);
 
-class SoundToggle extends StateNotifier<bool> {
-  SoundToggle(this._ref) : super(true) {
-    _ref.read(storageProvider).loadSoundEnabled().then((v) {
+class SoundToggle extends Notifier<bool> {
+  @override
+  bool build() {
+    // Resolved up front: the load can outlive this provider, and a disposed
+    // Ref refuses to answer `read` from 3.0 on.
+    final storage = ref.read(storageProvider);
+    final sound = ref.read(soundServiceProvider);
+    storage.loadSoundEnabled().then((v) {
+      if (!ref.mounted) return;
       state = v;
-      _ref.read(soundServiceProvider).enabled = v;
+      sound.enabled = v;
     });
+    return true;
   }
-
-  final Ref _ref;
 
   void toggle() {
     state = !state;
-    _ref.read(soundServiceProvider).enabled = state;
-    _ref.read(storageProvider).saveSoundEnabled(state);
+    ref.read(soundServiceProvider).enabled = state;
+    ref.read(storageProvider).saveSoundEnabled(state);
   }
 }
 
 final hapticsEnabledProvider =
-    StateNotifierProvider<HapticsToggle, bool>((ref) => HapticsToggle(ref));
+    NotifierProvider<HapticsToggle, bool>(HapticsToggle.new);
 
-class HapticsToggle extends StateNotifier<bool> {
-  HapticsToggle(this._ref) : super(true) {
-    _ref.read(storageProvider).loadHapticsEnabled().then((v) {
+class HapticsToggle extends Notifier<bool> {
+  @override
+  bool build() {
+    final storage = ref.read(storageProvider);
+    storage.loadHapticsEnabled().then((v) {
+      if (!ref.mounted) return;
       state = v;
       Haptics.enabled = v;
     });
+    return true;
   }
-
-  final Ref _ref;
 
   void toggle() {
     state = !state;
     Haptics.enabled = state;
-    _ref.read(storageProvider).saveHapticsEnabled(state);
+    ref.read(storageProvider).saveHapticsEnabled(state);
   }
 }
 
@@ -53,18 +60,22 @@ class HapticsToggle extends StateNotifier<bool> {
 /// glow, spinning selection rings). One-shot feedback like the dice tumble
 /// and token hops still play — they stop by themselves in under a second.
 final animationsEnabledProvider =
-    StateNotifierProvider<AnimationsToggle, bool>((ref) => AnimationsToggle(ref));
+    NotifierProvider<AnimationsToggle, bool>(AnimationsToggle.new);
 
-class AnimationsToggle extends StateNotifier<bool> {
-  AnimationsToggle(this._ref) : super(true) {
-    _ref.read(storageProvider).loadAnimationsEnabled().then((v) => state = v);
+class AnimationsToggle extends Notifier<bool> {
+  @override
+  bool build() {
+    final storage = ref.read(storageProvider);
+    storage.loadAnimationsEnabled().then((v) {
+      if (!ref.mounted) return;
+      state = v;
+    });
+    return true;
   }
-
-  final Ref _ref;
 
   void toggle() {
     state = !state;
-    _ref.read(storageProvider).saveAnimationsEnabled(state);
+    ref.read(storageProvider).saveAnimationsEnabled(state);
   }
 }
 
@@ -75,21 +86,25 @@ final soundServiceProvider = Provider<SoundService>((ref) {
 });
 
 final profilesProvider =
-    StateNotifierProvider<ProfilesNotifier, List<PlayerProfile>>((ref) {
-  final notifier = ProfilesNotifier(ref);
-  notifier.load();
-  return notifier;
-});
+    NotifierProvider<ProfilesNotifier, List<PlayerProfile>>(
+        ProfilesNotifier.new);
 
-class ProfilesNotifier extends StateNotifier<List<PlayerProfile>> {
-  ProfilesNotifier(this._ref) : super(const []);
+class ProfilesNotifier extends Notifier<List<PlayerProfile>> {
+  PlayerRegistry _registry = PlayerRegistry();
 
-  final Ref _ref;
-  late PlayerRegistry _registry = PlayerRegistry();
-
-  Future<void> load() async {
-    _registry = await _ref.read(storageProvider).loadProfiles();
-    state = _registry.profiles.toList();
+  /// The first frame shows no profiles: `build` has to hand back a value
+  /// synchronously, so the list fills in when storage answers. That is the
+  /// same behaviour as before, when `load()` ran right after construction.
+  @override
+  List<PlayerProfile> build() {
+    _registry = PlayerRegistry();
+    final storage = ref.read(storageProvider);
+    storage.loadProfiles().then((registry) {
+      if (!ref.mounted) return;
+      _registry = registry;
+      state = registry.profiles.toList();
+    });
+    return const [];
   }
 
   PlayerProfile create(String name) {
@@ -122,7 +137,7 @@ class ProfilesNotifier extends StateNotifier<List<PlayerProfile>> {
 
   void _persist() {
     state = _registry.profiles.toList();
-    _ref.read(storageProvider).saveProfiles(_registry).catchError((e) {
+    ref.read(storageProvider).saveProfiles(_registry).catchError((e) {
       if (kDebugMode) debugPrint('profile save failed: $e');
       return;
     });
