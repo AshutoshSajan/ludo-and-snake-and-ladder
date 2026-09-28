@@ -30,6 +30,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../bin/server.dart'
     show
         corsMiddleware,
+        jsonErrorMiddleware,
         wsHandler,
         leaderboardHandler,
         leaderboardStore,
@@ -1360,6 +1361,19 @@ void main() {
       expect(webDir, tmp.path);
     });
 
+    test('a WEB_DIR without index.html is ignored', () async {
+      final tmp = await Directory.systemTemp.createTemp('game-club-empty');
+      final prev = serverEnv;
+      serverEnv = {'WEB_DIR': tmp.path};
+      addTearDown(() {
+        serverEnv = prev;
+        tmp.deleteSync(recursive: true);
+      });
+
+      expect(webDir, isNull);
+    });
+  });
+
   group('CORS (dev web app runs on another origin)', () {
     /// Which production handler backs each browser-visible route.
     Future<shelf.Response> routed(String path, shelf.Request req) {
@@ -1436,19 +1450,52 @@ void main() {
       expect(resp.headers['access-control-allow-origin'],
           'http://localhost:42891');
     });
-  });
 
-
-    test('a WEB_DIR without index.html is ignored', () async {
-      final tmp = await Directory.systemTemp.createTemp('game-club-empty');
-      final prev = serverEnv;
-      serverEnv = {'WEB_DIR': tmp.path};
-      addTearDown(() {
-        serverEnv = prev;
-        tmp.deleteSync(recursive: true);
-      });
-
-      expect(webDir, isNull);
+    test('a store failure reaches the browser as a readable JSON 500',
+        () async {
+      // The deployed failure: Turso rejects its token mid-request. Left to
+      // throw, the error escapes to shelf's own page, which is written
+      // outside the middleware chain — plain text, no CORS headers — so the
+      // browser reports a cross-origin block and the app blames the
+      // connection while the fault is the server's own database.
+      leaderboardStore = _RevokedTursoStore();
+      final pipeline = corsMiddleware(jsonErrorMiddleware(leaderboardHandler));
+      final resp = await pipeline(shelf.Request(
+        'GET',
+        Uri.parse('http://localhost/leaderboard'),
+        headers: {'origin': 'http://localhost:42891'},
+      ));
+      expect(resp.statusCode, 500);
+      expect(resp.headers['content-type'], contains('application/json'));
+      expect(resp.headers['access-control-allow-origin'],
+          'http://localhost:42891');
+      final body =
+          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+      expect(body['ok'], isFalse);
+      // The cause is logged, not broadcast: this route is public and a store
+      // failure can quote the database URL.
+      expect(body['text'], isNot(contains('libsql')));
     });
   });
 }
+
+/// A store that fails every read, as a deployed server does when its Turso
+/// token is revoked: the route is fine, the database behind it is not.
+class _RevokedTursoStore implements LeaderboardStore {
+  @override
+  Future<void> recordResults(
+          {required String gameId, required List<GameResult> results}) async
+      =>
+      throw StateError('libsql: 401 unauthorized');
+
+  @override
+  Future<List<LeaderboardEntry>> topPlayers({int limit = 10}) async =>
+      throw StateError('libsql: 401 unauthorized');
+
+  @override
+  Future<int> totalGames() async => throw StateError('libsql: 401 unauthorized');
+
+  @override
+  void close() {}
+}
+

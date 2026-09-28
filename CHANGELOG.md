@@ -38,6 +38,133 @@ LeaderboardStore is now an abstract interface with two backends: the local SQLit
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Let the browser read the JSON API: CORS on the server
+
+The Leaderboard screen failed on web even with the server up and
+answering: the Flutter dev page (http://localhost:<random port>) and
+the game server (:8080) are different origins, so the browser fetched
+`/leaderboard` fine and then refused to hand the response to the app —
+and the app surfaced that as "Could not reach the server".
+
+The production pipeline now wraps its routes in `corsMiddleware`, which
+reflects the request Origin plus `Vary: Origin` on the read-only JSON API
+(`/health`, `/leaderboard`, `/stats`, `/rooms/lookup`) and answers OPTIONS
+preflights with 200. WebSockets need no preflight so `/ws` is untouched,
+writes stay rejected with 405, and nothing riding auth or cookies changes:
+the only bearer token in the picture is Turso's, server-side.
+
+Covered by two server tests that exercise the real middleware, not the
+raw handlers: all four routes carry the headers and answer OPTIONS, and
+a POST is still a 405 with the headers present. Verified live too, with a
+browser-shaped Origin header against a scratch server.
+- Write the changelog's escaped newlines as line breaks
+
+The "Keep the page port in the same-origin server URL" note landed as one
+physical line carrying nine literal 
+ escapes: its commit body was
+written with escaped newlines and git-cliff copies a body verbatim into
+the notes, so the paragraph is unreadable in the release notes and in the
+release PR (flagged on CHANGELOG.md line 173).
+
+A postprocessor now turns that two-character escape into the line break
+it was meant to be, which repairs this entry and any future body written
+the same way, and the changelog is regenerated. The rest of the file is
+byte-for-byte what CI generates - regenerating before the change
+reproduced the committed file exactly, and afterwards the diff is only
+those nine escapes.
+
+The commit message itself cannot be rewritten, since it is already on
+staging and main; the guard belongs in the generator.
+- Give the snakes game one home area, not one per player
+
+Every seat had its own house-marked garage under the board, so "where do
+pawns start" had as many answers as there were players, and at ten seats
+the strip grew a second row of them. There is now a single home area:
+one panel under the board, marked with one house and a count of who is
+still waiting, holding a colour chip per pawn that has not entered yet.
+Chips shrink to keep all ten in one row rather than growing a second
+area, and a pawn that has entered simply leaves the panel.
+
+The panel and the ghost hop still share one coordinate space, so a pawn
+departs from the exact spot its chip occupied - one formula places both,
+with the panel's own origin accounted for. The moving pawn is drawn only
+by the ghost, so it never shows up twice during the walk.
+- Review only the PRs that target main
+
+Greptile reviewed every pull request in this repo, so the daily feature
+PRs into dev competed for attention with the one change that is actually
+about to ship. A committed .greptile/config.json now narrows it:
+
+  "includeBranches": ["main"]
+
+The filter is inclusive and is matched against the PR's base branch, so
+with this repo's tiers the only PR Greptile reviews is staging -> main -
+the release PR. PRs into dev/sandbox stay CI-gated, drafts are skipped
+until they are marked ready, and any PR the filter skips can still be
+reviewed on demand with @greptileai.
+
+Widening or inverting it is a one-line edit (includeBranches, or
+excludeBranches to review everything but a tier); both take globs. The
+new README section records that, the dashboard equivalent, and the one
+gotcha worth knowing: Greptile reads the config from the PR's source
+branch, so a branch obeys the filter only once it contains the file.
+- Give the home garages a house and every platform an icon
+
+Snakes & Ladders: the strip under the board labelled each garage with a
+seat number, which reads as a board square rather than as home - square
+0 is off-board, so a waiting pawn is not on any square yet. Every garage
+now carries a house (dimmed once its pawn has left) and the seat numbers
+stay where they belong, on the seat cards above.
+
+The app also had no icon of its own: the web build served Flutter's
+default favicon, Android a placeholder launcher PNG, and the PWA a
+"game_club" manifest in Flutter blue. One drawing now feeds all of it -
+a gold-rimmed ivory die on the felt table, in the palette of
+lib/ui/theme.dart - via tools/gen_app_icons.py, a stdlib-only generator
+in the spirit of gen_extension_icons.py. It renders one anti-aliased
+master per variant and box-filters it down to every required size:
+
+  web/favicon.png                     rounded corners, 32 px
+  web/icons/Icon-192|512.png          full bleed, no alpha
+  web/icons/Icon-maskable-*.png       full bleed, content inside the mask
+  android/.../ic_launcher.png         one per density
+  android/.../ic_launcher_foreground  adaptive layer + anydpi-v26 wiring
+  ios/.../AppIcon.appiconset          opaque: iOS rejects alpha
+  macos/.../app_icon_*.png            rounded
+  windows/.../app_icon.ico            16/32/48 DIB + 256 PNG entries
+
+Re-running the generator is a byte-for-byte no-op, so the set can be
+rebuilt whenever the mark changes.
+
+The names those icons sit under are aligned too: the PWA manifest and
+page title become "Game Club" with the icon's felt-green theme colour,
+and Android's launcher label stops saying "game_club".
+- Show the dice on every roll and park starting pawns in home
+
+Three bugs from playing the games, all with a test each:
+
+Ludo: a roll that ends the turn on the spot — nothing legal to move, or
+the triple-six forfeit — nulls lastRoll inside rollDice, before the view
+is ever notified. The dice keyed its tumble and its face off lastRoll,
+so exactly the rolls a player most wants to see came up dead still.
+Record the face and the seat in lastRolledValue/lastRolledBy, which no
+rule reads, and drive the tumble off the roll sequence instead.
+
+Snakes: pawns start at square 0, which has no cell on a 1..100 board, so
+the whole starting lineup was drawn outside the board and clipped away.
+Hang a strip of numbered garages under the board inside the same Stack
+and coordinate space, so a pawn leaving home is one continuous hop from
+its garage onto square 1.
+
+Snakes: a move took 260ms per hop plus a 150ms tail — slow enough that
+players tapped ahead. One hop is now 120ms with a 260ms tail, shared as
+constants between the session and the view so the dice tumble window
+cannot drift from the walk it opens.
+
+Also: autoplay for human seats (the pause-menu "go for a break" beat),
+and scheduleNext no longer cancels the timer that lands an in-flight
+move — toggling autoplay mid-walk used to strand the pawn mid-board
+with the session permanently busy.
 - Memoize the duplicate-column upgrade as done
 
 A fresh table answers ALTER TABLE ... ADD COLUMN owner with "duplicate column name: owner". The previous handler cleared _upgrades on every error, so that expected answer resent the doomed ALTER (a full extra round trip) on every register, lookup, and unregister. Treat only the duplicate-column answer as done; other failures stay pending and are retried by the next call.

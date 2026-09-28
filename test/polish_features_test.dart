@@ -2,6 +2,7 @@
 /// and persisted settings (sound / haptics / animations).
 library;
 
+import 'dart:async';
 import 'dart:math';
 
 import 'package:fake_async/fake_async.dart';
@@ -32,7 +33,15 @@ class _CountingSound extends SoundService {
   Future<void> dice() async {}
 }
 
-final _refProvider = Provider<Ref>((ref) => ref);
+/// A storage that never answers. Reading `profilesProvider` makes its `build`
+/// kick off a load, and a load that never completes can neither reach
+/// SharedPreferences nor overwrite the profiles a test creates by hand.
+class _InertStorage extends StorageService {
+  @override
+  Future<PlayerRegistry> loadProfiles() => Completer<PlayerRegistry>().future;
+  @override
+  Future<void> saveProfiles(PlayerRegistry registry) async {}
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -42,12 +51,24 @@ void main() {
   });
   SharedPreferences.setMockInitialValues({});
 
+  /// Since Riverpod 3 a notifier owns the Ref it reads its dependencies
+  /// through, so it can only come from a container. One throwaway container
+  /// per session keeps each session's profiles as separate as they were when
+  /// the notifier was built by hand.
+  ProfilesNotifier makeProfiles() {
+    final container = ProviderContainer(
+      overrides: [storageProvider.overrideWithValue(_InertStorage())],
+    );
+    addTearDown(container.dispose);
+    return container.read(profilesProvider.notifier);
+  }
+
   LudoSession makeSession() => LudoSession(
         seats: [
           SeatSetup(name: 'R', color: LudoColor.red),
           SeatSetup(name: 'Y', color: LudoColor.yellow),
         ],
-        profiles: ProfilesNotifier(ProviderContainer().read(_refProvider)),
+        profiles: makeProfiles(),
         sound: _CountingSound(),
         onGameOver: (_) {},
         rng: _FixedRandom(),
