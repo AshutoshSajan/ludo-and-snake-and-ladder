@@ -1,9 +1,9 @@
 /// Tests for how a Snakes & Ladders game starts and how fast it plays:
 ///
-/// 1. Home area: every seat starts parked in its own numbered garage in the
-///    strip directly under the board. The board itself numbers 1..100, so a
-///    pawn at square 0 has no cell of its own and used to be drawn outside the
-///    board, where it was clipped and invisible.
+/// 1. Home area: every seat starts parked in its own garage, each marked with
+///    a house, in the strip directly under the board. The board itself numbers
+///    1..100, so a pawn at square 0 has no cell of its own and used to be drawn
+///    outside the board, where it was clipped and invisible.
 /// 2. The animated walk visibly leaves that garage and then enters the board.
 /// 3. Autoplay rolls and moves on its own, and stops when switched off — and
 ///    switching it at any moment still lands the move that is in flight.
@@ -82,7 +82,7 @@ void main() {
       .decoration! as BoxDecoration;
 
   group('1. home area', () {
-    testWidgets('every seat starts parked in its own numbered garage',
+    testWidgets('every seat starts parked in its own house-marked garage',
         (tester) async {
       await pumpGame(tester, 4);
       expect(find.text('Home — waiting to enter'), findsOneWidget);
@@ -90,6 +90,12 @@ void main() {
       final b = tester.getRect(board());
       for (var i = 0; i < 4; i++) {
         expect(garage(i), findsOneWidget, reason: 'garage of seat ${i + 1}');
+        expect(
+          find.descendant(
+              of: garage(i), matching: find.byIcon(Icons.home_rounded)),
+          findsOneWidget,
+          reason: 'garage ${i + 1} is marked with a house, not a seat number',
+        );
         expect(garageDecoration(tester, i).gradient, isNotNull,
             reason: 'seat ${i + 1} still holds its pawn at home');
         final r = tester.getRect(garage(i));

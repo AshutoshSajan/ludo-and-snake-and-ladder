@@ -259,7 +259,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   static double _garageY(double boardSize, int slot) =>
       boardSize + _homeLabelH + (slot ~/ _garagesPerRow) * (_garageSize + _garageGap);
 
-  /// The home area: one numbered garage per seat, drawn directly under the
+  /// The home area: one house-marked garage per seat, drawn directly under the
   /// board. Every pawn starts off-board at square 0 — the board itself numbers
   /// 1..100, so square 0 has no cell and used to render the starting pawns
   /// outside the board where they were clipped and invisible. A seat whose
@@ -307,13 +307,13 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
         ),
       ),
       child: Center(
-        child: Text(
-          '${p.tokenIndex + 1}',
-          style: TextStyle(
-            fontSize: 13,
-            color: occupied ? Colors.white : Colors.white38,
-            fontWeight: FontWeight.w800,
-          ),
+        // Every garage is marked with a house rather than the seat's number:
+        // the strip is where pawns start, so "home" reads at a glance and the
+        // number stays where it matters — on the seat card in the strip above.
+        child: Icon(
+          Icons.home_rounded,
+          size: _garageSize * 0.5,
+          color: occupied ? Colors.white : Colors.white38,
         ),
       ),
     );

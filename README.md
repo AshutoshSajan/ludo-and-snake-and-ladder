@@ -49,6 +49,7 @@ lib/
 
 assets/sounds/         # 8 procedurally synthesized WAV effects
 tools/gen_sounds.dart  # regenerates them: dart run tools/gen_sounds.dart
+tools/gen_app_icons.py # favicon + Android/iOS/macOS/Windows launcher icons
 test/                  # 26 engine rule tests + 2 widget smoke tests
 ```
 
@@ -154,6 +155,21 @@ flutter build linux --release
 Android/iOS: open in Android Studio / Xcode and run normally, or
 `flutter build apk --release` / `flutter build ios --release` with the
 toolchains installed.
+
+### App icon
+
+The mark — a gold-rimmed ivory die on the felt table — is drawn in code, so
+every size and every platform comes out of one place:
+
+```bash
+python3 tools/gen_app_icons.py   # no third-party deps
+```
+
+That writes the web favicon and manifest icons (rounded and maskable), the
+Android launcher PNGs plus an adaptive-icon foreground layer, the opaque iOS
+set (iOS rejects alpha), the rounded macOS set and the multi-size Windows
+`.ico`. `web/manifest.json` carries the app's felt-green theme colour and
+name, so an installed PWA matches the icon.
 
 ### Chrome extension
 
