@@ -128,6 +128,8 @@ class LudoState {
     this.eventTokenGid,
     this.turnCount = 0,
     this.rollSeq = 0,
+    this.lastRolledValue,
+    this.lastRolledBy,
   }) : rankings = rankings ?? [];
 
   final List<LudoPlayer> players; // 2..4, in turn order
@@ -142,6 +144,16 @@ class LudoState {
   int? eventTokenGid;
   int turnCount;
   int rollSeq; // increments on every successful roll — UI roll animations key off this
+
+  /// Face of the most recent roll and the seat that rolled it. Unlike
+  /// [lastRoll], these survive a turn that ended inside the same tick as the
+  /// roll — a skipped roll (nothing legal to move) or the triple-six forfeit
+  /// both call `_endTurn`, which nulls `lastRoll` before the UI is notified.
+  /// Without them the dice has no face to tumble to and no corner to tumble
+  /// in, so only rolls that keep the turn (a six, or any movable roll) animate.
+  /// Display-only: no rule reads these.
+  int? lastRolledValue;
+  int? lastRolledBy;
 
   LudoPlayer get currentPlayer => players[currentPlayerIndex];
 
@@ -166,6 +178,8 @@ class LudoState {
       eventTokenGid: eventTokenGid,
       turnCount: turnCount,
       rollSeq: rollSeq,
+      lastRolledValue: lastRolledValue,
+      lastRolledBy: lastRolledBy,
     );
     return s;
   }
@@ -183,6 +197,8 @@ class LudoState {
         'eventGid': eventTokenGid,
         'turns': turnCount,
         'rollSeq': rollSeq,
+        'rolled': lastRolledValue,
+        'rolledBy': lastRolledBy,
       };
 
   static LudoState fromJson(Map<String, dynamic> j) => LudoState(
@@ -204,5 +220,7 @@ class LudoState {
         eventTokenGid: j['eventGid'] as int?,
         turnCount: j['turns'] as int? ?? 0,
         rollSeq: j['rollSeq'] as int? ?? 0,
+        lastRolledValue: j['rolled'] as int?,
+        lastRolledBy: j['rolledBy'] as int?,
       );
 }
