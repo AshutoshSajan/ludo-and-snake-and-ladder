@@ -61,6 +61,21 @@ class LeaderboardData {
   final List<LeaderboardRow> rows;
 }
 
+/// The leaderboard request reached the server and the server *answered* with
+/// an error status. The connection is fine; the data is not — a 500 here
+/// means the server's own store failed (e.g. its Turso credentials), which
+/// is a different fix from "nothing is listening at this URL". Keeping the
+/// two apart in the type means the UI can never confuse them again.
+class LeaderboardServerException implements Exception {
+  LeaderboardServerException(this.statusCode, this.body);
+
+  final int statusCode;
+  final String body;
+
+  @override
+  String toString() => 'Leaderboard request failed (HTTP $statusCode)';
+}
+
 enum OnlineStatus { idle, connecting, reconnecting, inLobby, playing, error }
 
 class OnlineClient extends ChangeNotifier {
@@ -92,7 +107,8 @@ class OnlineClient extends ChangeNotifier {
 
   /// Fetches the server leaderboard over plain HTTP. [serverUrl] is the
   /// WebSocket URL (ws://host:port/ws); the matching http(s) origin is used.
-  /// Throws on network errors or a non-200 response.
+  /// Throws [LeaderboardServerException] when the server answers with a
+  /// non-200 status, and the underlying error when it never answers at all.
   static Future<LeaderboardData> fetchLeaderboard(String serverUrl,
       {http.Client? httpClient, Duration timeout = const Duration(seconds: 5)}) async {
     final ws = Uri.parse(serverUrl);
@@ -104,7 +120,7 @@ class OnlineClient extends ChangeNotifier {
     try {
       final resp = await client.get(base).timeout(timeout);
       if (resp.statusCode != 200) {
-        throw Exception('Leaderboard request failed (HTTP ${resp.statusCode})');
+        throw LeaderboardServerException(resp.statusCode, resp.body);
       }
       return LeaderboardData.fromJson(
           jsonDecode(resp.body) as Map<String, dynamic>);

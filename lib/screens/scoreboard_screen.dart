@@ -7,10 +7,14 @@ import 'online_lobby_screen.dart';
 /// The online scoreboard: career stats from the authoritative server's
 /// SQLite store (GET /leaderboard).
 class ScoreboardScreen extends StatefulWidget {
-  const ScoreboardScreen({super.key, this.serverUrl});
+  const ScoreboardScreen({super.key, this.serverUrl, this.load});
 
   /// WebSocket base URL of the server; defaults to the usual local one.
   final String? serverUrl;
+
+  /// Overridable for tests: the widget tests feed canned futures so each of
+  /// the three "no scores" states can be shown without a live server.
+  final Future<LeaderboardData> Function(String serverUrl)? load;
 
   @override
   State<ScoreboardScreen> createState() => _ScoreboardScreenState();
@@ -22,14 +26,17 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   String get _serverUrl =>
       widget.serverUrl ?? OnlineLobbyScreen.defaultServerUrl();
 
+  Future<LeaderboardData> get _fetch =>
+      (widget.load ?? OnlineClient.fetchLeaderboard)(_serverUrl);
+
   @override
   void initState() {
     super.initState();
-    _future = OnlineClient.fetchLeaderboard(_serverUrl);
+    _future = _fetch;
   }
 
   void _reload() => setState(() {
-        _future = OnlineClient.fetchLeaderboard(_serverUrl);
+        _future = _fetch;
       });
 
   @override
@@ -50,7 +57,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return _error();
+          if (snap.hasError) return _error(snap.error!);
           final data = snap.data!;
           if (data.rows.isEmpty) return _empty(data.games);
           return RefreshIndicator(
@@ -77,7 +84,17 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     );
   }
 
-  Widget _error() {
+  /// The three "no scores" states say different things, and conflating them
+  /// sends the player hunting for the wrong culprit: a server that answered
+  /// 500 is running fine and needs its own log read, while a server that
+  /// never answered is the one `dart run bin/server.dart` can fix.
+  Widget _error(Object failure) {
+    final detail = failure is LeaderboardServerException
+        ? 'The server at $_serverUrl answered but could not load the scores '
+            '(HTTP ${failure.statusCode}).\nIt is running — the problem is '
+            'inside it, so read the server log.'
+        : 'Could not reach the server at $_serverUrl.\n'
+            'Is `dart run bin/server.dart` running?';
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -87,8 +104,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             const Icon(Icons.cloud_off, size: 40, color: AppColors.ivoryDark),
             const SizedBox(height: 12),
             Text(
-              'Could not reach the server at $_serverUrl.\n'
-              'Is `dart run bin/server.dart` running?',
+              detail,
               textAlign: TextAlign.center,
               style: const TextStyle(
                   color: AppColors.ivory, fontSize: 14, height: 1.5),
