@@ -102,19 +102,23 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   void _onSessionChanged() {
     // Kick off the 3D dice tumble whenever a fresh roll appears — tracked by
     // roll sequence, so it tumbles even when the same number comes up again.
-    // Guarded on lastRoll: a seq bump without a pending roll (triple-six
-    // forfeit, undo to a pre-roll state) has no value to settle on, and a
-    // tumble with no landing would spin forever.
+    // Every roll animates, including the ones the engine resolves before this
+    // listener runs: a roll with nothing legal to move, or the triple-six
+    // forfeit, have already passed the turn and nulled `lastRoll`, so the face
+    // and the seat come from lastRolledValue/lastRolledBy instead.
     if (session.state.rollSeq != _lastSeenSeq) {
+      final freshRoll = session.state.rollSeq > _lastSeenSeq;
       _lastSeenSeq = session.state.rollSeq;
       _hintToken = null; // a new roll invalidates any shown hint
-      if (session.state.lastRoll != null) {
+      if (freshRoll) {
         _diceTimer?.cancel();
         _diceRolling = true;
         _diceTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted) setState(() => _diceRolling = false);
         });
       }
+      // A rewound sequence (undo, or a resync snapshot) only re-tracks the
+      // sequence above — no tumble for a die that was never thrown.
     }
     final anim = session.activeAnim;
     _animTimer?.cancel();
@@ -391,6 +395,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         !session.currentIsAI &&
         s.phase == LudoPhase.awaitingRoll &&
         !session.isBusy;
+    // The tumble belongs to the seat that rolled, which is not the current
+    // seat when the roll ended the turn on the spot (skip / triple six).
+    final tumbling = _diceRolling && s.lastRolledBy == i;
+    final face = tumbling && !isCurrent ? s.lastRolledValue : s.lastRoll;
     final alignment = switch (p.color) {
       LudoColor.green => Alignment.topLeft,
       LudoColor.yellow => Alignment.topRight,
@@ -402,8 +410,8 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       child: Padding(
         padding: const EdgeInsets.all(10),
         child: DiceWidget(
-          value: isCurrent ? s.lastRoll : null,
-          rolling: _diceRolling && isCurrent,
+          value: isCurrent || tumbling ? face : null,
+          rolling: tumbling,
           enabled: canRoll,
           onTap: session.roll,
           size: (MediaQuery.sizeOf(context).shortestSide * 0.15).clamp(

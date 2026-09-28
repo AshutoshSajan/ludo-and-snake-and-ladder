@@ -30,6 +30,12 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   int _animStep = 0;
   Timer? _animTimer;
 
+  /// Ghost hop tick and dice tumble window. Both come from [SnakesAnim] so the
+  /// tumble always settles while the walk is still running and the session's
+  /// `totalMs` stays the single source of truth for how long a move takes.
+  static const _tickMs = SnakesAnim.uiStepMs;
+  static const _diceMs = SnakesAnim.diceRollMs;
+
   @override
   void initState() {
     super.initState();
@@ -55,7 +61,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     _animTimer?.cancel();
     _animStep = 0;
     if (anim != null) {
-      _animTimer = Timer.periodic(const Duration(milliseconds: 240), (t) {
+      _animTimer = Timer.periodic(const Duration(milliseconds: _tickMs), (t) {
         if (!mounted) return t.cancel();
         setState(() => _animStep++);
         if (_animStep >= anim.waypoints.length - 1) t.cancel();
@@ -180,36 +186,134 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
           children: [
             _playerStrip(s),
             Expanded(
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: LayoutBuilder(builder: (context, cons) {
-                    final boardSize = cons.biggest.width;
-                    return Stack(
+              child: LayoutBuilder(builder: (context, cons) {
+                // The board keeps its square shape and the home strip sits
+                // directly under it — inside the SAME Stack. A pawn leaving
+                // home is drawn by the ghost hop, so the garages and the ghost
+                // must share one coordinate space or the pawn would appear to
+                // start from nowhere.
+                final homeH = _homeStripH(s.players.length);
+                final boardSize = math.min(
+                  cons.biggest.width,
+                  math.max(cons.biggest.height - homeH, 0.0),
+                );
+                return Center(
+                  child: SizedBox(
+                    width: boardSize,
+                    height: boardSize + homeH,
+                    child: Stack(
+                      clipBehavior: Clip.none,
                       children: [
-                        Semantics(
-                          label: _boardSemanticLabel(s),
-                          liveRegion: true,
-                          child: CustomPaint(
-                            size: Size.square(boardSize),
-                            painter: SnakesBoardPainter(
-                              highlightSquare:
-                                  s.phase == SnakesPhase.awaitingMove
-                                      ? _pendingTarget()
-                                      : null,
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          child: Semantics(
+                            label: _boardSemanticLabel(s),
+                            liveRegion: true,
+                            child: CustomPaint(
+                              size: Size.square(boardSize),
+                              painter: SnakesBoardPainter(
+                                highlightSquare:
+                                    s.phase == SnakesPhase.awaitingMove
+                                        ? _pendingTarget()
+                                        : null,
+                              ),
                             ),
                           ),
                         ),
                         ..._pawnWidgets(boardSize, s, movingToken),
+                        ..._homeWidgets(boardSize, s, movingToken),
                         if (session.activeAnim != null) _ghost(boardSize),
                       ],
-                    );
-                  }),
-                ),
-              ),
+                    ),
+                  ),
+                );
+              }),
             ),
             _controls(s),
           ],
+        ),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------- home area
+
+  /// Garage geometry of the strip under the board. Fixed sizes so the drawn
+  /// garages and the ghost's square-0 rest position come out of one formula.
+  static const double _garageSize = 40;
+  static const double _garageGap = 8;
+  static const int _garagesPerRow = 5;
+  static const double _homeLabelH = 20;
+
+  /// Height reserved for the strip: a label plus one row of garages per five
+  /// seats (up to two rows for the 10-seat maximum).
+  static double _homeStripH(int players) {
+    final rows = (players + _garagesPerRow - 1) ~/ _garagesPerRow;
+    return _homeLabelH + rows * (_garageSize + _garageGap) + 4;
+  }
+
+  /// Top-left of seat [slot]'s garage, in the shared board/strip coordinates.
+  static double _garageX(int slot) =>
+      (slot % _garagesPerRow) * (_garageSize + _garageGap);
+  static double _garageY(double boardSize, int slot) =>
+      boardSize + _homeLabelH + (slot ~/ _garagesPerRow) * (_garageSize + _garageGap);
+
+  /// The home area: one numbered garage per seat, drawn directly under the
+  /// board. Every pawn starts off-board at square 0 — the board itself numbers
+  /// 1..100, so square 0 has no cell and used to render the starting pawns
+  /// outside the board where they were clipped and invisible. A seat whose
+  /// pawn has left home keeps an empty ring so the layout never jumps, and the
+  /// pawn being animated stays out of its garage because the ghost hop draws it.
+  List<Widget> _homeWidgets(
+      double boardSize, SnakesState s, int? movingToken) {
+    return [
+      Positioned(
+        left: 0,
+        top: boardSize,
+        child: Text(
+          'Home — waiting to enter',
+          style: const TextStyle(fontSize: 11, color: Colors.white70),
+        ),
+      ),
+      for (var i = 0; i < s.players.length; i++)
+        Positioned(
+          key: ValueKey('garage-$i'),
+          left: _garageX(i),
+          top: _garageY(boardSize, i),
+          child: _garageSlot(s.players[i], s.players[i].square == 0 &&
+              s.players[i].tokenIndex != movingToken),
+        ),
+    ];
+  }
+
+  Widget _garageSlot(SnakesPlayer p, bool occupied) {
+    final color = AppColors.snakesColors[p.tokenIndex];
+    return Container(
+      width: _garageSize,
+      height: _garageSize,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: occupied
+            ? RadialGradient(
+                colors: [color.withValues(alpha: 0.95), color],
+                stops: const [0.4, 1],
+              )
+            : null,
+        color: occupied ? null : Colors.transparent,
+        border: Border.all(
+          color: occupied ? Colors.white : Colors.white24,
+          width: occupied ? 1.5 : 1,
+        ),
+      ),
+      child: Center(
+        child: Text(
+          '${p.tokenIndex + 1}',
+          style: TextStyle(
+            fontSize: 13,
+            color: occupied ? Colors.white : Colors.white38,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );
@@ -223,6 +327,9 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     final grouped = <int, List<SnakesPlayer>>{};
     for (final p in s.players) {
       if (p.tokenIndex == movingToken) continue;
+      // Square 0 is off-board: those pawns live in the home garages, and the
+      // board has no cell for them (squareCenter(0) falls outside the grid).
+      if (p.square <= 0) continue;
       grouped.putIfAbsent(p.square, () => []).add(p);
     }
     final widgets = <Widget>[];
@@ -285,15 +392,23 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     final step = _animStep.clamp(0, anim.waypoints.length - 1);
     final sq = anim.waypoints[step];
     final cell = boardSize / 10;
-    final c = SnakesBoardPainter.squareCenter(sq, Size.square(boardSize));
+    // Waypoint 0 is "still at home": rest on that seat's garage, in the strip
+    // under the board, so the walk visibly starts from home.
+    final atHome = sq <= 0;
+    final c = atHome
+        ? Offset(_garageX(anim.tokenIndex) + _garageSize / 2,
+            _garageY(boardSize, anim.tokenIndex) + _garageSize / 2)
+        : SnakesBoardPainter.squareCenter(sq, Size.square(boardSize));
+    final size = atHome ? _garageSize * 0.82 : cell * 0.62;
     final color =
         AppColors.snakesColors[anim.tokenIndex % AppColors.snakesColors.length];
     return Positioned(
-      left: c.dx - cell * 0.31,
-      top: c.dy - cell * 0.31,
+      key: const ValueKey('ghost'),
+      left: c.dx - size / 2,
+      top: c.dy - size / 2,
       child: Container(
-        width: cell * 0.62,
-        height: cell * 0.62,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: color,
@@ -319,7 +434,9 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     final subtitle = switch (s.phase) {
       SnakesPhase.gameOver => 'Game over',
       SnakesPhase.awaitingRoll when session.currentIsAI =>
-        '${s.currentPlayer.name} is rolling…',
+        '${s.currentPlayer.name} is thinking…',
+      SnakesPhase.awaitingRoll when session.autoPlay =>
+        '${s.currentPlayer.name} rolls automatically…',
       SnakesPhase.awaitingRoll => 'Your roll, ${s.currentPlayer.name}!',
       SnakesPhase.awaitingMove => 'Moving…',
     };
@@ -335,7 +452,8 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
             children: [
               DiceWidget(
                 value: s.lastRoll,
-                rolling: false,
+                rolling: session.activeAnim != null &&
+                    _animStep * _tickMs < _diceMs,
                 enabled: canRoll,
                 onTap: session.roll,
               ),
@@ -343,6 +461,18 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
               FilledButton(
                 onPressed: canRoll ? session.roll : null,
                 child: Text(canRoll ? 'ROLL' : '…'),
+              ),
+              const SizedBox(width: 12),
+              Tooltip(
+                message:
+                    session.autoPlay ? 'Autoplay on' : 'Autoplay: roll for me',
+                child: IconButton.filledTonal(
+                  onPressed: session.toggleAutoPlay,
+                  icon: Icon(session.autoPlay
+                      ? Icons.auto_mode
+                      : Icons.auto_mode_outlined),
+                  color: session.autoPlay ? AppColors.gold : null,
+                ),
               ),
             ],
           ),
