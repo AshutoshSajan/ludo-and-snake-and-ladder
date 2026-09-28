@@ -49,6 +49,7 @@ lib/
 
 assets/sounds/         # 8 procedurally synthesized WAV effects
 tools/gen_sounds.dart  # regenerates them: dart run tools/gen_sounds.dart
+tools/gen_app_icons.py # favicon + Android/iOS/macOS/Windows launcher icons
 test/                  # 26 engine rule tests + 2 widget smoke tests
 ```
 
@@ -135,6 +136,35 @@ commit history using `cliff.toml` (Keep a Changelog format):
   (Conventional Commits) so entries land in the right *Added / Fixed / …*
   group; anything else falls into the history-matching rules in `cliff.toml`.
 
+### Code review (Greptile)
+
+[Greptile](https://www.greptile.com) reviews pull requests through the
+committed `.greptile/config.json`:
+
+```json
+{
+  "includeBranches": ["main"]
+}
+```
+
+**Only PRs targeting `main` are reviewed.** With this repo's tiers that is the
+`staging` → `main` release PR — the one change that is about to ship — while
+PRs into `dev`/`staging` are left to CI. Notes:
+
+- The filter is inclusive, so widening it is a one-word edit:
+  `"includeBranches": ["main", "staging"]`. Use `excludeBranches` instead to
+  review everything *except* listed tiers.
+- Both lists take globs (`release/*`, `dependabot/**`), matched
+  case-insensitively against the PR's **base** branch.
+- Draft PRs are skipped by default (`triggerOnDrafts: false`), so a release PR
+  is first reviewed when it is marked ready.
+- A skipped PR can still be reviewed on demand by commenting
+  `@greptileai review`.
+- The same filters live in the dashboard (**Code Review Settings → When
+  Greptile Reviews → Filters**); the committed file overrides dashboard
+  settings. Greptile reads it from the PR's *source* branch, so a branch only
+  obeys the filter once it contains this file (i.e. once it has merged `dev`).
+
 ### Platform notes
 
 | Target | Status |
@@ -154,6 +184,21 @@ flutter build linux --release
 Android/iOS: open in Android Studio / Xcode and run normally, or
 `flutter build apk --release` / `flutter build ios --release` with the
 toolchains installed.
+
+### App icon
+
+The mark — a gold-rimmed ivory die on the felt table — is drawn in code, so
+every size and every platform comes out of one place:
+
+```bash
+python3 tools/gen_app_icons.py   # no third-party deps
+```
+
+That writes the web favicon and manifest icons (rounded and maskable), the
+Android launcher PNGs plus an adaptive-icon foreground layer, the opaque iOS
+set (iOS rejects alpha), the rounded macOS set and the multi-size Windows
+`.ico`. `web/manifest.json` carries the app's felt-green theme colour and
+name, so an installed PWA matches the icon.
 
 ### Chrome extension
 

@@ -31,6 +31,14 @@ footer = """
 """
 trim = true
 
+# Commit bodies written with a literal "\n" instead of real line breaks are
+# copied verbatim into the notes, which leaves a whole paragraph on one line
+# (see "Keep the page port in the same-origin server URL"). Turn the escape
+# into the line break it was meant to be, whatever a future body does.
+postprocessors = [
+  { pattern = '\\n', replace = "\n" },
+]
+
 [git]
 # Our history predates Conventional Commits ("Phase 10: online leaderboards…"),
 # so parse every subject as plain text and let the regex parsers group it.
