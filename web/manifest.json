@@ -1,11 +1,11 @@
 {
-    "name": "game_club",
-    "short_name": "game_club",
+    "name": "Game Club — Ludo & Snakes n Ladders",
+    "short_name": "Game Club",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#123524",
+    "theme_color": "#123524",
+    "description": "Play Ludo and Snakes & Ladders offline — 2-10 players, smart bots, pass-and-play.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

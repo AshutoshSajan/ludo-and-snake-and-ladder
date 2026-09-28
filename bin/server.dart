@@ -383,6 +383,31 @@ Future<shelf.Response> healthHandler(shelf.Request req) async => shelf.Response.
 /// Capacity metrics for load balancers and dashboards. Connections counts
 /// every open WebSocket (joined or not); rooms/spectators come from the
 /// authority. Intentionally touches no remote store so it stays cheap.
+
+/// CORS for the read-only JSON API (`/health`, `/leaderboard`, `/stats`,
+/// `/rooms/lookup`): the Flutter web dev server runs on another origin, so
+/// without these headers a browser would fetch the data fine and then refuse
+/// to hand the response to the app. WebSockets do not need a preflight, so
+/// `/ws` is unaffected; writes stay rejected with 405, so `*` is safe here.
+/// No auth or cookies ride on these routes (Turso uses its own Bearer token
+/// server-side), which is exactly the case `*` is meant for.
+///
+/// Public (not `_`-private) so the server integration tests can exercise the
+/// exact middleware the deployed pipeline assembles.
+shelf.Middleware get corsMiddleware => (inner) => (req) async {
+      if (req.method == 'OPTIONS') {
+        return shelf.Response.ok('', headers: _corsHeaders(req));
+      }
+      final resp = await inner(req);
+      return resp.change(headers: _corsHeaders(req));
+    };
+
+Map<String, String> _corsHeaders(shelf.Request req) => {
+      'access-control-allow-origin': req.headers['origin'] ?? '*',
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'vary': 'Origin',
+    };
+
 Future<shelf.Response> statsHandler(shelf.Request req) async {
   var spectators = 0;
   for (final room in authority.rooms.values) {
@@ -515,6 +540,7 @@ Future<void> main(List<String> args) async {
 
   final handler = const shelf.Pipeline()
       .addMiddleware(shelf.logRequests())
+      .addMiddleware(corsMiddleware)
       .addHandler((req) async {
         switch (req.url.path) {
           case 'ws':

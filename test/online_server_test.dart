@@ -29,6 +29,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 // server entrypoint so the integration test exercises production code.
 import '../bin/server.dart'
     show
+        corsMiddleware,
         wsHandler,
         leaderboardHandler,
         leaderboardStore,
@@ -1358,6 +1359,85 @@ void main() {
 
       expect(webDir, tmp.path);
     });
+
+  group('CORS (dev web app runs on another origin)', () {
+    /// Which production handler backs each browser-visible route.
+    Future<shelf.Response> routed(String path, shelf.Request req) {
+      switch (path) {
+        case 'health':
+          return healthHandler(req);
+        case 'leaderboard':
+          return leaderboardHandler(req);
+        case 'stats':
+          return statsHandler(req);
+        case 'rooms/lookup':
+          return roomLookupHandler(req);
+        default:
+          throw ArgumentError('unknown test route: $path');
+      }
+    }
+
+    /// The real production middleware around one route, exactly as `main()`
+    /// assembles it: the headers live in the wrapping layer, not the
+    /// handlers, so the test must see them wrapped.
+    Future<shelf.Response> viaMiddleware(
+            String path, shelf.Request req) async =>
+        corsMiddleware((_) async => routed(path, req))(req);
+
+    test('the browser-visible routes carry CORS headers and answer OPTIONS',
+        () async {
+      // A Flutter `flutter run -d chrome` page lives on a different origin
+      // than the game server, so the browser blocks the response unless the
+      // server explicitly opts in. These are read-only routes with no auth,
+      // so reflecting the Origin is the right call; writes stay 405.
+      for (final path in ['health', 'leaderboard', 'stats', 'rooms/lookup']) {
+        final get = await viaMiddleware(
+          path,
+          shelf.Request(
+            'GET',
+            Uri.parse('http://localhost/$path'),
+            headers: {'origin': 'http://localhost:42891'},
+          ),
+        );
+        expect(get.statusCode, isNot(0));
+        expect(get.headers['access-control-allow-origin'],
+            'http://localhost:42891');
+        expect(get.headers['vary'], 'Origin');
+        final preflight = await viaMiddleware(
+          path,
+          shelf.Request(
+            'OPTIONS',
+            Uri.parse('http://localhost/$path'),
+            headers: {
+              'origin': 'http://localhost:42891',
+              'access-control-request-method': 'GET',
+            },
+          ),
+        );
+        expect(preflight.statusCode, 200);
+        expect(preflight.headers['access-control-allow-origin'],
+            'http://localhost:42891');
+      }
+    });
+
+    test('a POST still gets 405 even though CORS allows the preflight',
+        () async {
+      // CORS answers the browser's "may I read?" question; the 405 stands
+      // for anything that is not a read — the two layers are independent.
+      final resp = await viaMiddleware(
+        'leaderboard',
+        shelf.Request(
+          'POST',
+          Uri.parse('http://localhost/leaderboard'),
+          headers: {'origin': 'http://localhost:42891'},
+        ),
+      );
+      expect(resp.statusCode, 405);
+      expect(resp.headers['access-control-allow-origin'],
+          'http://localhost:42891');
+    });
+  });
+
 
     test('a WEB_DIR without index.html is ignored', () async {
       final tmp = await Directory.systemTemp.createTemp('game-club-empty');

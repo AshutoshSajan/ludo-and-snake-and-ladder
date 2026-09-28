@@ -10,13 +10,28 @@ import 'ludo_session.dart'; // SeatSetup reuse
 
 /// Pawn position for animations: square 0 means "start / off-board".
 class SnakesAnim {
-  SnakesAnim({required this.tokenIndex, required this.waypoints, this.jump});
+  SnakesAnim({
+    required this.tokenIndex,
+    required this.waypoints,
+    this.jump,
+  });
 
   final int tokenIndex;
   final List<int> waypoints; // squares 0..100
   final String? jump; // 'ladder' | 'snake'
 
-  int get totalMs => waypoints.length * 260 + 150;
+  /// Milliseconds per UI hop tick. One UI hop every 120 ms (see snakes_view),
+  /// so a 6-hop walk is well under a second. The view reads this to keep its
+  /// ghost timer and the dice tumble window in sync with the total below.
+  static const uiStepMs = 120;
+
+  /// How long the dice keeps its tumble before settling on the rolled face.
+  static const diceRollMs = 420;
+
+  /// Settle tail after the last hop — short, so the next roll feels immediate.
+  static const _tailMs = 260;
+
+  int get totalMs => waypoints.length * uiStepMs + _tailMs;
 }
 
 /// Drives a local Snakes & Ladders game (2..10 seats, human or AI).
@@ -51,6 +66,14 @@ class SnakesSession extends ChangeNotifier {
   SnakesAnim? activeAnim;
   bool _busy = false;
   bool _over = false;
+
+  /// When true, human seats roll automatically (autoplay / break). Set to
+  /// true by pause-menu tests and the autoplay toggle.
+  bool autoPlay = false;
+
+  /// Slightly longer than the AI beat so a human still sees a beat between
+  /// the automatic rolls.
+  static const _autoRollDelay = Duration(milliseconds: 1100);
 
   bool get currentIsAI => state.currentPlayer.isAI;
 
@@ -113,18 +136,37 @@ class SnakesSession extends ChangeNotifier {
     });
   }
 
-  /// Kick the next action: AI roll or wait for the human.
+  /// Kick the next action: AI roll, an autoplay roll for a human seat, or
+  /// wait for the human.
   void scheduleNext() {
     if (_over || state.phase == SnakesPhase.gameOver) return;
+    // While a move is in flight the single `_timer` IS that move: it is what
+    // applies it once the walk finishes. Cancelling it here — which toggling
+    // autoplay or swapping a seat mid-walk used to do — would leave the pawn
+    // hanging mid-board with `_busy` stuck true and no way to ever recover.
+    // The resolve callback calls this again after it has applied the move.
+    if (activeAnim != null) return;
     _timer?.cancel();
-    if (state.currentPlayer.isAI &&
-        state.phase == SnakesPhase.awaitingRoll) {
-      _timer = Timer(const Duration(milliseconds: 900), () {
-        if (state.phase == SnakesPhase.awaitingRoll && state.currentPlayer.isAI) {
+    final needsRoll = state.phase == SnakesPhase.awaitingRoll &&
+        (state.currentPlayer.isAI || autoPlay);
+    if (needsRoll) {
+      final delay =
+          autoPlay ? _autoRollDelay : const Duration(milliseconds: 900);
+      _timer = Timer(delay, () {
+        if (state.phase == SnakesPhase.awaitingRoll &&
+            (state.currentPlayer.isAI || autoPlay)) {
           _roll();
         }
       });
     }
+  }
+
+  /// Toggle autoplay: human seats roll automatically. Schedule immediately;
+  /// a human that was already waiting gets their roll right away.
+  void toggleAutoPlay() {
+    autoPlay = !autoPlay;
+    notifyListeners();
+    scheduleNext();
   }
 
   // ------------------------------------------------- mid-game seat control
