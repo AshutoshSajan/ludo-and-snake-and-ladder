@@ -408,6 +408,29 @@ Map<String, String> _corsHeaders(shelf.Request req) => {
       'vary': 'Origin',
     };
 
+/// Turns a throw inside a route into an answer the client can actually read.
+/// Left alone, the throw escapes to shelf's own error page: plain text, and
+/// written *outside* the middleware chain, so it carries no CORS headers
+/// either — a browser then reports it as a cross-origin block and the app
+/// blames the connection, which is exactly how a broken Turso credential
+/// looked like a dead server. Must sit inside [corsMiddleware] so the 500 it
+/// produces still gets the headers, and it names the failing route because
+/// the deployed log otherwise shows a 500 with nothing to trace.
+shelf.Middleware get jsonErrorMiddleware => (inner) => (req) async {
+      try {
+        return await inner(req);
+      } catch (error) {
+        stdout.writeln('!! 500 on ${req.method} /${req.url.path}: $error');
+        // The detail stays in the log: a store failure can quote the Turso
+        // URL or token, and this route is public.
+        return shelf.Response.internalServerError(
+          body: jsonEncode(
+              {'ok': false, 'text': 'Internal server error (see server log)'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+    };
+
 Future<shelf.Response> statsHandler(shelf.Request req) async {
   var spectators = 0;
   for (final room in authority.rooms.values) {
@@ -541,6 +564,7 @@ Future<void> main(List<String> args) async {
   final handler = const shelf.Pipeline()
       .addMiddleware(shelf.logRequests())
       .addMiddleware(corsMiddleware)
+      .addMiddleware(jsonErrorMiddleware)
       .addHandler((req) async {
         switch (req.url.path) {
           case 'ws':

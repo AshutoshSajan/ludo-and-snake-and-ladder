@@ -19,18 +19,22 @@
 ///     forfeit included — not only on rolls that keep the turn
 library;
 
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/controllers/ludo_session.dart';
+import 'package:game_club/engine/core/player_profiles.dart';
 import 'package:game_club/engine/ludo/ludo_board.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/sound_service.dart';
+import 'package:game_club/services/storage_service.dart';
 import 'package:game_club/ui/ludo/ludo_view.dart';
 import 'package:game_club/ui/shared/dice_widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -82,7 +86,15 @@ LudoState _state({int players = 4}) => createLudoState(
 int _rectDist(int v, int lo, int size) =>
     v < lo ? lo - v : (v >= lo + size ? v - (lo + size - 1) : 0);
 
-final _refProvider = Provider<Ref>((ref) => ref);
+/// A storage that never answers. Reading `profilesProvider` makes its `build`
+/// kick off a load, and a load that never completes can neither reach
+/// SharedPreferences nor overwrite the profiles these tests build by hand.
+class _InertStorage extends StorageService {
+  @override
+  Future<PlayerRegistry> loadProfiles() => Completer<PlayerRegistry>().future;
+  @override
+  Future<void> saveProfiles(PlayerRegistry registry) async {}
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -92,9 +104,12 @@ void main() {
   late ProfilesNotifier profiles;
 
   setUpAll(() {
-    container = ProviderContainer();
-    // Built manually (never load()) so no SharedPreferences is touched.
-    profiles = ProfilesNotifier(container.read(_refProvider));
+    // A Notifier carries its own Ref from Riverpod 3 on, so it has to come out
+    // of a container instead of being built by hand with an injected one.
+    container = ProviderContainer(
+      overrides: [storageProvider.overrideWithValue(_InertStorage())],
+    );
+    profiles = container.read(profilesProvider.notifier);
   });
 
   tearDownAll(() => container.dispose());
