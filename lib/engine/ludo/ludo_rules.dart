@@ -27,6 +27,10 @@ void rollDice(LudoState s, int value) {
   assert(value >= 1 && value <= 6, 'dice value must be 1..6');
   if (s.phase != LudoPhase.awaitingRoll) return;
   s.lastRoll = value;
+  // Kept even when this very roll ends the turn (see LudoState docs), so the
+  // dice can tumble the rolled face in the rolling seat's corner.
+  s.lastRolledValue = value;
+  s.lastRolledBy = s.currentPlayerIndex;
   s.rollSeq += 1; // even a repeated number is a *new* roll (UI animation cue)
   s.eventTokenGid = null;
 

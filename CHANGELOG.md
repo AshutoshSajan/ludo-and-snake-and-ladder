@@ -170,7 +170,16 @@ sweeps that leave margin for two missed rounds. Extracted into a
 testable registryRefreshInterval() with regression tests.
 - Keep the page port in the same-origin server URL
 
-The same-origin default built the WebSocket URL from Uri.base.host only,\ndropping an explicit nonstandard port. A page served over HTTPS on\ne.g. :8443 then connected to the default port 443, and the leaderboard\n— derived from the same URL — hit the wrong origin too, so neither\nworked even though the page loaded.\n\nUse the page URI's authority (host plus explicit port) for the wss\nbranch; plain http keeps the :8080 local dev default. The derivation\nis extracted into a testable sameOriginServerUrl() with regression\ntests for nonstandard port, standard port, and the http dev case.
+The same-origin default built the WebSocket URL from Uri.base.host only,
+dropping an explicit nonstandard port. A page served over HTTPS on
+e.g. :8443 then connected to the default port 443, and the leaderboard
+— derived from the same URL — hit the wrong origin too, so neither
+worked even though the page loaded.
+
+Use the page URI's authority (host plus explicit port) for the wss
+branch; plain http keeps the :8080 local dev default. The derivation
+is extracted into a testable sameOriginServerUrl() with regression
+tests for nonstandard port, standard port, and the http dev case.
 - Carry the room code in the WebSocket URL for room affinity
 
 nginx hashes the ?code= query parameter consistently to pin a room's

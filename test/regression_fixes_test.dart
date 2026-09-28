@@ -14,6 +14,9 @@
 ///    number repeats
 /// 8. Autoplay: human seats roll and move by themselves; stops when off
 /// 9. Per-step move sounds: one tick per hop of the walk animation
+/// 10. DiceWidget's spin-down really stops painting once it has settled
+/// 11. The dice tumbles on EVERY roll — a skipped turn and the triple-six
+///     forfeit included — not only on rolls that keep the turn
 library;
 
 import 'package:fake_async/fake_async.dart';
@@ -28,7 +31,9 @@ import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/sound_service.dart';
+import 'package:game_club/ui/ludo/ludo_view.dart';
 import 'package:game_club/ui/shared/dice_widget.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// HapticFeedback fires real platform channels during gameplay; mock them
 /// so tests never hit MissingPluginException from unawaited calls.
@@ -367,6 +372,46 @@ void main() {
       rollDice(s, 6);
       expect(s.copy().rollSeq, s.rollSeq);
     });
+
+    test('the rolled face outlives a roll that ends the turn', () {
+      final s = _state();
+      final roller = s.currentPlayerIndex;
+      rollDice(s, 3); // nothing legal -> _endTurn nulls lastRoll right away
+      expect(s.lastEvent, 'skip');
+      expect(s.lastRoll, isNull, reason: 'a skipped roll grants no move');
+      expect(s.lastRolledValue, 3);
+      expect(s.lastRolledBy, roller);
+    });
+
+    test('the rolled face outlives a triple-six forfeit', () {
+      final s = _state();
+      final roller = s.currentPlayerIndex;
+      rollDice(s, 6);
+      applyMove(s, 0);
+      rollDice(s, 6);
+      applyMove(s, 1);
+      expect(s.currentPlayerIndex, roller); // sixes kept the same seat
+      rollDice(s, 6);
+      expect(s.lastEvent, 'tripleSix');
+      expect(s.lastRoll, isNull);
+      expect(s.lastRolledValue, 6);
+      expect(s.lastRolledBy, roller);
+    });
+
+    test('lastRolled* survive copy() and a JSON round trip', () {
+      final s = _state();
+      rollDice(s, 4); // skip path: lastRoll is already back to null
+      expect(s.copy().lastRolledValue, 4);
+      final json = LudoState.fromJson(s.toJson());
+      expect(json.lastRolledValue, 4);
+      expect(json.lastRolledBy, s.lastRolledBy);
+    });
+
+    test('a game that was never rolled remembers no face', () {
+      final s = _state();
+      expect(s.lastRolledValue, isNull);
+      expect(s.lastRolledBy, isNull);
+    });
   });
 
   group('8. autoplay (go for a break)', () {
@@ -510,6 +555,65 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(painterOf(tester), same(settled));
+    });
+  });
+
+  group('11. the dice animates on every roll, not only on a six', () {
+    // A local two-human-seat game: no AI timers, no online transport, so the
+    // only thing that can move the state is the die being tapped.
+    Future<void> pumpGame(WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          soundServiceProvider.overrideWithValue(_CountingSound()),
+        ],
+        child: MaterialApp(
+          home: LudoGameView(
+            seats: [
+              SeatSetup(name: 'R', color: LudoColor.red),
+              SeatSetup(name: 'G', color: LudoColor.green),
+            ],
+          ),
+        ),
+      ));
+      // Never pumpAndSettle here: the board glow controller repeats forever.
+      await tester.pump();
+      await tester.pump();
+    }
+
+    List<DiceWidget> diceOf(WidgetTester tester) =>
+        tester.widgetList<DiceWidget>(find.byType(DiceWidget)).toList();
+
+    testWidgets('the seat that rolled tumbles its own die and shows the face',
+        (tester) async {
+      await pumpGame(tester);
+      expect(diceOf(tester), hasLength(2), reason: 'one die per seat');
+      final mine = diceOf(tester).firstWhere((d) => d.enabled);
+      expect(mine.rolling, isFalse);
+      expect(mine.value, isNull);
+
+      await tester.tap(find.byWidget(mine));
+      await tester.pump(); // a local roll resolves inside the tap
+
+      final tumbling = diceOf(tester).where((d) => d.rolling).toList();
+      expect(tumbling, hasLength(1),
+          reason: 'exactly the seat that rolled animates its own die');
+      expect(tumbling.single.value, inInclusiveRange(1, 6),
+          reason: 'the tumble needs a face to land on even when the roll was '
+              'skipped and lastRoll is already null again');
+    });
+
+    testWidgets('the tumble ends by itself instead of spinning forever',
+        (tester) async {
+      await pumpGame(tester);
+      final mine = diceOf(tester).firstWhere((d) => d.enabled);
+      await tester.tap(find.byWidget(mine));
+      await tester.pump();
+      expect(diceOf(tester).any((d) => d.rolling), isTrue);
+
+      await tester.pump(const Duration(milliseconds: 650));
+      await tester.pump();
+      expect(diceOf(tester).any((d) => d.rolling), isFalse);
     });
   });
 
