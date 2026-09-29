@@ -12,6 +12,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 """
+# unique(attribute="message") because one change can reach a branch twice: a
+# commit and its cherry-pick are two commits carrying an identical message, and
+# both used to print the same bullet twice (the #68 workflow change landed on
+# staging while #70 cherry-picked it into dev). Only byte-identical messages
+# collapse, so two genuinely distinct commits can never merge into one entry.
 body = """
 {%- if version %}
 ## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
@@ -20,7 +25,7 @@ body = """
 {%- endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 ### {{ group }}
-{%- for commit in commits %}
+{%- for commit in commits | unique(attribute="message") %}
 - {{ commit.message | upper_first | trim }}
 {%- endfor %}
 
