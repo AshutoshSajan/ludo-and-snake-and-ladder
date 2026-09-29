@@ -38,6 +38,198 @@ LeaderboardStore is now an abstract interface with two backends: the local SQLit
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Ci: generate CHANGELOG.md on the promotion PR and commit it onto the PR branch
+
+The changelog job used to run on pushes to main and open a follow-up pull
+request against staging, so main always shipped a CHANGELOG.md one promotion
+behind the code it described, and closing that gap needed an extra bot PR.
+
+Move the job to pull requests whose base is staging or main, and have it commit
+the regenerated file onto that PR's head branch instead: the changelog now
+travels with the code it documents and reaches main inside the same merge
+commit. Add a guard that fails the job when the regenerated file would drop an
+existing release section, which is the stale-head-branch case the old comment
+warned about.
+
+Branch protection is unavailable on this plan, so guard-main stays the only
+thing that can stop a direct push to main; this job only ever pushes to a PR
+head branch.
+- Move the app providers onto Riverpod 3 notifiers
+
+Riverpod 3 moved StateNotifierProvider/StateNotifier out of the main import, and all four app notifiers were built on them, so flutter_riverpod 2.6.1 -> 3.4.3 needed a migration rather than a version bump.
+
+The setup that used to sit in each constructor now lives in build(), which is where 3.x expects it: return the default synchronously, apply the persisted value when storage answers. Ref is no longer passed through the constructor - a Notifier owns one as the protected `ref` - so the constructors and the injected `_ref` fields are gone. Every async callback checks `ref.mounted` first, because 3.x refuses to let a disposed Ref be touched and these loads can outlive the provider; the services used after the await are captured before it.
+
+ProfilesNotifier.load() disappeared: reading the provider runs build(), which starts the load, and nothing else called it. The two tests that hand-built a ProfilesNotifier with a Ref from a throwaway Provider<Ref> now read profilesProvider.notifier from a container overriding storageProvider with an inert storage whose load never completes, which keeps the old "never load(), never touch SharedPreferences" guarantee.
+
+Checked rather than assumed: NotifierProvider defaults to isAutoDispose false, and the repo uses no ref.listen, StateProvider, ChangeNotifierProvider, .autoDispose or ProviderObserver, so none of the 3.x lifecycle changes reach anything here.
+
+Analyze clean with --fatal-infos, 190 tests pass, web release build succeeds.
+- Refresh the locked dependency versions and CI action pins
+
+pub upgrade moved sqlite3 3.5.2 -> 3.6.0, meta 1.18.3 -> 1.19.0, vector_math 2.4.0 -> 2.4.3, platform 3.1.6 -> 3.2.0, synchronized 3.4.1+2 -> 3.4.2, objective_c 9.5.0 -> 9.6.0 and the sqlite3 build-hook chain (hooks, code_assets, native_toolchain_c, record_use, process). No pubspec constraint changed: every bump was already allowed by the existing carets, the lock had only drifted. flutter_riverpod 2.6.1 stays put on purpose - 3.x is a major release with provider lifecycle changes and needs its own migration.
+
+CI: actions/checkout v6 -> v7, git-cliff 2.14.1 -> 2.14.2. Checked against each repo release API: checkout v7.0.1 is current, flutter-action is at v2.23.0 so the v2 pin is current, create-pull-request is at v8.1.1 so the v8 pin is current.
+
+Analyze clean with --fatal-infos, 190 tests pass, web release build succeeds.
+- Say which part of the leaderboard path is broken
+
+The screen had one message for every failure, so a server that answered 500 --
+up, reachable, its own store broken -- told the player to check whether
+'dart run bin/server.dart' is running. That is the wrong errand, and it is what
+the deployed app does today.
+
+fetchLeaderboard now throws LeaderboardServerException when the server answers
+with a non-200 status, which is the point where 'reachable' and 'unreachable'
+actually split, and the screen words the two apart. A third state was already
+right and is now pinned by tests: zero finished games is an empty board, not an
+outage. The loader is injectable so the widget tests can show each state
+without a live server.
+- Answer a failing route as JSON, not as a bare shelf 500
+
+/leaderboard calls its store unguarded, so a revoked Turso token throws out of
+the handler. shelf then writes its own error page -- plain text, and from
+*outside* the middleware chain, which means no CORS headers either. A browser
+cannot read that response at all, so it reports a cross-origin block and the
+app blames the connection, while the fault is the server's own database.
+
+jsonErrorMiddleware now sits inside corsMiddleware and turns any throw into a
+500 JSON body with the CORS headers still applied, so the client sees a status
+it can name. The cause is logged rather than sent: the route is public and a
+store failure can quote the database URL. The log line names the method and
+path, because the deployed log previously showed a lone 500 with nothing to
+trace.
+
+Tested through the real middleware chain with a store whose reads fail, and
+live against a server pointed at an unreachable Turso host: JSON 500 carrying
+access-control-allow-origin, and '!! 500 on GET /leaderboard: ...' logged.
+- Let the browser read the JSON API: CORS on the server
+
+The Leaderboard screen failed on web even with the server up and
+answering: the Flutter dev page (http://localhost:<random port>) and
+the game server (:8080) are different origins, so the browser fetched
+`/leaderboard` fine and then refused to hand the response to the app —
+and the app surfaced that as "Could not reach the server".
+
+The production pipeline now wraps its routes in `corsMiddleware`, which
+reflects the request Origin plus `Vary: Origin` on the read-only JSON API
+(`/health`, `/leaderboard`, `/stats`, `/rooms/lookup`) and answers OPTIONS
+preflights with 200. WebSockets need no preflight so `/ws` is untouched,
+writes stay rejected with 405, and nothing riding auth or cookies changes:
+the only bearer token in the picture is Turso's, server-side.
+
+Covered by two server tests that exercise the real middleware, not the
+raw handlers: all four routes carry the headers and answer OPTIONS, and
+a POST is still a 405 with the headers present. Verified live too, with a
+browser-shaped Origin header against a scratch server.
+- Write the changelog's escaped newlines as line breaks
+
+The "Keep the page port in the same-origin server URL" note landed as one
+physical line carrying nine literal 
+ escapes: its commit body was
+written with escaped newlines and git-cliff copies a body verbatim into
+the notes, so the paragraph is unreadable in the release notes and in the
+release PR (flagged on CHANGELOG.md line 173).
+
+A postprocessor now turns that two-character escape into the line break
+it was meant to be, which repairs this entry and any future body written
+the same way, and the changelog is regenerated. The rest of the file is
+byte-for-byte what CI generates - regenerating before the change
+reproduced the committed file exactly, and afterwards the diff is only
+those nine escapes.
+
+The commit message itself cannot be rewritten, since it is already on
+staging and main; the guard belongs in the generator.
+- Give the snakes game one home area, not one per player
+
+Every seat had its own house-marked garage under the board, so "where do
+pawns start" had as many answers as there were players, and at ten seats
+the strip grew a second row of them. There is now a single home area:
+one panel under the board, marked with one house and a count of who is
+still waiting, holding a colour chip per pawn that has not entered yet.
+Chips shrink to keep all ten in one row rather than growing a second
+area, and a pawn that has entered simply leaves the panel.
+
+The panel and the ghost hop still share one coordinate space, so a pawn
+departs from the exact spot its chip occupied - one formula places both,
+with the panel's own origin accounted for. The moving pawn is drawn only
+by the ghost, so it never shows up twice during the walk.
+- Review only the PRs that target main
+
+Greptile reviewed every pull request in this repo, so the daily feature
+PRs into dev competed for attention with the one change that is actually
+about to ship. A committed .greptile/config.json now narrows it:
+
+  "includeBranches": ["main"]
+
+The filter is inclusive and is matched against the PR's base branch, so
+with this repo's tiers the only PR Greptile reviews is staging -> main -
+the release PR. PRs into dev/sandbox stay CI-gated, drafts are skipped
+until they are marked ready, and any PR the filter skips can still be
+reviewed on demand with @greptileai.
+
+Widening or inverting it is a one-line edit (includeBranches, or
+excludeBranches to review everything but a tier); both take globs. The
+new README section records that, the dashboard equivalent, and the one
+gotcha worth knowing: Greptile reads the config from the PR's source
+branch, so a branch obeys the filter only once it contains the file.
+- Give the home garages a house and every platform an icon
+
+Snakes & Ladders: the strip under the board labelled each garage with a
+seat number, which reads as a board square rather than as home - square
+0 is off-board, so a waiting pawn is not on any square yet. Every garage
+now carries a house (dimmed once its pawn has left) and the seat numbers
+stay where they belong, on the seat cards above.
+
+The app also had no icon of its own: the web build served Flutter's
+default favicon, Android a placeholder launcher PNG, and the PWA a
+"game_club" manifest in Flutter blue. One drawing now feeds all of it -
+a gold-rimmed ivory die on the felt table, in the palette of
+lib/ui/theme.dart - via tools/gen_app_icons.py, a stdlib-only generator
+in the spirit of gen_extension_icons.py. It renders one anti-aliased
+master per variant and box-filters it down to every required size:
+
+  web/favicon.png                     rounded corners, 32 px
+  web/icons/Icon-192|512.png          full bleed, no alpha
+  web/icons/Icon-maskable-*.png       full bleed, content inside the mask
+  android/.../ic_launcher.png         one per density
+  android/.../ic_launcher_foreground  adaptive layer + anydpi-v26 wiring
+  ios/.../AppIcon.appiconset          opaque: iOS rejects alpha
+  macos/.../app_icon_*.png            rounded
+  windows/.../app_icon.ico            16/32/48 DIB + 256 PNG entries
+
+Re-running the generator is a byte-for-byte no-op, so the set can be
+rebuilt whenever the mark changes.
+
+The names those icons sit under are aligned too: the PWA manifest and
+page title become "Game Club" with the icon's felt-green theme colour,
+and Android's launcher label stops saying "game_club".
+- Show the dice on every roll and park starting pawns in home
+
+Three bugs from playing the games, all with a test each:
+
+Ludo: a roll that ends the turn on the spot — nothing legal to move, or
+the triple-six forfeit — nulls lastRoll inside rollDice, before the view
+is ever notified. The dice keyed its tumble and its face off lastRoll,
+so exactly the rolls a player most wants to see came up dead still.
+Record the face and the seat in lastRolledValue/lastRolledBy, which no
+rule reads, and drive the tumble off the roll sequence instead.
+
+Snakes: pawns start at square 0, which has no cell on a 1..100 board, so
+the whole starting lineup was drawn outside the board and clipped away.
+Hang a strip of numbered garages under the board inside the same Stack
+and coordinate space, so a pawn leaving home is one continuous hop from
+its garage onto square 1.
+
+Snakes: a move took 260ms per hop plus a 150ms tail — slow enough that
+players tapped ahead. One hop is now 120ms with a 260ms tail, shared as
+constants between the session and the view so the dice tumble window
+cannot drift from the walk it opens.
+
+Also: autoplay for human seats (the pause-menu "go for a break" beat),
+and scheduleNext no longer cancels the timer that lands an in-flight
+move — toggling autoplay mid-walk used to strand the pawn mid-board
+with the session permanently busy.
 - Memoize the duplicate-column upgrade as done
 
 A fresh table answers ALTER TABLE ... ADD COLUMN owner with "duplicate column name: owner". The previous handler cleared _upgrades on every error, so that expected answer resent the doomed ALTER (a full extra round trip) on every register, lookup, and unregister. Treat only the duplicate-column answer as done; other failures stay pending and are retried by the next call.
