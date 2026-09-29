@@ -54,6 +54,29 @@ warned about.
 Branch protection is unavailable on this plan, so guard-main stays the only
 thing that can stop a direct push to main; this job only ever pushes to a PR
 head branch.
+- Ci: delete merged PR head branches automatically
+
+The repo setting delete_branch_on_merge cannot simply be switched on: it deletes the head branch of every merged PR, and this repo promotes with dev -> staging -> main, so the next promotion would delete dev and then staging.
+
+prune-branch runs on the pull_request closed event and is guarded three ways: a trunk is never deleted, names outside this repo prefixes are never touched, and a branch holding commits absent from the base is kept rather than discarded.
+
+Also pin pull_request to four activity types so editing PR labels stops triggering a full test run.
+- Ci: generate CHANGELOG.md on the promotion PR and commit it onto the PR branch
+
+The changelog job used to run on pushes to main and open a follow-up pull
+request against staging, so main always shipped a CHANGELOG.md one promotion
+behind the code it described, and closing that gap needed an extra bot PR.
+
+Move the job to pull requests whose base is staging or main, and have it commit
+the regenerated file onto that PR's head branch instead: the changelog now
+travels with the code it documents and reaches main inside the same merge
+commit. Add a guard that fails the job when the regenerated file would drop an
+existing release section, which is the stale-head-branch case the old comment
+warned about.
+
+Branch protection is unavailable on this plan, so guard-main stays the only
+thing that can stop a direct push to main; this job only ever pushes to a PR
+head branch.
 - Move the app providers onto Riverpod 3 notifiers
 
 Riverpod 3 moved StateNotifierProvider/StateNotifier out of the main import, and all four app notifiers were built on them, so flutter_riverpod 2.6.1 -> 3.4.3 needed a migration rather than a version bump.
