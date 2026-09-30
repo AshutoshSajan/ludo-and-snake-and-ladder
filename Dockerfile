@@ -31,8 +31,17 @@ RUN dart build cli -t bin/server.dart -o /app/server-build
 FROM debian:bookworm-slim
 # libsqlite3 keeps the file-backed leaderboard fallback working when
 # TURSO_DATABASE_URL is not set (e.g. local `docker run` without Turso).
+#
+# ca-certificates is not optional: bookworm-slim ships no /etc/ssl/certs at
+# all, and Dart verifies TLS against the system store. Without it every HTTPS
+# call fails with "CERTIFICATE_VERIFY_FAILED: unable to get local issuer
+# certificate" — which is not a Turso credential problem, so /health reported
+# a store error that looked like bad credentials and /leaderboard answered
+# 500. The build stage installs it; this stage is the one that talks to
+# Turso, so it needs its own copy. Verified in debian:bookworm-slim: the CA
+# bundle is absent before this install and present after.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libsqlite3-0 \
+    && apt-get install -y --no-install-recommends libsqlite3-0 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/server-build/bundle /app/server
