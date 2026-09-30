@@ -1,10 +1,9 @@
-import 'dart:math';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../services/online_client.dart';
+import '../services/storage_service.dart';
 import '../ui/ludo/ludo_view.dart';
 import '../ui/snakes/online_snakes_view.dart';
 import '../ui/theme.dart';
@@ -60,14 +59,41 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   /// Game the host picks when creating a room; joiners inherit the room's.
   String _gameType = 'ludo';
-  final String _seatId =
-      'u${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
-      '${Random().nextInt(1 << 16).toRadixString(36)}';
+
+  /// The persisted online identity: a stable player id plus a display name.
+  ///
+  /// Both used to be asked for, or invented, every time. The id in particular
+  /// was generated per session, and the server keys recorded results by it, so
+  /// every session was a different player with no memory of the last one —
+  /// which is why the online career never accumulated. Created on first use,
+  /// reused afterwards, and editable from the connect form.
+  String _seatId = '';
+  String _name = '';
 
   @override
   void initState() {
     super.initState();
     _serverCtrl.text = OnlineLobbyScreen.defaultServerUrl();
+    _restoreIdentity();
+  }
+
+  Future<void> _restoreIdentity() async {
+    final storage = StorageService();
+    final id = await storage.loadOnlinePlayerId();
+    final name = await storage.loadOnlineName();
+    if (!mounted) return;
+    setState(() {
+      _seatId = id;
+      if (name.isNotEmpty) _nameCtrl.text = name;
+      _name = name;
+    });
+  }
+
+  /// Remembers the name so it is offered next time. The id is never changed
+  /// here: changing it would orphan the career already recorded under it.
+  Future<void> _rememberName(String name) async {
+    _name = name;
+    await StorageService().saveOnlineName(name);
   }
 
   @override
@@ -93,6 +119,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       );
       return;
     }
+    // Remembered on connect, so the next visit offers the same name instead of
+    // asking for it again.
+    _rememberName(name);
     final client = OnlineClient(
       _serverCtrl.text.trim(),
       seatId: _seatId,
@@ -203,7 +232,21 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         const SizedBox(height: 24),
         _field(_serverCtrl, 'Server URL', 'ws://localhost:8080/ws'),
         const SizedBox(height: 12),
-        _field(_nameCtrl, 'Your name', 'e.g. Asha'),
+        _field(
+          _nameCtrl,
+          'Your name',
+          _name.isEmpty ? 'e.g. Asha' : 'saved \u2014 tap to change',
+        ),
+        // The id is shown rather than hidden: it is what the leaderboard
+        // records, so a player can see which identity their wins belong to.
+        if (_seatId.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 4),
+            child: Text(
+              'Player ID $_seatId \u00b7 reused every time',
+              style: const TextStyle(fontSize: 11, color: Colors.white38),
+            ),
+          ),
         const SizedBox(height: 24),
         SegmentedButton<String>(
           segments: const [

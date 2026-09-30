@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +11,8 @@ class StorageService {
   static const _kSound = 'gc.soundEnabled';
   static const _kHaptics = 'gc.hapticsEnabled';
   static const _kAnimations = 'gc.animationsEnabled';
+  static const _kOnlineId = 'gc.onlinePlayerId';
+  static const _kOnlineName = 'gc.onlineName';
 
   Future<PlayerRegistry> loadProfiles() async {
     final sp = await SharedPreferences.getInstance();
@@ -55,6 +58,35 @@ class StorageService {
   Future<void> saveAnimationsEnabled(bool value) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kAnimations, value);
+  }
+
+  /// The online player id, generated once and then reused.
+  ///
+  /// The server keys every recorded result by seat id, so a fresh id per
+  /// session meant every session was a different player: no career carried
+  /// across games, and a new row on the leaderboard each time. Persisting it
+  /// makes the same person the same player.
+  Future<String> loadOnlinePlayerId() async {
+    final sp = await SharedPreferences.getInstance();
+    final existing = sp.getString(_kOnlineId);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final generated =
+        'p${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+        '${Random().nextInt(1 << 16).toRadixString(36)}';
+    await sp.setString(_kOnlineId, generated);
+    return generated;
+  }
+
+  /// The display name last used online, so the connect form can offer it
+  /// instead of asking for the same name every time.
+  Future<String> loadOnlineName() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString(_kOnlineName) ?? '';
+  }
+
+  Future<void> saveOnlineName(String name) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kOnlineName, name);
   }
 
   /// Convenience JSON helpers for future use (settings blobs, sessions).
