@@ -7,6 +7,34 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(leaderboard): per-game boards for Ludo and Snakes
+
+The online leaderboard had no game dimension at all. Every finished game
+wrote into one merged table with no record of which game it was, so a
+Snakes win was indistinguishable from a Ludo one and there was no Snakes
+board to show — the local leaderboard splits the two, the online one
+could not.
+
+GameResult now carries the game, the row stores it, and both stores can
+report one game or all of them:
+
+  topPlayers(game: 'snakes')   totalGames(game: 'snakes')
+
+GET /leaderboard takes ?game=snakes and always reports gamesByGame, so
+the client can label its tabs without a request per tab. The client grew
+Ludo / Snakes / All tabs, each showing its own finished count, and an
+empty tab names its game instead of reading as a broken leaderboard.
+
+Both stores migrate a database that predates the column. This is not
+hypothetical: the deployed database is one, and CREATE TABLE IF NOT
+EXISTS leaves an existing table alone, so without the ALTER every insert
+naming `game` would fail and the leaderboard would 500. SQLite has no
+ADD COLUMN IF NOT EXISTS, so the column list is checked first.
+
+Rows that predate the column keep an empty game rather than being
+back-dated as Ludo: their game is genuinely unknown, and inventing it
+would put fake history on a board. They show on the combined board and
+on neither per-game board, and a test says exactly that.
 - Feat(online): seat hand-over, walk-outs and autoplay across the online tables
 
 - lib/server/game_server.dart: seats feed — every join/leave/autoplay change
@@ -66,6 +94,77 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 LeaderboardStore is now an abstract interface with two backends: the local SQLite file (renamed SqliteLeaderboardStore, unchanged behavior) and a new TursoLeaderboardStore that speaks Turso SQL-over-HTTP (POST /v2/pipeline, Bearer auth) via package:http — no native driver. Selected from TURSO_DATABASE_URL + TURSO_AUTH_TOKEN in bin/server.dart, falling back to the SQLite file. Store methods are async; GameAuthority fire-and-forgets idempotent writes and lets a failed write retry on the next room action. Wire format, row decoding (integers as strings), error surfacing and env selection are covered by 10 new tests.
 ### Fixed
+- Fix(snakes): home area, dice tumble, sound, leave dialog, and a pulse
+
+Six defects in the Snakes & Ladders boards, online and offline.
+
+The home area was missing online only. The offline view has always had a
+home lane under the board; the online view had none, and the board
+numbers 1..100, so square 0 has no cell and squareCenter(0) fell through
+the boustrophedon maths onto square 10's cell. Every pawn still waiting
+to enter was drawn on top of a numbered square. The offline panel is now
+ported across, and home pawns are excluded from the board layer so
+nothing is drawn twice.
+
+The die never tumbled online: the view passed a hardcoded
+`rolling: false`, so it snapped to the new face while the offline one
+rolled. It is now driven off the awaitingRoll -> awaitingMove transition
+for 600ms, matching the online Ludo view and fitting inside the 700ms
+beat before the forced move.
+
+Online Snakes played in silence. Ludo gets its dice sound through
+LudoSession; this view has no session, so nothing was ever wired to the
+client's onRoll and a whole game played silent.
+
+"Back to lobby" stranded the player. The game-over dialog is not
+barrier-dismissible and its button called onLeave without popping the
+dialog first, so the route underneath was torn down while the dialog
+stayed on top with no way to dismiss it.
+
+Autoplay lived in the row under the board, packed in with the die and
+ROLL — the row that overflows on a narrow layout, which is why it read
+as missing. It now sits in the app bar beside sound and pause, where
+Ludo already keeps it.
+
+The row of player chips above the board is gone; it duplicated what the
+pawns already show. Whose turn it is is now said by the piece itself,
+pulsing gently, on the board or waiting in the home strip. The pulse
+respects the "Board animations" preference and stops its ticker when
+nobody is on turn. The online SeatStatusStrip stays: it carries
+autoplay, walk-out and connection state the board cannot show.
+
+Sound gained a mute button on all four boards (both games, online and
+offline) reading the same persisted provider as Settings, so the two
+cannot disagree.
+- Fix(server): prove the store is reachable at startup, and name TLS failures
+
+The deployed leaderboard answered 500 with a HandshakeException because
+the runtime image had no CA certificates, and the debugging went after
+the Turso token for a long time because the failure looks exactly like a
+revoked credential. Nothing at boot said otherwise: the server started,
+logged "leaderboard: Turso", and served games perfectly, so the only
+symptom was a certificate error buried in a 500 on some later request.
+
+So the store is now contacted once at startup and the result logged:
+
+  Turso reachable: 8 game(s) recorded.
+
+and on failure the log names the likely cause instead of leaving it to be
+inferred from a stack trace:
+
+  !! Turso is NOT reachable: HandshakeException: ...
+     If this says CERTIFICATE_VERIFY_FAILED, the runtime image is missing
+     ca-certificates (debian:bookworm-slim ships no /etc/ssl/certs) —
+     fix the Dockerfile, not the token.
+
+A store that cannot be reached is still logged and the server still
+starts: liveness does not depend on the leaderboard, and an instance
+serving games perfectly should not refuse to boot over a scoreboard.
+The line is diagnostic, not a gate.
+
+Both branches verified against a real server: reachable prints the game
+count, and pointing TURSO_DATABASE_URL at a host with an untrusted
+certificate reproduces the exact failure and prints the guidance.
 - Fix(ui): stop labelling the online screens "Ludo" only
 
 Online Snakes & Ladders has worked since it shipped, but every label

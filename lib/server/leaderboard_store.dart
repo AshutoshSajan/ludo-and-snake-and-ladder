@@ -22,12 +22,20 @@ class GameResult {
     required this.name,
     required this.color,
     required this.rank,
+    this.game = 'ludo',
   });
 
   final String seatId; // stable player id across games
   final String name; // display name at the time of the game
   final String color; // corner color name, e.g. 'red'
   final int rank; // 1 = first to finish
+
+  /// Which game this result came from: 'ludo' or 'snakes'. Stored per row so
+  /// a career can be reported per game — one merged table made every Snakes
+  /// result indistinguishable from a Ludo one, which is why the online
+  /// leaderboard had no Snakes board to show. Defaults to 'ludo' so callers
+  /// that predate the field keep recording Ludo results.
+  final String game;
 }
 
 /// An aggregated leaderboard row: a player's career stats.
@@ -47,12 +55,12 @@ class LeaderboardEntry {
   final double avgRank; // lower is better (1.0 = always first)
 
   Map<String, dynamic> toJson() => {
-        'seatId': seatId,
-        'name': name,
-        'wins': wins,
-        'games': games,
-        'avgRank': avgRank,
-      };
+    'seatId': seatId,
+    'name': name,
+    'wins': wins,
+    'games': games,
+    'avgRank': avgRank,
+  };
 }
 
 /// Reads and writes finished-game results.
@@ -70,11 +78,12 @@ abstract interface class LeaderboardStore {
   });
 
   /// Career stats, best first: most wins, then better average rank, then
-  /// more games played.
-  Future<List<LeaderboardEntry>> topPlayers({int limit = 10});
+  /// more games played. Pass [game] to report one game's board only ('ludo'
+  /// or 'snakes'); omit it for the combined board.
+  Future<List<LeaderboardEntry>> topPlayers({int limit = 10, String? game});
 
-  /// Number of distinct finished games on record.
-  Future<int> totalGames();
+  /// Number of distinct finished games on record, or just those of [game].
+  Future<int> totalGames({String? game});
 
   /// Releases backend resources (database handles, HTTP clients).
   void close();
@@ -123,6 +132,21 @@ class SqliteLeaderboardStore implements LeaderboardStore {
         name TEXT NOT NULL
       );
     ''');
+    // A database created before per-game boards existed has no `game` column,
+    // and CREATE TABLE IF NOT EXISTS above leaves an existing table untouched.
+    // Adding it here is what makes an upgrade a no-op for fresh databases and
+    // a repair for deployed ones. DEFAULT '' keeps the rows already there: they
+    // predate the column, so their game is genuinely unknown, and counting them
+    // as Ludo would invent history. They simply appear on the combined board
+    // and on neither per-game board.
+    final columns = _db
+        .select('PRAGMA table_info(results)')
+        .map((r) => r['name'] as String);
+    if (!columns.contains('game')) {
+      _db.execute(
+        "ALTER TABLE results ADD COLUMN game TEXT NOT NULL DEFAULT ''",
+      );
+    }
   }
 
   @override
@@ -140,15 +164,25 @@ class SqliteLeaderboardStore implements LeaderboardStore {
     _db.execute('BEGIN');
     try {
       final stmt = _db.prepare(
-          'INSERT OR IGNORE INTO results '
-          '(game_id, seat_id, name, color, rank, played_at) '
-          'VALUES (?, ?, ?, ?, ?, ?)');
+        'INSERT OR IGNORE INTO results '
+        '(game_id, seat_id, name, color, rank, played_at, game) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      );
       final upsert = _db.prepare(
-          'INSERT INTO players (seat_id, name) VALUES (?, ?) '
-          'ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name');
+        'INSERT INTO players (seat_id, name) VALUES (?, ?) '
+        'ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name',
+      );
       try {
         for (final r in results) {
-          stmt.execute([gameId, r.seatId, r.name, r.color, r.rank, now]);
+          stmt.execute([
+            gameId,
+            r.seatId,
+            r.name,
+            r.color,
+            r.rank,
+            now,
+            r.game,
+          ]);
           upsert.execute([r.seatId, r.name]);
         }
       } finally {
@@ -163,8 +197,12 @@ class SqliteLeaderboardStore implements LeaderboardStore {
   }
 
   @override
-  Future<List<LeaderboardEntry>> topPlayers({int limit = 10}) async {
-    final rows = _db.select('''
+  Future<List<LeaderboardEntry>> topPlayers({
+    int limit = 10,
+    String? game,
+  }) async {
+    final rows = _db.select(
+      '''
       SELECT r.seat_id AS seat_id,
              p.name AS name,
              SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END) AS wins,
@@ -172,10 +210,13 @@ class SqliteLeaderboardStore implements LeaderboardStore {
              AVG(r.rank) AS avg_rank
       FROM results r
       JOIN players p ON p.seat_id = r.seat_id
+      ${game != null ? "WHERE r.game = ?" : ''}
       GROUP BY r.seat_id
       ORDER BY wins DESC, avg_rank ASC, games DESC
       LIMIT ?
-    ''', [limit]);
+    ''',
+      [?game, limit],
+    );
     return [
       for (final row in rows)
         LeaderboardEntry(
@@ -189,9 +230,13 @@ class SqliteLeaderboardStore implements LeaderboardStore {
   }
 
   @override
-  Future<int> totalGames() async => _db
-      .select('SELECT COUNT(DISTINCT game_id) AS n FROM results')
-      .first['n'] as int;
+  Future<int> totalGames({String? game}) async =>
+      _db.select(
+            'SELECT COUNT(DISTINCT game_id) AS n FROM results'
+            '${game != null ? ' WHERE game = ?' : ''}',
+            [?game],
+          ).first['n']
+          as int;
 
   @override
   void close() {
