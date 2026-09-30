@@ -2180,6 +2180,35 @@ void main() {
     });
   });
 
+  group('the deployed image can actually reach Turso', () {
+    // The deployed leaderboard 500 was not a Turso problem at all: the
+    // runtime stage of the Dockerfile installed libsqlite3-0 but not
+    // ca-certificates, and debian:bookworm-slim ships no /etc/ssl/certs
+    // directory. Dart verifies TLS against the system store, so every
+    // HTTPS call failed with CERTIFICATE_VERIFY_FAILED — a failure that
+    // reads exactly like a bad token, and sent the debugging in the wrong
+    // direction entirely. Nothing in the suite caught it because the tests
+    // run on a developer machine that has certificates installed.
+    test('the runtime stage installs ca-certificates', () {
+      final dockerfile = File('Dockerfile').readAsStringSync();
+      // The final FROM is the stage that actually runs the server.
+      final runtimeStage = dockerfile.split('FROM ').last;
+      expect(
+        runtimeStage,
+        contains('ca-certificates'),
+        reason:
+            'the runtime image must trust HTTPS CAs or Turso is unreachable',
+      );
+      // And the install has to be in the same apt-get line as the other
+      // runtime package, not merely mentioned somewhere in the file (the
+      // build stage already mentions it, and that is not the stage that
+      // talks to Turso).
+      final aptLine = RegExp(r'apt-get install[^\n]*ca-certificates[^\n]*')
+          .firstMatch(runtimeStage);
+      expect(aptLine, isNotNull);
+    });
+  });
+
   group('CORS (dev web app runs on another origin)', () {
     /// Which production handler backs each browser-visible route.
     Future<shelf.Response> routed(String path, shelf.Request req) {
