@@ -4,6 +4,7 @@
 /// is not running at all. Each state now says what it means.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -198,5 +199,27 @@ void main() {
       expect(budget, greaterThanOrEqualTo(15000),
           reason: 'the wait must cover a free-tier wake-up');
     });
+    group('while the server is waking', () {
+    testWidgets('the wait is explained, not a bare spinner', (tester) async {
+      // The request now waits ~18s for a sleeping free-tier host. With nothing
+      // but a spinner that wait is indistinguishable from a hang, and from the
+      // error that follows it - which is exactly how "is it broken?" becomes
+      // the question instead of "is it waking?".
+      final gate = Completer<LeaderboardData>();
+      await tester.pumpWidget(MaterialApp(
+        home: ScoreboardScreen(
+          serverUrl: 'ws://localhost:8080/ws',
+          load: (_) => gate.future,
+        ),
+      ));
+      await tester.pump();
+      expect(find.text('Starting the leaderboard server…'), findsOneWidget);
+      expect(find.textContaining('free-tier host sleeps'), findsOneWidget);
+
+      gate.complete(LeaderboardData(games: 0, rows: const []));
+      await tester.pumpAndSettle();
+      expect(find.text('Starting the leaderboard server…'), findsNothing);
+    });
   });
+});
 }
