@@ -39,6 +39,7 @@ import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
+import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
@@ -738,9 +739,14 @@ Future<void> main(List<String> args) async {
 /// when WEB_DIR (default build/web) has no index.html.
 shelf.Handler? _webStaticHandler() {
   final dir = webDir;
-  return dir == null
-      ? null
-      : createStaticHandler(dir, defaultDocument: 'index.html');
+  if (dir == null) return null;
+  // Wrapped rather than configured: this version of shelf_static has no
+  // header hook, so the policy is applied to whatever it returns.
+  final inner = createStaticHandler(dir, defaultDocument: 'index.html');
+  return (req) async {
+    final resp = await inner(req);
+    return resp.change(headers: webCacheHeaders(req.url.path));
+  };
 }
 
 String? get webDir {
