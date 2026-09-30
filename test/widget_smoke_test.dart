@@ -13,23 +13,20 @@ void main() {
     expect(find.text('Game Club'), findsOneWidget);
     expect(find.text('Ludo'), findsOneWidget);
     expect(find.text('Snakes & Ladders'), findsOneWidget);
-    // The local leaderboard is gone, so exactly one board remains and it is
-    // simply "Leaderboard" — no qualifier needed to tell it apart from
-    // anything. The trophy pins the icon too, since the label alone would not
-    // catch a stray cloud or bar-chart glyph.
-    expect(find.text('On this device'), findsNothing);
-    expect(find.text('Online — all players'), findsNothing);
-    // The home list is a ListView, so the board button sits below the fold at
-    // the default 800x600 test viewport. scrollUntilVisible is how a user
-    // reaches it; a bare find.text reports it missing and invites deleting a
-    // button that works fine on a real screen.
+    // Leaderboard, Play Online and Settings share one row. Asserted as a
+    // group because the point is that they are together: stacked over two rows
+    // the last one fell below the fold on a phone.
     await tester.scrollUntilVisible(
-      find.text('Leaderboard'),
+      find.text('Play Online'),
       200,
       scrollable: find.byType(Scrollable).first,
     );
-    expect(find.text('Leaderboard'), findsOneWidget);
+    expect(find.text('Play Online'), findsOneWidget);
     expect(find.byIcon(Icons.emoji_events), findsOneWidget);
+    expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
+    // The removed local board must not come back.
+    expect(find.text('On this device'), findsNothing);
+    expect(find.text('Online — all players'), findsNothing);
   });
 
   testWidgets('tapping Ludo opens the setup screen', (tester) async {

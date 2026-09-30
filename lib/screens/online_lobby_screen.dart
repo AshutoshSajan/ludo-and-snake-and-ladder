@@ -176,31 +176,38 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   @override
   Widget build(BuildContext context) {
     final client = _client;
+    // Once a room is live the board draws its own Scaffold and app bar. The
+    // lobby's bar used to stay wrapped around it, so online play showed two
+    // stacked title bars — "Play Online" above the game's own — where local
+    // play shows one. The bar belongs to the lobby; the board brings its own.
+    final inGame = client != null &&
+        (client.state != null || client.snakesState != null);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Play Online'),
-        actions: [
-          // No message icon here. Chat lives on the game board's app bar, next
-          // to the sound and autoplay controls, because that is where a player
-          // is once a room exists. A second chat icon in the lobby put the same
-          // control in two places and left the lobby bar carrying a glyph that
-          // did nothing until the game had already replaced the screen.
-          if (client != null && client.state == null)
-            IconButton(
-              icon: const Icon(Icons.close),
-              tooltip: 'Leave and disconnect',
-              onPressed: () async {
-                // Say something on the way out rather than just hanging up:
-                // the room hears that the seat is given up, and the people
-                // still in the lobby are told who went instead of waiting on
-                // a chair that nobody is coming back to.
-                await client.sendLeave();
-                if (!context.mounted) return;
-                Navigator.of(context).pop();
-              },
+      appBar: inGame
+          ? null
+          : AppBar(
+              title: const Text('Play Online'),
+              actions: [
+                // No message icon here. Chat lives on the game board's app bar,
+                // next to sound and autoplay, which is where a player is once
+                // a room exists. A second chat icon in the lobby put the same
+                // control in two places.
+                if (client != null)
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: 'Leave and disconnect',
+                    onPressed: () async {
+                      // Say something on the way out rather than just hanging
+                      // up: the room hears that the seat is given up, and the
+                      // people still in the lobby are told who went instead of
+                      // waiting on a chair that nobody is coming back to.
+                      await client.sendLeave();
+                      if (!context.mounted) return;
+                      Navigator.of(context).pop();
+                    },
+                  ),
+              ],
             ),
-        ],
-      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: RadialGradient(

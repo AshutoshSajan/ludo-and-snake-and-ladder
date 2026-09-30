@@ -58,30 +58,37 @@ class HomeScreen extends ConsumerWidget {
                     onTap: () => _openSetup(context, GameKind.snakes),
                   ),
                   const SizedBox(height: 16),
-                  // The settings gear sits beside the leaderboard button. Both
-                  // were in a Row with the local leaderboard, which is gone —
-                  // the online board is the only one now, so it takes the
-                  // width and the gear keeps the corner.
+                  // Leaderboard, online play and settings on one line. They were
+                  // stacked over two rows, which pushed the last one below the
+                  // fold on a phone and made the home screen taller than the
+                  // two game cards it exists to launch. "Play Online" keeps the
+                  // width because it is the one people come for; the other two
+                  // are icon buttons with tooltips.
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          // Trophy, and just "Leaderboard". The label used to
-                          // carry "Online" to tell it apart from the local
-                          // board; with that one removed there is nothing left
-                          // to disambiguate, so the qualifier was only making
-                          // the button longer than it needed to be.
-                          icon: const Icon(Icons.emoji_events),
-                          label: const Text('Leaderboard'),
+                          icon: const Icon(Icons.wifi, size: 18),
+                          label: const Text('Play Online'),
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => const ScoreboardScreen(),
+                              builder: (_) => const OnlineLobbyScreen(),
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      IconButton.filled(
+                      const SizedBox(width: 10),
+                      IconButton.outlined(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const ScoreboardScreen(),
+                          ),
+                        ),
+                        icon: const Icon(Icons.emoji_events),
+                        tooltip: 'Leaderboard',
+                      ),
+                      const SizedBox(width: 10),
+                      IconButton.outlined(
                         onPressed: () => Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => const SettingsScreen(),
@@ -91,18 +98,6 @@ class HomeScreen extends ConsumerWidget {
                         tooltip: 'Settings',
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 12),
-                  Center(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.wifi, size: 18),
-                      label: const Text('Play Online'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const OnlineLobbyScreen(),
-                        ),
-                      ),
-                    ),
                   ),
                 ],
               ),

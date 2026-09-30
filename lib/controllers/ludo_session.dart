@@ -140,6 +140,11 @@ class LudoSession extends ChangeNotifier {
       s.sound.dice();
       Haptics.light();
     };
+    // The message chime lives here, not in the chat sheet. Wired in the sheet
+    // it could only fire once that sheet had been opened at least once, so a
+    // message arriving before you ever tapped the icon was silent — which is
+    // exactly the message you most needed to hear about.
+    client.onMessageArrived = (_) => s.sound.message();
     client.onState = (old, next) => s._adoptState(old, next);
     return s;
   }

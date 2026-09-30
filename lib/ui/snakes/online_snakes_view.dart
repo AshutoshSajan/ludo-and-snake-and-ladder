@@ -72,6 +72,13 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     // whole game played in silence. Wired here, from the same provider the
     // local view uses, and detached again on dispose.
     widget.client.onRoll = _onRoll;
+    // The chime is wired from the view, not from the chat sheet: from the sheet
+    // it could only fire after that sheet had been opened once, so the first
+    // messages of a game — the ones you most want to hear — arrived silently.
+    widget.client.onMessageArrived = (_) =>
+        ProviderScope.containerOf(context, listen: false)
+            .read(soundServiceProvider)
+            .message();
     _onClientUpdate();
   }
 
@@ -89,8 +96,15 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     if (oldWidget.client != widget.client) {
       oldWidget.client.removeListener(_onClientUpdate);
       if (oldWidget.client.onRoll == _onRoll) oldWidget.client.onRoll = null;
+      if (oldWidget.client.onMessageArrived != null) {
+        oldWidget.client.onMessageArrived = null;
+      }
       widget.client.addListener(_onClientUpdate);
       widget.client.onRoll = _onRoll;
+      widget.client.onMessageArrived = (_) =>
+          ProviderScope.containerOf(context, listen: false)
+              .read(soundServiceProvider)
+              .message();
       _onClientUpdate();
     }
   }

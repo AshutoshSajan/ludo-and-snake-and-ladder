@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
 import '../theme.dart';
 
@@ -43,18 +42,11 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     // otherwise a message arriving while it is open would still count as
     // unread and the dot on the app bar icon would never clear.
     widget.client.setChatOpen(true);
-    // Wired here rather than at the app bar icon so every path that opens the
-    // sheet gets the sound, including a future one.
-    widget.client.onMessageArrived =
-        (_) => ref.read(soundServiceProvider).message();
   }
 
   @override
   void dispose() {
     widget.client.setChatOpen(false);
-    // Leave no dangling callback: the client outlives this sheet, and a stale
-    // hook would keep playing audio through a disposed State.
-    widget.client.onMessageArrived = null;
     widget.client.removeListener(_onClient);
     _input.dispose();
     super.dispose();
