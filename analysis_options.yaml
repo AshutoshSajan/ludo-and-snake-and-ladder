@@ -18,6 +18,13 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # The vendored Flutter SDK that netlify.toml unpacks into the repo so
+    # Netlify's build cache can reuse it between builds. It is gitignored, but
+    # gitignoring does not stop the analyzer walking it — and its own
+    # analysis_options.yaml is what trips the fatal-infos gate, not this
+    # project's code. Three deprecated-lint warnings in a downloaded SDK
+    # would otherwise fail every local run and every push.
+    - _flutter/**
 
 linter:
   # The lint rules applied to this project can be customized in the
