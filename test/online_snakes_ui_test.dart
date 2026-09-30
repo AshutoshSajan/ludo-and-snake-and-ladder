@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/snakes/snakes_engine.dart';
+import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/online_client.dart';
 import 'package:game_club/ui/snakes/online_snakes_view.dart';
 import 'package:stream_channel/stream_channel.dart';
@@ -98,10 +99,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: OnlineSnakesView(
-            client: client,
-            onLeave: () {},
-          ),
+          body: OnlineSnakesView(client: client, onLeave: () {}),
         ),
       ),
     );
@@ -126,16 +124,14 @@ void main() {
     );
   });
 
-  testWidgets('roll snapshot triggers the automatic move intent',
-      (tester) async {
+  testWidgets('roll snapshot triggers the automatic move intent', (
+    tester,
+  ) async {
     await connectAndEnterGame(tester);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: OnlineSnakesView(
-            client: client,
-            onLeave: () {},
-          ),
+          body: OnlineSnakesView(client: client, onLeave: () {}),
         ),
       ),
     );
@@ -164,22 +160,17 @@ void main() {
     );
     // Exactly once — further pumps must not duplicate the intent.
     await tester.pump(const Duration(milliseconds: 800));
-    expect(
-      channel.sent.where((m) => m['type'] == 'move').length,
-      1,
-    );
+    expect(channel.sent.where((m) => m['type'] == 'move').length, 1);
   });
 
-  testWidgets('not my turn: roll disabled, other turn snapshots still render',
-      (tester) async {
+  testWidgets('not my turn: roll disabled, other turn snapshots still render', (
+    tester,
+  ) async {
     await connectAndEnterGame(tester);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: OnlineSnakesView(
-            client: client,
-            onLeave: () {},
-          ),
+          body: OnlineSnakesView(client: client, onLeave: () {}),
         ),
       ),
     );
@@ -218,10 +209,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: OnlineSnakesView(
-            client: client,
-            onLeave: () {},
-          ),
+          body: OnlineSnakesView(client: client, onLeave: () {}),
         ),
       ),
     );
@@ -239,5 +227,48 @@ void main() {
       channel.sent.any((m) => m['type'] == 'roll' || m['type'] == 'move'),
       isFalse,
     );
+  });
+
+  group('the lobby offers both games', () {
+    // Online Snakes & Ladders is fully playable, but the home screen's button
+    // and the lobby's app bar both said "Online Ludo" and the tagline said
+    // "Play Ludo online against friends" no matter which game the toggle had
+    // selected. Someone looking for online Snakes had no way to know the
+    // screen served them, which is exactly how a working feature reads as a
+    // missing one.
+    testWidgets('the tagline follows the selected game', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: OnlineLobbyScreen()));
+      await tester.pumpAndSettle();
+
+      // Defaults to Ludo.
+      expect(find.text('Play Ludo online against friends'), findsOneWidget);
+      // The toggle offers both games...
+      expect(find.text('Ludo'), findsOneWidget);
+      expect(find.text('Snakes'), findsOneWidget);
+
+      // ...and picking Snakes rewords the pitch, with no connection needed.
+      await tester.tap(find.text('Snakes'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Play Snakes & Ladders online against friends'),
+        findsOneWidget,
+      );
+      expect(find.text('Play Ludo online against friends'), findsNothing);
+
+      // And back again, so the label is derived rather than one-way.
+      await tester.tap(find.text('Ludo'));
+      await tester.pumpAndSettle();
+      expect(find.text('Play Ludo online against friends'), findsOneWidget);
+    });
+
+    testWidgets('nothing on the online path is labelled Ludo-only', (
+      tester,
+    ) async {
+      await tester.pumpWidget(const MaterialApp(home: OnlineLobbyScreen()));
+      await tester.pumpAndSettle();
+      // The app bar names the mode, not one game.
+      expect(find.text('Play Online'), findsOneWidget);
+      expect(find.text('Online Ludo'), findsNothing);
+    });
   });
 }
