@@ -132,4 +132,97 @@ void main() {
       expect(toml, isNot(contains('force = true')));
     });
   });
+
+  group('local checks (the free stand-in for runner minutes)', () {
+    test('tool/ci.sh runs the same gates the CI test job does', () {
+      final ci = File('tool/ci.sh').readAsStringSync();
+      // --fatal-infos is the part that matters: without it an unused import
+      // scrolls past instead of failing, so local and CI would disagree about
+      // whether the same commit is green.
+      expect(ci, contains('flutter analyze --fatal-infos'));
+      expect(ci, contains('flutter test'));
+      expect(ci, contains('flutter build web --release'));
+    });
+
+    test('the changelog is generated locally, not by a bot', () {
+      final changelog = File('tool/changelog.sh').readAsStringSync();
+      expect(changelog, contains('git-cliff'));
+      // The check that made the old CI job worth keeping: a regeneration that
+      // erases a released section means the branch is missing commits, and the
+      // changelog would silently rewrite history.
+      expect(changelog, contains('would drop section'));
+      expect(File('cliff.toml').existsSync(), isTrue);
+    });
+
+    test('CI no longer regenerates the changelog — it would race the hook', () {
+      final workflow =
+          File('.github/workflows/ci.yml').readAsStringSync();
+      // Match the job definition and the shell that would run it, not the
+      // word "git-cliff" — the explanatory comment above the removed job
+      // legitimately names it.
+      expect(workflow, isNot(matches(RegExp(r'^\s{2}changelog:', multiLine: true))));
+      expect(workflow, isNot(matches(RegExp(r'run:.*git-cliff'))));
+      // The backstop stays: a hook is bypassable with --no-verify, so these
+      // are the only checks that run on a merge made from the GitHub UI.
+      expect(workflow, contains('guard-main:'));
+      expect(workflow, contains('  test:'));
+    });
+
+    test('the pre-push hook gates pushes and does not rewrite them', () {
+      final hook = File('.githooks/pre-push').readAsStringSync();
+      expect(hook, contains('tool/ci.sh'));
+      expect(hook, contains('tool/changelog.sh --check'));
+      // Verifying rather than rewriting is deliberate: amending a commit
+      // mid-push rewrites a ref the user already computed.
+      expect(hook, isNot(contains('commit --amend')));
+      expect(hook, isNot(contains('git commit')));
+      // An escape hatch, but one that says what it costs.
+      expect(hook, contains('SKIP_LOCAL_CI'));
+    });
+
+    test('the hook reads the branch from after the colon, or never fires', () {
+      // Git passes "<local-ref>:<remote-ref>". Matching the whole argument
+      // against refs/heads/staging looks correct and never matches, so the
+      // changelog gate would be installed, silent, and doing nothing.
+      final hook = File('.githooks/pre-push').readAsStringSync();
+      expect(hook, contains(r'${remote_ref#*:}'),
+          reason: 'the hook must strip the local ref before matching the branch');
+      expect(hook, isNot(contains(r'for remote_ref in "${@-"')),
+          reason: r'"${@-}" is not valid parameter expansion');
+    });
+
+    test('the hook actually gates a trunk push', () {
+      // Runs the real script with the ref shape git actually passes. Cheap:
+      // SKIP_LOCAL_CI short-circuits the analyze/test half, so this exercises
+      // only the ref parsing and the changelog check.
+      final result = Process.runSync(
+        '.githooks/pre-push',
+        ['refs/heads/staging:refs/heads/staging'],
+        environment: {'SKIP_LOCAL_CI': '1', 'PATH': '/usr/bin:/bin:/usr/local/bin'},
+        workingDirectory: Directory.current.path,
+      );
+      final out = '${result.stdout}${result.stderr}';
+      expect(out, contains('checking CHANGELOG.md'),
+          reason: 'a staging push must verify the changelog: $out');
+
+      final dev = Process.runSync(
+        '.githooks/pre-push',
+        ['refs/heads/dev:refs/heads/dev'],
+        environment: {'SKIP_LOCAL_CI': '1', 'PATH': '/usr/bin:/bin:/usr/local/bin'},
+        workingDirectory: Directory.current.path,
+      );
+      expect('${dev.stdout}${dev.stderr}', isNot(contains('checking CHANGELOG')),
+          reason: 'a dev push should not pay for the changelog check');
+    }, skip: !File('.githooks/pre-push').existsSync());
+
+    test('hooks are shipped executable, or git silently ignores them', () {
+      // A non-executable hook is not a weaker check, it is no check at all,
+      // and git reports nothing when it skips one.
+      for (final f in ['tool/ci.sh', 'tool/changelog.sh', '.githooks/pre-push']) {
+        expect(File(f).existsSync(), isTrue, reason: '$f is missing');
+        expect(File(f).statSync().mode & 0x111, isNot(0),
+            reason: '$f is not executable — git will ignore it silently');
+      }
+    });
+  });
 }
