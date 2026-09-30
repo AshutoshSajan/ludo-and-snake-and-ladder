@@ -6,6 +6,10 @@ import '../providers/app_providers.dart';
 import '../ui/theme.dart';
 
 /// Local leaderboards: wins, games and win-rate per profile and game.
+///
+/// These count games played *on this device*. The online board is a separate
+/// screen with different numbers, because a local game is never reported to the
+/// server — so this one cannot be a stale copy of that one, and vice versa.
 class LeaderboardScreen extends ConsumerWidget {
   const LeaderboardScreen({super.key});
 
@@ -17,7 +21,24 @@ class LeaderboardScreen extends ConsumerWidget {
       ..sort((a, b) => b.snakesWins.compareTo(a.snakesWins));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Leaderboards')),
+      appBar: AppBar(
+        title: const Text('On this device'),
+        // Without this the screen reads as the whole leaderboard, which is how
+        // "Leaderboards" and "Online Leaderboard" ended up ambiguous on home.
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(20),
+          child: Padding(
+            padding: EdgeInsets.only(bottom: 8, left: 16, right: 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Local games only — the online board is separate.',
+                style: TextStyle(fontSize: 12, color: Colors.white54),
+              ),
+            ),
+          ),
+        ),
+      ),
       body: profiles.isEmpty
           ? const Center(
               child: Text(
