@@ -382,17 +382,37 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   Widget _lobby(OnlineClient client) {
     if (client.status == OnlineStatus.connecting ||
         client.status == OnlineStatus.reconnecting) {
+      // A sleeping free-tier host refuses the first few sockets while the
+      // platform wakes it. That is a wait, not a failure, so it is named as
+      // one — otherwise the first Play press after an idle spell looks broken.
+      final waking = client.waitingForColdStart;
       final back = client.status == OnlineStatus.reconnecting;
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const CircularProgressIndicator(),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Text(
-              back ? 'Connection lost — reconnecting…' : 'Connecting…',
+              waking
+                  ? 'Starting the game server…'
+                  : back
+                  ? 'Connection lost — reconnecting…'
+                  : 'Connecting…',
               style: const TextStyle(color: AppColors.ivory, fontSize: 14),
             ),
+            if (waking) ...[
+              const SizedBox(height: 8),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  'Free hosting sleeps when idle, so the first game of a '
+                  'session can take up to a minute to wake up.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppColors.ivoryDark, fontSize: 12),
+                ),
+              ),
+            ],
           ],
         ),
       );
