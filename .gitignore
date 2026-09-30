@@ -50,3 +50,7 @@ app.*.map.json
 .env
 .session-exports/
 .netlify/
+
+# Flutter SDK unpacked by the Netlify build (see netlify.toml); cached
+# between builds, never committed.
+_flutter/
