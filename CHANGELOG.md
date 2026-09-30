@@ -376,6 +376,39 @@ play it.
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Host the web client on Netlify instead of Vercel
+
+Adds netlify.toml and removes vercel.json, so the Flutter web client deploys
+to Netlify while the WebSocket game server stays on Render.
+
+The build installs Flutter itself: Netlify's stock image has none, and the
+cirruslabs images cannot be used because they froze at 3.44.0 / Dart 3.12 and
+cannot resolve this project (Dart ^3.13.2). It pulls the official 3.47.2
+tarball, matching the Dockerfile, and unpacks it inside the repo so Netlify's
+build cache keeps it between builds.
+
+Two cache bugs found by simulating Netlify's header resolution rather than
+reading the config, both of which would have shipped:
+
+- The site root has no filename, so it matched the catch-all and would have
+  been served immutable for a year. This is the same trap already fixed in
+  web_cache.dart, recurring on a new origin.
+- A catch-all cache rule is worse still. A deep link like /ludo/abc is
+  answered by index.html, but Netlify picks the header from the path the
+  browser requested, so every shared game URL and refresh would have served a
+  year-old app shell.
+
+So there is no blanket cache rule: the shell files are listed explicitly and
+/assets, /canvaskit and /fonts are named as the versioned directories.
+Anything unrecognised falls through to Netlify's own revalidating default,
+which is the safe direction.
+
+deploy_config_test.dart pins all of it, including that the Flutter version
+matches the Dockerfile and that the policy still agrees with
+web_cache.dart, so the two origins cannot drift. Removing the '/' rule makes
+it fail, so it is a real assertion and not a tautology.
+
+255/255 tests pass; dart analyze lib bin test clean.
 - Give every player a unique name and an avatar
 
 Two players on the leaderboard could be indistinguishable: the default name

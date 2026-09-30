@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Pre-push: the free local gate.
+#
+# Enable once per clone with:
+#     git config core.hooksPath .githooks
+#
+# The changelog check runs only for trunk branches, and only in --check mode.
+# It verifies rather than rewrites on purpose: a hook that amended a commit
+# mid-push would be rewriting a ref the user had already computed, and getting
+# that wrong pushes something they never reviewed. Blocking with the exact fix
+# is predictable; silently mutating history during a push is not.
+set -uo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+skip() { printf '\033[33m[pre-push] %s\033[0m\n' "$1"; exit 0; }
+
+# 1. The changelog must match history before a trunk push.
+#
+# Git passes one "<local-ref>:<remote-ref>" argument per ref being updated, so
+# the branch must be read from the part AFTER the colon. Matching the whole
+# argument looks right and silently never fires — the gate appears installed
+# and does nothing, which is worse than not having it at all.
+trunk=0
+for remote_ref in "$@"; do
+  case "${remote_ref#*:}" in
+    refs/heads/main|refs/heads/staging) trunk=1 ;;
+  esac
+done
+
+if [ "$trunk" = "1" ]; then
+  printf '\033[1m[pre-push] checking CHANGELOG.md against history\033[0m\n'
+  if ! tool/changelog.sh --check; then
+    exit 1
+  fi
+fi
+
+# 2. The local quality gate, unless this push only moves tags.
+pushing_refs=()
+for remote_ref in "$@"; do
+  case "$remote_ref" in
+    refs/tags/*) ;;
+    *) pushing_refs+=("$remote_ref") ;;
+  esac
+done
+[ ${#pushing_refs[@]} -eq 0 ] && skip "tag-only push, nothing to check."
+
+if [ "${SKIP_LOCAL_CI:-0}" = "1" ]; then
+  skip "SKIP_LOCAL_CI=1 — skipping analyze/test."
+fi
+
+printf '\033[1m[pre-push] running local checks (analyze + test)\033[0m\n'
+if ! tool/ci.sh; then
+  printf '\n\033[31m[pre-push] blocked: local checks failed.\033[0m\n' >&2
+  echo "  Fix and push again, or bypass deliberately with --no-verify." >&2
+  echo "  CI is over its runner-minute quota, so this hook is currently the" >&2
+  echo "  only automated check — bypassing it means nothing verifies the push." >&2
+  exit 1
+fi
+
+printf '\033[32m[pre-push] ok\033[0m\n'
