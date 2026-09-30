@@ -1299,6 +1299,162 @@ void main() {
     });
   });
 
+  group('GameAuthority: the autoplay driver', () {
+    test('the table stops mid-turn once the last connection is gone, and picks '
+        'up where it left off when someone comes back', () async {
+      final host = <String>[];
+      final guest = <String>[];
+      final auth = GameAuthority(
+        rng: Random(13),
+        autoStepDelay: const Duration(milliseconds: 20),
+      );
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.green, seatId: 'g', id: 'c2', on: guest.add),
+      );
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+      // Both seats handed to the table: two players try autoplay and then
+      // close their windows.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c1',
+        msg: {'type': 'autoplay', 'on': true},
+      );
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c2',
+        msg: {'type': 'autoplay', 'on': true},
+      );
+
+      // With someone there to watch, the table does play the seats.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(
+        room.state.rollSeq,
+        greaterThan(0),
+        reason: 'the seats were handed over, so the table plays them',
+      );
+
+      // Both tabs close: nobody is connected to this room any more.
+      auth.leaveRoom(room.code, 'c1');
+      auth.leaveRoom(room.code, 'c2');
+      final frozenTurn = room.state.currentPlayer.id;
+      final frozenRolls = room.state.rollSeq;
+      final frozenPhase = room.state.phase;
+
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(
+        room.state.rollSeq,
+        frozenRolls,
+        reason: 'a game with nobody in it must not play itself',
+      );
+      expect(room.state.currentPlayer.id, frozenTurn);
+      expect(room.state.phase, frozenPhase);
+
+      // Coming back resumes the paused turn instead of finding it moved on.
+      final back = _member(LudoColor.red, seatId: 'red', id: 'c9');
+      expect(auth.rejoinRoom(room.code, back), same(room));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(
+        room.state.rollSeq,
+        greaterThan(frozenRolls),
+        reason: 'the driver picks the paused turn back up for whoever returns',
+      );
+    });
+
+    test('a seat that went quiet keeps playing while somebody is still at the '
+        'table', () async {
+      final host = <String>[];
+      final guest = <String>[];
+      final auth = GameAuthority(
+        rng: Random(17),
+        autoStepDelay: const Duration(milliseconds: 20),
+      );
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.green, seatId: 'g', id: 'c2', on: guest.add),
+      );
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c1',
+        msg: {'type': 'autoplay', 'on': true},
+      );
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c2',
+        msg: {'type': 'autoplay', 'on': true},
+      );
+
+      // One of the two closes the tab; the other stays and keeps watching.
+      auth.leaveRoom(room.code, 'c2');
+      final rolls = room.state.rollSeq;
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(
+        room.state.rollSeq,
+        greaterThan(rolls),
+        reason:
+            'a hand-over has to survive the tab closing — that is the '
+            'whole point of keeping it on the server',
+      );
+    });
+
+    test('a walk-out hands the turn to a seat the table plays, and the driver '
+        'picks it up', () async {
+      final host = <String>[];
+      final auth = GameAuthority(
+        rng: Random(23),
+        autoStepDelay: const Duration(milliseconds: 20),
+      );
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'g', id: 'c2'));
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.yellow, seatId: 'y', id: 'c3'),
+      );
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+
+      // Red owes the first roll, so the seat after it in the rotation is the
+      // one that inherits the turn when red walks out. Derive it rather than
+      // assume: a three-player table seats arrivals by corner order and the
+      // second arrival sits opposite red, so arrival order and rotation order
+      // do not line up. The inheriting seat is handed to the table *before*
+      // the walk-out, which is the case under test.
+      expect(room.state.currentPlayer.id, 'red');
+      final heirSeat = room.state.players[1].id;
+      final heir = room.members.values.firstWhere((m) => m.seatId == heirSeat);
+      auth.handleIntent(
+        room: room,
+        connectionId: heir.id,
+        msg: {'type': 'autoplay', 'on': true},
+      );
+
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'leave'});
+      expect(
+        room.state.currentPlayer.id,
+        heirSeat,
+        reason: 'the turn passes to the seat after the one that walked out',
+      );
+
+      final rolls = room.state.rollSeq;
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(
+        room.state.rollSeq,
+        greaterThan(rolls),
+        reason:
+            'the walk-out moved the turn onto an autoplay seat, so the '
+            'driver has to be armed for it',
+      );
+    });
+  });
+
   group('GameAuthority: walk-outs', () {
     test('a two-player walk-out decides the game and gives up the chair', () {
       final host = <String>[];
