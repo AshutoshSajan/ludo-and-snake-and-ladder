@@ -66,6 +66,31 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 LeaderboardStore is now an abstract interface with two backends: the local SQLite file (renamed SqliteLeaderboardStore, unchanged behavior) and a new TursoLeaderboardStore that speaks Turso SQL-over-HTTP (POST /v2/pipeline, Bearer auth) via package:http — no native driver. Selected from TURSO_DATABASE_URL + TURSO_AUTH_TOKEN in bin/server.dart, falling back to the SQLite file. Store methods are async; GameAuthority fire-and-forgets idempotent writes and lets a failed write retry on the next room action. Wire format, row decoding (integers as strings), error surfacing and env selection are covered by 10 new tests.
 ### Fixed
+- Fix(ui): stop labelling the online screens "Ludo" only
+
+Online Snakes & Ladders has worked since it shipped, but every label
+on the way into it said Ludo: the home screen's button read "Online
+Ludo", the lobby's app bar read "Online Ludo", and the tagline under
+the wifi icon read "Play Ludo online against friends" regardless of
+which game the Ludo/Snakes toggle had selected.
+
+So the feature existed and was reachable, but nothing on screen ever
+said so. Someone looking for online Snakes landed on a screen that
+identified as a Ludo screen, which is indistinguishable from the
+feature not existing -- the same reason the earlier report read as
+"online snake game not working".
+
+The button and app bar now read "Play Online", and the tagline names
+the game the toggle has selected ("Play Snakes & Ladders online
+against friends" once Snakes is picked, and back again when it isn't).
+
+Verified against the deployed instance: a 3-player online Snakes game
+played to gameOver over wss://ludo-1zpb.onrender.com/ws, 695 intents,
+all three clients receiving 153 identical state broadcasts each, and
+the result written to Turso (games 4 -> 5, S1 1W/1G).
+
+Two widget tests now drive the real lobby and toggle the game; the
+label test fails on the old strings.
 - Fix(deploy): install ca-certificates in the runtime image
 
 The deployed leaderboard answered HTTP 500 on every request. The cause
