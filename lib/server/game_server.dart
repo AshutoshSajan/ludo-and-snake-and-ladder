@@ -429,6 +429,9 @@ class GameAuthority {
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
     room.broadcast(room.seatsJson()); // clears their "away" badge
+    // Coming back wakes the driver up again: a room that went quiet froze its
+    // autoplay mid-turn, and this is where the paused turn is picked back up.
+    _armAutoTimer(room);
     return room;
   }
 
@@ -448,6 +451,9 @@ class GameAuthority {
     room.spectators[member.id] = member;
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
+    // Somebody is watching again, so a game the table was handed may resume:
+    // the same rule that stopped it when the room went quiet (see _armAutoTimer).
+    _armAutoTimer(room);
     return room;
   }
 
@@ -499,6 +505,10 @@ class GameAuthority {
       // Room.seatsJson) instead of wondering why nobody answers.
       room.broadcast(room.seatsJson());
     }
+    // Re-evaluate the driver either way: a room that just went quiet stops
+    // playing its handed-over turns, and one that still has people in it
+    // (or a watcher) keeps going — including the seats that are on autoplay.
+    _armAutoTimer(room);
     return true;
   }
 
@@ -673,6 +683,11 @@ class GameAuthority {
         }
       });
     }
+    // The walk-out moved the turn, and the seat that now owns it may be one
+    // the table plays (the walker's own seat left [Room.autoSeats] above, but
+    // an absent player's did not): hand the turn to the driver rather than
+    // letting it sit there until somebody happens to send another intent.
+    _armAutoTimer(room);
   }
 
   /// The seat whose turn it is right now, or null when nobody's (a lobby, or
@@ -694,6 +709,13 @@ class GameAuthority {
     room.autoTimer?.cancel();
     room.autoTimer = null;
     if (room.removed) return;
+    // Nobody is connected to this room at all. A table nobody is in has no
+    // turn to answer and no one to answer it for, so the driver stays down
+    // and the board freezes where it stands — otherwise the game plays itself
+    // to the end, and can even finish and write a leaderboard row for people
+    // who were not there to play it. Whoever comes back re-arms the driver
+    // and the paused turn resumes (see the join/rejoin/spectate paths).
+    if (room.members.isEmpty && room.spectators.isEmpty) return;
     final seatId = _seatOnTurn(room);
     if (seatId == null || !room.autoSeats.contains(seatId)) return;
     room.autoTimer = Timer(autoStepDelay, () => _autoStep(room, seatId));
