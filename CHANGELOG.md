@@ -66,6 +66,27 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 LeaderboardStore is now an abstract interface with two backends: the local SQLite file (renamed SqliteLeaderboardStore, unchanged behavior) and a new TursoLeaderboardStore that speaks Turso SQL-over-HTTP (POST /v2/pipeline, Bearer auth) via package:http — no native driver. Selected from TURSO_DATABASE_URL + TURSO_AUTH_TOKEN in bin/server.dart, falling back to the SQLite file. Store methods are async; GameAuthority fire-and-forgets idempotent writes and lets a failed write retry on the next room action. Wire format, row decoding (integers as strings), error surfacing and env selection are covered by 10 new tests.
 ### Fixed
+- Fix(online): stop the table playing itself once a room has nobody in it
+
+A seat handed over to the table keeps playing after that player's tab closes —
+that is the point of keeping the flag on the server. But the driver had no idea
+whether anyone was still there at all, so a room where both players closed
+their tabs kept rolling on its own to the end. A game nobody is connected to
+can even finish and write a leaderboard row for people who were not there to
+play it.
+
+- lib/server/game_server.dart: _armAutoTimer refuses to arm while the room has
+  no connections at all (players or watchers), and every roster change
+  re-evaluates it: a dropped link or a walk-out cancels a pending step, and a
+  join, rejoin or arriving spectator re-arms it so the paused turn resumes
+  exactly where it stopped instead of having moved on unseen
+- lib/server/game_server.dart: a walk-out arms the driver for the seat that
+  inherits the turn — it used to move the turn onto an autoplay seat and leave
+  it sitting there until somebody happened to send another intent
+- test/online_server_test.dart: new group "the autoplay driver" — a room with
+  nobody in it freezes and picks its turn back up when someone returns, a
+  hand-over still plays while somebody is watching, and a walk-out hands the
+  turn to an autoplay seat with the driver picking it up
 - Fix(server): unregister closed rooms from the registry immediately
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
