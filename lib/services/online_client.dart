@@ -89,10 +89,20 @@ class LeaderboardRow {
 
 /// The parsed GET /leaderboard response.
 class LeaderboardData {
-  LeaderboardData({required this.games, required this.rows});
+  LeaderboardData({
+    required this.games,
+    required this.rows,
+    this.game = 'all',
+    this.gamesByGame = const {},
+  });
 
   factory LeaderboardData.fromJson(Map<String, dynamic> j) => LeaderboardData(
     games: j['games'] as int? ?? 0,
+    game: j['game'] as String? ?? 'all',
+    gamesByGame: {
+      for (final e in (j['gamesByGame'] as Map? ?? {}).entries)
+        e.key as String: (e.value as num?)?.toInt() ?? 0,
+    },
     rows: [
       for (final r in (j['players'] as List? ?? []))
         LeaderboardRow.fromJson(r as Map<String, dynamic>),
@@ -101,6 +111,21 @@ class LeaderboardData {
 
   final int games; // total finished games on the server
   final List<LeaderboardRow> rows;
+
+  /// Which game this board covers: 'ludo', 'snakes', or 'all' for the
+  /// combined board. Older servers omit it, so 'all' is the default.
+  final String game;
+
+  /// Finished-game count per game, so the UI can label its tabs without a
+  /// request per tab. Empty on older servers.
+  final Map<String, int> gamesByGame;
+
+  int get ludoGames => gamesByGame['ludo'] ?? 0;
+  int get snakesGames => gamesByGame['snakes'] ?? 0;
+
+  /// Whether the server told us the split. False on a server old enough to
+  /// predate per-game boards, where the tabs would show nothing.
+  bool get hasPerGameCounts => gamesByGame.isNotEmpty;
 }
 
 /// The leaderboard request reached the server and the server *answered* with
@@ -160,16 +185,23 @@ class OnlineClient extends ChangeNotifier {
   /// fine the whole time. A 4xx is a settled answer and is never retried.
   static Future<LeaderboardData> fetchLeaderboard(
     String serverUrl, {
+    String? game,
     http.Client? httpClient,
     Duration timeout = const Duration(seconds: 5),
     int attempts = 2,
     Duration retryDelay = const Duration(milliseconds: 900),
   }) async {
     final ws = Uri.parse(serverUrl);
-    final base = ws.replace(
+    var base = ws.replace(
       scheme: ws.scheme == 'wss' ? 'https' : 'http',
       path: '/leaderboard',
     );
+    // A server old enough to predate per-game boards ignores an unknown query
+    // parameter and answers with its combined board, so sending one is safe
+    // either way — a newer server narrows the board, an older one does not.
+    if (game != null) {
+      base = base.replace(queryParameters: {'game': game});
+    }
     final client = httpClient ?? http.Client();
     try {
       Object? pending;

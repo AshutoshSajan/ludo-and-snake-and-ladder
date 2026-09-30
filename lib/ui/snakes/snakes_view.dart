@@ -14,6 +14,8 @@ import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 import 'snakes_overlays.dart';
+import '../shared/sound_toggle_button.dart';
+import '../shared/pulse.dart';
 
 /// Full Snakes & Ladders game screen (2..10 players, human or bot seats).
 class SnakesGameView extends ConsumerStatefulWidget {
@@ -76,7 +78,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
         .recordResults(GameKind.snakes, s.rankings);
     final names = [
       for (final id in s.rankings)
-        s.players.where((p) => p.id == id).firstOrNull?.name ?? 'Player'
+        s.players.where((p) => p.id == id).firstOrNull?.name ?? 'Player',
     ];
     if (!mounted) return;
     showDialog(
@@ -87,8 +89,11 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
         rankedNames: names,
         onRematch: () {
           Navigator.of(context).pop();
-          Navigator.of(context).pushReplacement(MaterialPageRoute(
-              builder: (_) => SnakesGameView(seats: widget.seats)));
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => SnakesGameView(seats: widget.seats),
+            ),
+          );
         },
         onHome: () {
           Navigator.of(context).pop();
@@ -106,8 +111,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   /// Screen-reader description of the board state (announced on change).
   String _boardSemanticLabel(SnakesState s) {
     if (s.phase == SnakesPhase.gameOver) {
-      final winner =
-          s.players.reduce((a, b) => a.square >= b.square ? a : b);
+      final winner = s.players.reduce((a, b) => a.square >= b.square ? a : b);
       return 'Game over. ${winner.name} won with square ${winner.square}.';
     }
     final lead = s.players.reduce((a, b) => a.square >= b.square ? a : b);
@@ -116,54 +120,6 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   }
 
   // ------------------------------------------------------------------ HUD
-
-  Widget _playerStrip(SnakesState s) {
-    return SizedBox(
-      height: 64,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        itemCount: s.players.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, i) {
-          final p = s.players[i];
-          final isCurrent = i == s.currentPlayerIndex;
-          final color = AppColors.snakesColors[p.tokenIndex];
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: isCurrent ? color.withValues(alpha: 0.85) : AppColors.feltLight,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isCurrent ? AppColors.gold : Colors.white24,
-                width: isCurrent ? 2 : 1,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(p.isAI ? Icons.smart_toy : Icons.person,
-                    size: 18,
-                    color: isCurrent ? Colors.white : Colors.white70),
-                const SizedBox(width: 6),
-                Text(p.name,
-                    style: TextStyle(
-                      color: isCurrent ? Colors.white : AppColors.ivory,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    )),
-                const SizedBox(width: 6),
-                Text(p.square == 0 ? 'start' : '#${p.square}',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: isCurrent ? Colors.white : Colors.white60)),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -174,6 +130,17 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
       appBar: AppBar(
         title: const Text('Snakes & Ladders'),
         actions: [
+          const SoundToggleButton(),
+          IconButton(
+            icon: Icon(
+              session.autoPlay ? Icons.auto_mode : Icons.auto_mode_outlined,
+            ),
+            color: session.autoPlay ? AppColors.gold : null,
+            tooltip: session.autoPlay
+                ? 'Autoplay on — tap to take over'
+                : 'Autoplay — the table plays your turns',
+            onPressed: session.toggleAutoPlay,
+          ),
           IconButton(
             icon: const Icon(Icons.pause),
             onPressed: () => showSnakesPauseMenu(context, ref, session),
@@ -184,51 +151,52 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
       body: SafeArea(
         child: Column(
           children: [
-            _playerStrip(s),
             Expanded(
-              child: LayoutBuilder(builder: (context, cons) {
-                // The board keeps its square shape and the home area sits
-                // directly under it — inside the SAME Stack. A pawn leaving
-                // home is drawn by the ghost hop, so the home area and the
-                // ghost must share one coordinate space or the pawn would
-                // appear to start from nowhere.
-                final homeH = _homeStripH;
-                final boardSize = math.min(
-                  cons.biggest.width,
-                  math.max(cons.biggest.height - homeH, 0.0),
-                );
-                return Center(
-                  child: SizedBox(
-                    width: boardSize,
-                    height: boardSize + homeH,
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        Positioned(
-                          left: 0,
-                          top: 0,
-                          child: Semantics(
-                            label: _boardSemanticLabel(s),
-                            liveRegion: true,
-                            child: CustomPaint(
-                              size: Size.square(boardSize),
-                              painter: SnakesBoardPainter(
-                                highlightSquare:
-                                    s.phase == SnakesPhase.awaitingMove
-                                        ? _pendingTarget()
-                                        : null,
+              child: LayoutBuilder(
+                builder: (context, cons) {
+                  // The board keeps its square shape and the home area sits
+                  // directly under it — inside the SAME Stack. A pawn leaving
+                  // home is drawn by the ghost hop, so the home area and the
+                  // ghost must share one coordinate space or the pawn would
+                  // appear to start from nowhere.
+                  final homeH = _homeStripH;
+                  final boardSize = math.min(
+                    cons.biggest.width,
+                    math.max(cons.biggest.height - homeH, 0.0),
+                  );
+                  return Center(
+                    child: SizedBox(
+                      width: boardSize,
+                      height: boardSize + homeH,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned(
+                            left: 0,
+                            top: 0,
+                            child: Semantics(
+                              label: _boardSemanticLabel(s),
+                              liveRegion: true,
+                              child: CustomPaint(
+                                size: Size.square(boardSize),
+                                painter: SnakesBoardPainter(
+                                  highlightSquare:
+                                      s.phase == SnakesPhase.awaitingMove
+                                      ? _pendingTarget()
+                                      : null,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        ..._pawnWidgets(boardSize, s, movingToken),
-                        _homeArea(boardSize, s, movingToken),
-                        if (session.activeAnim != null) _ghost(boardSize),
-                      ],
+                          ..._pawnWidgets(boardSize, s, movingToken),
+                          _homeArea(boardSize, s, movingToken),
+                          if (session.activeAnim != null) _ghost(boardSize),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              }),
+                  );
+                },
+              ),
             ),
             _controls(s),
           ],
@@ -266,8 +234,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   /// same call places the ghost that hops out of the panel.
   static Offset _chipCenter(double boardSize, int slot, int players) {
     final d = _chipSize(boardSize, players);
-    final left =
-        (boardSize - (players * d + (players - 1) * _chipGap)) / 2;
+    final left = (boardSize - (players * d + (players - 1) * _chipGap)) / 2;
     return Offset(
       left + slot * (d + _chipGap) + d / 2,
       boardSize + _homePad + _homeCaptionH + _homeRowH / 2,
@@ -308,8 +275,11 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
               top: _homePad * 0.7,
               child: Row(
                 children: [
-                  const Icon(Icons.home_rounded,
-                      size: 15, color: AppColors.gold),
+                  const Icon(
+                    Icons.home_rounded,
+                    size: 15,
+                    color: AppColors.gold,
+                  ),
                   const SizedBox(width: 5),
                   const Text(
                     'Home',
@@ -326,8 +296,10 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
                           ? 'every pawn is out'
                           : '${waiting.length} of ${s.players.length} waiting to enter',
                       overflow: TextOverflow.ellipsis,
-                      style:
-                          const TextStyle(fontSize: 11, color: Colors.white60),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.white60,
+                      ),
                     ),
                   ),
                 ],
@@ -338,11 +310,19 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
               // at the panel, so shift it up by the board's height.
               Positioned(
                 key: ValueKey('home-pawn-${p.tokenIndex}'),
-                left: _chipCenter(boardSize, p.tokenIndex, s.players.length).dx -
+                left:
+                    _chipCenter(boardSize, p.tokenIndex, s.players.length).dx -
                     chip / 2,
-                top: _chipCenter(boardSize, p.tokenIndex, s.players.length).dy -
-                    boardSize - chip / 2,
-                child: _pawnChip(p, chip),
+                top:
+                    _chipCenter(boardSize, p.tokenIndex, s.players.length).dy -
+                    boardSize -
+                    chip / 2,
+                child: Pulse(
+                  active:
+                      p.id == s.currentPlayer.id &&
+                      s.phase != SnakesPhase.gameOver,
+                  child: _pawnChip(p, chip),
+                ),
               ),
           ],
         ),
@@ -370,8 +350,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
 
   // ---------------------------------------------------------------- pawns
 
-  List<Widget> _pawnWidgets(
-      double boardSize, SnakesState s, int? movingToken) {
+  List<Widget> _pawnWidgets(double boardSize, SnakesState s, int? movingToken) {
     final cell = boardSize / 10;
     final grouped = <int, List<SnakesPlayer>>{};
     for (final p in s.players) {
@@ -395,7 +374,11 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
             curve: Curves.easeInOut,
             left: c.dx - cell * 0.28 + math.cos(ang) * shift,
             top: c.dy - cell * 0.28 + math.sin(ang) * shift,
-            child: _pawnDot(p, cell),
+            child: Pulse(
+              active:
+                  p.id == s.currentPlayer.id && s.phase != SnakesPhase.gameOver,
+              child: _pawnDot(p, cell),
+            ),
           ),
         );
       }
@@ -477,7 +460,8 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   // ------------------------------------------------------------- controls
 
   Widget _controls(SnakesState s) {
-    final canRoll = !session.currentIsAI &&
+    final canRoll =
+        !session.currentIsAI &&
         s.phase == SnakesPhase.awaitingRoll &&
         session.activeAnim == null;
     final subtitle = switch (s.phase) {
@@ -493,16 +477,18 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: Column(
         children: [
-          Text(subtitle,
-              style: const TextStyle(fontSize: 14, color: Colors.white70)),
+          Text(
+            subtitle,
+            style: const TextStyle(fontSize: 14, color: Colors.white70),
+          ),
           const SizedBox(height: 6),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               DiceWidget(
                 value: s.lastRoll,
-                rolling: session.activeAnim != null &&
-                    _animStep * _tickMs < _diceMs,
+                rolling:
+                    session.activeAnim != null && _animStep * _tickMs < _diceMs,
                 enabled: canRoll,
                 onTap: session.roll,
               ),
@@ -510,18 +496,6 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
               FilledButton(
                 onPressed: canRoll ? session.roll : null,
                 child: Text(canRoll ? 'ROLL' : '…'),
-              ),
-              const SizedBox(width: 12),
-              Tooltip(
-                message:
-                    session.autoPlay ? 'Autoplay on' : 'Autoplay: roll for me',
-                child: IconButton.filledTonal(
-                  onPressed: session.toggleAutoPlay,
-                  icon: Icon(session.autoPlay
-                      ? Icons.auto_mode
-                      : Icons.auto_mode_outlined),
-                  color: session.autoPlay ? AppColors.gold : null,
-                ),
               ),
             ],
           ),

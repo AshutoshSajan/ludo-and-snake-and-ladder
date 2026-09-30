@@ -19,30 +19,30 @@ GameResult _res(String seat, String name, int rank, {String color = 'red'}) =>
 
 /// A successful pipeline response with [n] `execute` results plus `close`.
 http.Response _okExecutes(int n) => _pipeline([
-      for (var i = 0; i < n; i++)
-        {
-          'type': 'ok',
-          'response': {
-            'type': 'execute',
-            'result': {
-              'cols': <dynamic>[],
-              'rows': <dynamic>[],
-              'affected_row_count': 1,
-              'last_insert_rowid': null,
-            },
-          },
+  for (var i = 0; i < n; i++)
+    {
+      'type': 'ok',
+      'response': {
+        'type': 'execute',
+        'result': {
+          'cols': <dynamic>[],
+          'rows': <dynamic>[],
+          'affected_row_count': 1,
+          'last_insert_rowid': null,
         },
-      {
-        'type': 'ok',
-        'response': {'type': 'close'},
       },
-    ]);
+    },
+  {
+    'type': 'ok',
+    'response': {'type': 'close'},
+  },
+]);
 
 http.Response _pipeline(List<dynamic> results) => http.Response(
-      jsonEncode({'baton': null, 'base_url': null, 'results': results}),
-      200,
-      headers: {'content-type': 'application/json'},
-    );
+  jsonEncode({'baton': null, 'base_url': null, 'results': results}),
+  200,
+  headers: {'content-type': 'application/json'},
+);
 
 // Typed wire values — the pipeline API encodes every cell as {type, value}.
 Map<String, dynamic> _text(String v) => {'type': 'text', 'value': v};
@@ -54,162 +54,245 @@ Map<String, dynamic> _int(Object v) => {'type': 'integer', 'value': v};
 Map<String, dynamic> _float(num v) => {'type': 'float', 'value': v};
 
 Map<String, dynamic> _rowsResult(
-        List<List<dynamic>> rows, List<String> names) =>
-    {
-      'type': 'ok',
-      'response': {
-        'type': 'execute',
-        'result': {
-          'cols': [
-            for (final n in names)
-              {'name': n, 'decltype': 'TEXT'},
-          ],
-          'rows': rows,
-          'affected_row_count': 0,
-          'last_insert_rowid': null,
-        },
-      },
-    };
+  List<List<dynamic>> rows,
+  List<String> names,
+) => {
+  'type': 'ok',
+  'response': {
+    'type': 'execute',
+    'result': {
+      'cols': [
+        for (final n in names) {'name': n, 'decltype': 'TEXT'},
+      ],
+      'rows': rows,
+      'affected_row_count': 0,
+      'last_insert_rowid': null,
+    },
+  },
+};
 
 /// The list of pipeline request objects carried by a captured request.
 List<dynamic> _stmts(http.Request request) =>
     (jsonDecode(request.body) as Map<String, dynamic>)['requests']
         as List<dynamic>;
 
+/// Answers the `pragma_table_info` probe the store uses to decide whether the
+/// `game` column still has to be added, and a generic success for everything
+/// else. Defaults to "column present", which is what a database created by
+/// this version already looks like, so no ALTER is issued.
+Future<http.Response> _defaultReply(http.Request request) {
+  final sql = (_stmts(request).first['stmt'] as Map)['sql'] as String? ?? '';
+  if (sql.contains('pragma_table_info')) {
+    return Future.value(
+      _pipeline([
+        _rowsResult(
+          [
+            [_int(_columnPresent ? 1 : 0)],
+          ],
+          ['n'],
+        ),
+        {
+          'type': 'ok',
+          'response': {'type': 'close'},
+        },
+      ]),
+    );
+  }
+  return Future.value(_okExecutes(2));
+}
+
+/// Whether the fake database is answering the column probe as already upgraded.
+bool _columnPresent = true;
+
+/// Wraps a test's own [reply] so the column probe gets a sensible answer
+/// instead of whatever the handler was written to return. Only that probe is
+/// intercepted: CREATE and ALTER stay with the test's handler, so a test that
+/// deliberately fails the schema pipeline still fails it.
+Future<http.Response> Function(http.Request request) _queriesOnly(
+  Future<http.Response> Function(http.Request request) reply,
+) {
+  return (request) {
+    final sql = (_stmts(request).first['stmt'] as Map)['sql'] as String? ?? '';
+    if (sql.contains('pragma_table_info') || sql.startsWith('ALTER ')) {
+      return _defaultReply(request);
+    }
+    return reply(request);
+  };
+}
+
 TursoLeaderboardStore _store(
   void Function(http.Request request) capture, {
   String url = 'https://db.turso.io',
   Future<http.Response> Function(http.Request request)? reply,
-}) =>
-    TursoLeaderboardStore(
-      url: Uri.parse(url),
-      authToken: 'tok',
-      client: MockClient((req) async {
-        capture(req);
-        return reply != null ? reply(req) : _okExecutes(2);
-      }),
-    );
+}) {
+  return TursoLeaderboardStore(
+    url: Uri.parse(url),
+    authToken: 'tok',
+    client: MockClient((req) async {
+      capture(req);
+      return reply != null
+          ? await _queriesOnly(reply)(req)
+          : await _defaultReply(req);
+    }),
+  );
+}
 
 void main() {
   group('TursoLeaderboardStore over the HTTP pipeline API', () {
     test('targets /v2/pipeline over https with a bearer token', () async {
       final requests = <http.Request>[];
-      final store = _store(requests.add,
-          url: 'libsql://ludo-leaderboard-acme.turso.io');
+      final store = _store(
+        requests.add,
+        url: 'libsql://ludo-leaderboard-acme.turso.io',
+      );
       await store.recordResults(gameId: 'g1', results: [_res('ana', 'Ana', 1)]);
 
       expect(requests, isNotEmpty);
       for (final r in requests) {
         expect(r.method, 'POST');
-        expect(r.url.toString(),
-            'https://ludo-leaderboard-acme.turso.io/v2/pipeline');
+        expect(
+          r.url.toString(),
+          'https://ludo-leaderboard-acme.turso.io/v2/pipeline',
+        );
         expect(r.headers['authorization'], 'Bearer tok');
         expect(r.headers['content-type'], startsWith('application/json'));
       }
     });
 
-    test('first write creates the schema, inserts idempotently, closes the stream',
-        () async {
-      final requests = <http.Request>[];
-      final store = _store(requests.add);
-      await store.recordResults(gameId: 'g1', results: [
-        _res('ana', 'Ana', 1),
-        _res('bo', 'Bo', 2, color: 'blue'),
-      ]);
+    test(
+      'first write creates the schema, inserts idempotently, closes the stream',
+      () async {
+        final requests = <http.Request>[];
+        final store = _store(requests.add);
+        await store.recordResults(
+          gameId: 'g1',
+          results: [
+            _res('ana', 'Ana', 1),
+            _res('bo', 'Bo', 2, color: 'blue'),
+          ],
+        );
 
-      // Two pipelines: schema creation, then the result writes.
-      expect(requests, hasLength(2));
-      expect((jsonDecode(requests[0].body) as Map)['baton'], isNull,
-          reason: 'each pipeline opens a fresh stream');
+        // Three pipelines: schema creation, the `game` column upgrade, then the
+        // result writes.
+        expect(requests, hasLength(3));
+        expect(
+          (jsonDecode(requests[0].body) as Map)['baton'],
+          isNull,
+          reason: 'each pipeline opens a fresh stream',
+        );
 
-      final schema = _stmts(requests[0]);
-      final sqls = [
-        for (final s in schema.where((s) => s['type'] == 'execute'))
-          s['stmt']['sql'] as String
-      ];
-      expect(sqls[0], contains('CREATE TABLE IF NOT EXISTS results'));
-      expect(
+        final schema = _stmts(requests[0]);
+        final sqls = [
+          for (final s in schema.where((s) => s['type'] == 'execute'))
+            s['stmt']['sql'] as String,
+        ];
+        expect(sqls[0], contains('CREATE TABLE IF NOT EXISTS results'));
+        expect(
           sqls.where(
-              (s) => s.contains('CREATE INDEX IF NOT EXISTS idx_results_seat')),
-          isNotEmpty);
-      expect(
-          sqls.where((s) => s.contains(
-              'CREATE UNIQUE INDEX IF NOT EXISTS idx_results_game_seat')),
-          isNotEmpty);
-      expect(sqls.last, contains('CREATE TABLE IF NOT EXISTS players'));
-      expect(schema.last['type'], 'close');
+            (s) => s.contains('CREATE INDEX IF NOT EXISTS idx_results_seat'),
+          ),
+          isNotEmpty,
+        );
+        expect(
+          sqls.where(
+            (s) => s.contains(
+              'CREATE UNIQUE INDEX IF NOT EXISTS idx_results_game_seat',
+            ),
+          ),
+          isNotEmpty,
+        );
+        expect(sqls.last, contains('CREATE TABLE IF NOT EXISTS players'));
+        expect(schema.last['type'], 'close');
 
-      final write = _stmts(requests[1]);
-      expect(write, hasLength(5)); // 2 inserts + 2 player upserts + close
-      expect(write.last['type'], 'close');
+        // The column check runs first, then the writes. Which of the two
+        // migration statements actually fires depends on the existing schema.
+        expect(_stmts(requests[1]), isNotEmpty);
 
-      final insert = write[0]['stmt'] as Map;
-      expect(insert['sql'], contains('INSERT OR IGNORE INTO results'));
-      expect(
+        final write = _stmts(requests[2]);
+        expect(write, hasLength(5)); // 2 inserts + 2 player upserts + close
+        expect(write.last['type'], 'close');
+
+        final insert = write[0]['stmt'] as Map;
+        expect(insert['sql'], contains('INSERT OR IGNORE INTO results'));
+        expect(
           insert['sql'],
-          contains(
-              '(game_id, seat_id, name, color, rank, played_at)'));
-      final args = insert['args'] as List;
-      expect(args[0], _text('g1'));
-      expect(args[1], _text('ana'));
-      expect(args[2], _text('Ana'));
-      expect(args[3], _text('red'));
-      expect(args[4], _int('1'),
-          reason: 'integers travel as strings to keep 64-bit precision');
-      expect(args[5]['type'], 'integer');
-      expect(int.parse(args[5]['value'] as String), greaterThan(0));
+          contains('(game_id, seat_id, name, color, rank, played_at, game)'),
+        );
+        final args = insert['args'] as List;
+        expect(args[0], _text('g1'));
+        expect(args[1], _text('ana'));
+        expect(args[2], _text('Ana'));
+        expect(args[3], _text('red'));
+        expect(
+          args[4],
+          _int('1'),
+          reason: 'integers travel as strings to keep 64-bit precision',
+        );
+        expect(args[5]['type'], 'integer');
+        expect(int.parse(args[5]['value'] as String), greaterThan(0));
 
-      // Rows are written per player: insert, then the name upsert.
-      final upsert = write[1]['stmt'] as Map;
-      expect(
-          upsert['sql'], contains('INSERT INTO players (seat_id, name)'));
-      expect(upsert['sql'],
-          contains('ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name'));
-      expect(upsert['args'], [_text('ana'), _text('Ana')]);
+        // Rows are written per player: insert, then the name upsert.
+        final upsert = write[1]['stmt'] as Map;
+        expect(upsert['sql'], contains('INSERT INTO players (seat_id, name)'));
+        expect(
+          upsert['sql'],
+          contains('ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name'),
+        );
+        expect(upsert['args'], [_text('ana'), _text('Ana')]);
 
-      final insert2 = write[2]['stmt'] as Map;
-      expect(insert2['args'][1], _text('bo'));
-      expect(insert2['args'][3], _text('blue'));
-      expect(insert2['args'][4], _int('2'));
-      expect(write[3]['stmt']['args'], [_text('bo'), _text('Bo')]);
-    });
+        final insert2 = write[2]['stmt'] as Map;
+        expect(insert2['args'][1], _text('bo'));
+        expect(insert2['args'][3], _text('blue'));
+        expect(insert2['args'][4], _int('2'));
+        expect(write[3]['stmt']['args'], [_text('bo'), _text('Bo')]);
+      },
+    );
 
     test('later writes reuse the schema (no repeated DDL)', () async {
       final requests = <http.Request>[];
       final store = _store(requests.add);
       await store.recordResults(gameId: 'g1', results: [_res('ana', 'Ana', 1)]);
       await store.recordResults(gameId: 'g2', results: [_res('ana', 'Ana', 2)]);
-      expect(requests, hasLength(3));
-      expect(_stmts(requests[2]).first['stmt']['sql'],
-          startsWith('INSERT OR IGNORE'));
+      // schema + column upgrade once, then one write pipeline each.
+      expect(requests, hasLength(4));
+      expect(
+        _stmts(requests[3]).first['stmt']['sql'],
+        startsWith('INSERT OR IGNORE'),
+      );
     });
 
     test('parses aggregated rows into entries', () async {
       final captured = <http.Request>[];
-      final store = _store(captured.add, reply: (req) async {
-        return _pipeline([
-          _rowsResult([
-            [_text('ana'), _text('Ana'), _int('2'), _int(3), _float(4 / 3)],
-            [_text('bo'), _text('Bo'), _int(1), _int('2'), _float(2.5)],
-          ], [
-            'seat_id',
-            'name',
-            'wins',
-            'games',
-            'avg_rank',
-          ]),
-          {
-            'type': 'ok',
-            'response': {'type': 'close'},
-          },
-        ]);
-      });
+      final store = _store(
+        captured.add,
+        reply: (req) async {
+          return _pipeline([
+            _rowsResult(
+              [
+                [_text('ana'), _text('Ana'), _int('2'), _int(3), _float(4 / 3)],
+                [_text('bo'), _text('Bo'), _int(1), _int('2'), _float(2.5)],
+              ],
+              ['seat_id', 'name', 'wins', 'games', 'avg_rank'],
+            ),
+            {
+              'type': 'ok',
+              'response': {'type': 'close'},
+            },
+          ]);
+        },
+      );
 
       final rows = await store.topPlayers(limit: 10);
 
       final stmt = _stmts(captured.last).first['stmt'] as Map;
-      expect(stmt['sql'], contains('SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END)'));
-      expect(stmt['sql'], contains('ORDER BY wins DESC, avg_rank ASC, games DESC'));
+      expect(
+        stmt['sql'],
+        contains('SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END)'),
+      );
+      expect(
+        stmt['sql'],
+        contains('ORDER BY wins DESC, avg_rank ASC, games DESC'),
+      );
       expect(stmt['args'], [_int('10')]);
 
       expect(rows, hasLength(2));
@@ -224,82 +307,118 @@ void main() {
     });
 
     test('counts distinct games', () async {
-      final store = _store((_) {}, reply: (req) async {
-        return _pipeline([
-          _rowsResult([
-            [_int('7')],
-          ], ['n']),
-          {
-            'type': 'ok',
-            'response': {'type': 'close'},
-          },
-        ]);
-      });
+      final store = _store(
+        (_) {},
+        reply: (req) async {
+          return _pipeline([
+            _rowsResult(
+              [
+                [_int('7')],
+              ],
+              ['n'],
+            ),
+            {
+              'type': 'ok',
+              'response': {'type': 'close'},
+            },
+          ]);
+        },
+      );
       expect(await store.totalGames(), 7);
     });
 
     test('surfaces statement errors as TursoLeaderboardException', () async {
-      final store = _store((_) {}, reply: (req) async {
-        if (req.body.contains('CREATE TABLE')) return _okExecutes(4);
-        return _pipeline([
-          {
-            'type': 'error',
-            'error': {'message': 'no such table: results'},
-          },
-        ]);
-      });
+      final store = _store(
+        (_) {},
+        reply: (req) async {
+          if (req.body.contains('CREATE TABLE')) return _okExecutes(4);
+          return _pipeline([
+            {
+              'type': 'error',
+              'error': {'message': 'no such table: results'},
+            },
+          ]);
+        },
+      );
       await expectLater(
         store.totalGames(),
-        throwsA(isA<TursoLeaderboardException>()
-            .having((e) => e.message, 'message', contains('no such table'))),
+        throwsA(
+          isA<TursoLeaderboardException>().having(
+            (e) => e.message,
+            'message',
+            contains('no such table'),
+          ),
+        ),
       );
     });
 
     test('surfaces HTTP failures as TursoLeaderboardException', () async {
-      final store = _store((_) {},
-          reply: (req) async => http.Response('unauthorized', 401));
+      final store = _store(
+        (_) {},
+        reply: (req) async => http.Response('unauthorized', 401),
+      );
       await expectLater(
         store.recordResults(gameId: 'g1', results: [_res('ana', 'Ana', 1)]),
-        throwsA(isA<TursoLeaderboardException>()
-            .having((e) => e.message, 'message', contains('401'))),
+        throwsA(
+          isA<TursoLeaderboardException>().having(
+            (e) => e.message,
+            'message',
+            contains('401'),
+          ),
+        ),
       );
     });
 
     test('an empty result list sends nothing', () async {
       var calls = 0;
-      final store = _store((_) {}, reply: (req) async {
-        calls++;
-        return _okExecutes(1);
-      });
+      final store = _store(
+        (_) {},
+        reply: (req) async {
+          calls++;
+          return _okExecutes(1);
+        },
+      );
       await store.recordResults(gameId: 'g1', results: []);
       expect(calls, isZero);
     });
 
     test('a failed schema attempt is retried on the next call', () async {
       final requests = <http.Request>[];
-      final store = _store(requests.add, reply: (req) async {
-        return requests.length == 1 ? http.Response('boom', 500) : _okExecutes(2);
-      });
+      final store = _store(
+        requests.add,
+        reply: (req) async {
+          return requests.length == 1
+              ? http.Response('boom', 500)
+              : _okExecutes(2);
+        },
+      );
       await expectLater(
         store.recordResults(gameId: 'g1', results: [_res('ana', 'Ana', 1)]),
         throwsA(isA<TursoLeaderboardException>()),
       );
       await store.recordResults(gameId: 'g1', results: [_res('ana', 'Ana', 1)]);
-      // The schema pipeline ran again; the write finally went through.
-      expect(requests, hasLength(3));
-      expect(_stmts(requests[1]).first['stmt']['sql'],
-          contains('CREATE TABLE IF NOT EXISTS results'));
-      expect(_stmts(requests[2]).first['stmt']['sql'],
-          contains('INSERT OR IGNORE INTO results'));
+      // 1) the failed schema, 2) the schema retried, 3) the `game` column
+      // probe, 4) the write that finally went through.
+      expect(requests, hasLength(4));
+      expect(
+        _stmts(requests[1]).first['stmt']['sql'],
+        contains('CREATE TABLE IF NOT EXISTS results'),
+      );
+      expect(
+        _stmts(requests[3]).first['stmt']['sql'],
+        contains('INSERT OR IGNORE INTO results'),
+      );
     });
 
     test('fromEnvironment reads the Turso CLI variable names', () async {
       expect(TursoLeaderboardStore.fromEnvironment(const {}), isNull);
       expect(
-          TursoLeaderboardStore.fromEnvironment(
-              const {'TURSO_DATABASE_URL': 'libsql://db.turso.io'}),
-          isNull,
-          reason: 'a token is required too');
+        TursoLeaderboardStore.fromEnvironment(const {
+          'TURSO_DATABASE_URL': 'libsql://db.turso.io',
+        }),
+        isNull,
+        reason: 'a token is required too',
+      );
 
       final requests = <http.Request>[];
       final store = TursoLeaderboardStore.fromEnvironment(
@@ -309,14 +428,17 @@ void main() {
         },
         client: MockClient((req) async {
           requests.add(req);
-          return _okExecutes(1);
+          // Routed through the same helper as the other tests so the column
+          // probe gets a real answer rather than a generic execute result.
+          return _queriesOnly((_) async => _okExecutes(1))(req);
         }),
       )!;
       await store.recordResults(gameId: 'g1', results: [_res('ana', 'Ana', 1)]);
-      expect(requests.first.url.toString(), 'https://db-acme.turso.io/v2/pipeline');
+      expect(
+        requests.first.url.toString(),
+        'https://db-acme.turso.io/v2/pipeline',
+      );
       expect(requests.first.headers['authorization'], 'Bearer t0k');
     });
-
-
   });
 }

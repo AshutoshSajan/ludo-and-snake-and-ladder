@@ -19,6 +19,7 @@ import '../theme.dart';
 import 'ludo_board_painter.dart';
 import 'ludo_overlays.dart';
 import 'ludo_token_layer.dart';
+import '../shared/sound_toggle_button.dart';
 
 /// Full Ludo game screen: board, tokens, dice, HUD and pause menu.
 class LudoGameView extends ConsumerStatefulWidget {
@@ -297,6 +298,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
               )
             : const Text('Ludo'),
         actions: [
+          const SoundToggleButton(),
           IconButton(
             icon: const Icon(Icons.undo),
             tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
