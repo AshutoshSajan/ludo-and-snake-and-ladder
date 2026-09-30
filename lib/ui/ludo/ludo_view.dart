@@ -13,6 +13,7 @@ import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
+import '../shared/seat_status_strip.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'ludo_board_painter.dart';
@@ -26,6 +27,7 @@ class LudoGameView extends ConsumerStatefulWidget {
     this.seats = const [],
     this.onlineClient,
     this.onlineSeatId,
+    this.onOnlineLeave,
   });
 
   final List<SeatSetup> seats;
@@ -34,6 +36,12 @@ class LudoGameView extends ConsumerStatefulWidget {
   /// (online mode): the session sends intents and adopts snapshots.
   final OnlineClient? onlineClient;
   final String? onlineSeatId;
+
+  /// What to do once a player has walked out of an online game. The board is
+  /// hosted inside the lobby screen rather than pushed as a route, so popping
+  /// here would close the wrong thing — the screen that owns the socket says
+  /// how to tear it down.
+  final VoidCallback? onOnlineLeave;
 
   @override
   ConsumerState<LudoGameView> createState() => _LudoGameViewState();
@@ -96,7 +104,65 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   /// The online client notifies for transport events too (reconnecting,
   /// errors) — the banner reads its status on every rebuild.
   void _onClientChanged() {
+    final notice = widget.onlineClient?.leftNotice;
+    if (notice != null) {
+      widget.onlineClient!.clearLeftNotice();
+      // A seat can be announced mid-frame; a toast has to wait for the frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showNotice(notice);
+      });
+    }
     if (mounted) setState(() {});
+  }
+
+  void _showNotice(String text) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(text),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+  }
+
+  /// Spectators watch; they don't hand a seat to anyone, including themselves.
+  bool get _canToggleAuto =>
+      !(widget.onlineClient?.isSpectator ?? false) && !session.isBusy;
+
+  /// Leaving online is a statement rather than a back press: the seat is
+  /// forfeited, the pieces come off the board, and the others are told — so it
+  /// asks first, because none of that can be undone by coming back.
+  Future<void> _leave() async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Leave the game?'),
+        content: const Text(
+          'Your pieces leave the board and the other players are told you '
+          'went. You can\'t rejoin this game after that.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Stay'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    await session.leaveOnline();
+    final onLeave = widget.onOnlineLeave;
+    if (onLeave != null) {
+      onLeave();
+    } else if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   void _onSessionChanged() {
@@ -197,8 +263,8 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   Widget build(BuildContext context) {
     final s = session.state;
     // Online games surface transport trouble right on the board.
-    final reconnecting = widget.onlineClient?.status ==
-        OnlineStatus.reconnecting;
+    final reconnecting =
+        widget.onlineClient?.status == OnlineStatus.reconnecting;
     // Battery saver: stop the continuous effects ticker when the setting is
     // off (one-shot animations — dice tumble, token hops — still play).
     final animationsOn = ref.watch(animationsEnabledProvider);
@@ -221,11 +287,14 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     return Scaffold(
       appBar: AppBar(
         title: widget.onlineClient?.isSpectator ?? false
-            ? const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.visibility, size: 18),
-                SizedBox(width: 6),
-                Text('Ludo — watching'),
-              ])
+            ? const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.visibility, size: 18),
+                  SizedBox(width: 6),
+                  Text('Ludo — watching'),
+                ],
+              )
             : const Text('Ludo'),
         actions: [
           IconButton(
@@ -248,16 +317,21 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 ? () => setState(() => _hintToken = session.hintTokenIndex())
                 : null,
           ),
-          if (!session.isOnline)
+          IconButton(
+            icon: Icon(
+              session.autoPlayOn ? Icons.auto_mode : Icons.auto_mode_outlined,
+            ),
+            color: session.autoPlayOn ? AppColors.gold : null,
+            tooltip: session.autoPlayOn
+                ? 'Autoplay on — tap to take over'
+                : 'Autoplay — the table plays your turns',
+            onPressed: _canToggleAuto ? () => session.toggleAutoPlay() : null,
+          ),
+          if (session.isOnline)
             IconButton(
-              icon: Icon(
-                session.autoPlay ? Icons.auto_mode : Icons.auto_mode_outlined,
-              ),
-              color: session.autoPlay ? AppColors.gold : null,
-              tooltip: session.autoPlay
-                  ? 'Autoplay on — tap to stop'
-                  : 'Autoplay (take a break)',
-              onPressed: session.toggleAutoPlay,
+              icon: const Icon(Icons.logout),
+              tooltip: 'Leave game',
+              onPressed: _leave,
             ),
           IconButton(
             icon: const Icon(Icons.pause),
@@ -273,8 +347,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
               Material(
                 color: AppColors.danger,
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 6,
+                    horizontal: 12,
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -282,16 +358,26 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                         width: 14,
                         height: 14,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       ),
                       const SizedBox(width: 10),
-                      Text('Connection lost — reconnecting…',
-                          style: TextStyle(
-                              color: Colors.white.withAlpha(230),
-                              fontSize: 13)),
+                      Text(
+                        'Connection lost — reconnecting…',
+                        style: TextStyle(
+                          color: Colors.white.withAlpha(230),
+                          fontSize: 13,
+                        ),
+                      ),
                     ],
                   ),
                 ),
+              ),
+            if (widget.onlineClient != null)
+              SeatStatusStrip(
+                seats: widget.onlineClient!.lobbySeats,
+                mySeatId: widget.onlineSeatId,
               ),
             Expanded(
               child: Semantics(

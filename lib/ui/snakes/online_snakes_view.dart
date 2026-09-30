@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../engine/snakes/snakes_engine.dart';
 import '../../services/online_client.dart';
 import '../shared/dice_widget.dart';
+import '../shared/seat_status_strip.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 
@@ -67,6 +68,14 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   void _onClientUpdate() {
     if (!mounted) return;
     setState(() {});
+    final notice = widget.client.leftNotice;
+    if (notice != null) {
+      widget.client.clearLeftNotice();
+      // A seat can be announced mid-frame; a toast has to wait for the frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showNotice(notice);
+      });
+    }
     final s = widget.client.snakesState;
     if (s == null) return;
 
@@ -102,8 +111,8 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     final winnerName = winner == null
         ? '?'
         : s.players
-            .firstWhere((p) => p.id == winner, orElse: () => s.players.first)
-            .name;
+              .firstWhere((p) => p.id == winner, orElse: () => s.players.first)
+              .name;
     final iWon = winner == widget.client.seatId;
     showDialog<void>(
       context: context,
@@ -112,13 +121,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         backgroundColor: AppColors.feltLight,
         title: Text(iWon ? 'You win!' : '$winnerName wins!'),
         content: Text(
-          'Final standings:\n${[
-            for (var i = 0; i < s.rankings.length; i++)
-              '${i + 1}. ${s.players.firstWhere(
-                    (p) => p.id == s.rankings[i],
-                    orElse: () => s.players.first,
-                  ).name}',
-          ].join('\n')}',
+          'Final standings:\n${[for (var i = 0; i < s.rankings.length; i++) '${i + 1}. ${s.players.firstWhere((p) => p.id == s.rankings[i], orElse: () => s.players.first).name}'].join('\n')}',
         ),
         actions: [
           FilledButton(
@@ -128,6 +131,49 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         ],
       ),
     );
+  }
+
+  void _showNotice(String text) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(text),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+  }
+
+  /// Walking out mid-game is a statement: the seat is forfeited, the pawn
+  /// comes off the board, and the others are told who went — so it asks
+  /// first, because none of that can be undone by coming back. Hanging up
+  /// without saying so would leave the table staring at a pawn that simply
+  /// stops moving, which looks exactly like a broken game.
+  Future<void> _leave() async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Leave the game?'),
+        content: const Text(
+          'Your pawn leaves the board and the other players are told you '
+          "went. You can't rejoin this game after that.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Stay'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    await widget.client.sendLeave();
+    widget.onLeave();
   }
 
   // ------------------------------------------------------------------ HUD
@@ -160,21 +206,28 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
             ),
             child: Row(
               children: [
-                Icon(Icons.person,
-                    size: 18,
-                    color: isCurrent ? Colors.white : Colors.white70),
+                Icon(
+                  Icons.person,
+                  size: 18,
+                  color: isCurrent ? Colors.white : Colors.white70,
+                ),
                 const SizedBox(width: 6),
-                Text(isMe ? 'You' : p.name,
-                    style: TextStyle(
-                      color: isCurrent ? Colors.white : AppColors.ivory,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    )),
+                Text(
+                  isMe ? 'You' : p.name,
+                  style: TextStyle(
+                    color: isCurrent ? Colors.white : AppColors.ivory,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
                 const SizedBox(width: 6),
-                Text(p.square == 0 ? 'start' : '#${p.square}',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: isCurrent ? Colors.white : Colors.white60)),
+                Text(
+                  p.square == 0 ? 'start' : '#${p.square}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isCurrent ? Colors.white : Colors.white60,
+                  ),
+                ),
               ],
             ),
           );
@@ -205,9 +258,25 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         title: const Text('Snakes & Ladders'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.close),
-            tooltip: 'Leave and disconnect',
-            onPressed: widget.onLeave,
+            icon: Icon(
+              widget.client.iAmAuto
+                  ? Icons.auto_mode
+                  : Icons.auto_mode_outlined,
+            ),
+            color: widget.client.iAmAuto ? AppColors.gold : null,
+            tooltip: widget.client.isSpectator
+                ? 'Spectators watch; they do not hand seats over'
+                : widget.client.iAmAuto
+                ? 'Autoplay on — tap to take over'
+                : 'Autoplay — the table plays your turns',
+            onPressed: widget.client.isSpectator
+                ? null
+                : () => widget.client.sendAutoplay(!widget.client.iAmAuto),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Leave game',
+            onPressed: _leave,
           ),
         ],
       ),
@@ -215,32 +284,40 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         child: Column(
           children: [
             _playerStrip(s),
+            SeatStatusStrip(
+              seats: widget.client.lobbySeats,
+              mySeatId: widget.client.seatId,
+            ),
             Expanded(
               child: Center(
                 child: AspectRatio(
                   aspectRatio: 1,
-                  child: LayoutBuilder(builder: (context, cons) {
-                    final boardSize = cons.biggest.width;
-                    return Stack(
-                      children: [
-                        CustomPaint(
-                          size: Size.square(boardSize),
-                          painter: SnakesBoardPainter(
-                            highlightSquare:
-                                s.phase == SnakesPhase.awaitingMove
-                                    ? pendingMove(s).to
-                                    : null,
+                  child: LayoutBuilder(
+                    builder: (context, cons) {
+                      final boardSize = cons.biggest.width;
+                      return Stack(
+                        children: [
+                          CustomPaint(
+                            size: Size.square(boardSize),
+                            painter: SnakesBoardPainter(
+                              highlightSquare:
+                                  s.phase == SnakesPhase.awaitingMove
+                                  ? pendingMove(s).to
+                                  : null,
+                            ),
                           ),
-                        ),
-                        ..._pawnWidgets(s, boardSize),
-                      ],
-                    );
-                  }),
+                          ..._pawnWidgets(s, boardSize),
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
-            Text(status,
-                style: const TextStyle(fontSize: 14, color: Colors.white70)),
+            Text(
+              status,
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
             const SizedBox(height: 6),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
@@ -275,8 +352,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     }
     final widgets = <Widget>[];
     for (final entry in bySquare.entries) {
-      final c =
-          SnakesBoardPainter.squareCenter(entry.key, Size.square(boardSize));
+      final c = SnakesBoardPainter.squareCenter(
+        entry.key,
+        Size.square(boardSize),
+      );
       final group = entry.value;
       for (var i = 0; i < group.length; i++) {
         final p = group[i];

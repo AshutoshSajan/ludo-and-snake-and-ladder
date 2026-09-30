@@ -45,15 +45,44 @@ import '../bin/server.dart'
         webDir,
         advertiseRoom;
 
-ServerMember _member(LudoColor c,
-        {String? seatId, String? id, void Function(String)? on}) =>
-    ServerMember(
-      id: id ?? seatId ?? c.name,
-      seatId: seatId ?? c.name,
-      name: c.label,
-      color: c,
-      sink: on ?? (_) {},
-    );
+ServerMember _member(
+  LudoColor c, {
+  String? seatId,
+  String? id,
+  void Function(String)? on,
+}) => ServerMember(
+  id: id ?? seatId ?? c.name,
+  seatId: seatId ?? c.name,
+  name: c.label,
+  color: c,
+  sink: on ?? (_) {},
+);
+
+/// The message types a fake socket was handed, in the order they arrived.
+List<String> _sentTypes(List<String> log) => [
+  for (final j in log)
+    (jsonDecode(j) as Map<String, dynamic>)['type'] as String,
+];
+
+/// The last payload of [type] a fake socket was handed, or null. Used instead
+/// of counting messages because a room re-sends the same feeds (lobby, seats,
+/// state) at several moments in a seat's life.
+Map<String, dynamic>? _lastSent(List<String> log, String type) {
+  for (var i = log.length - 1; i >= 0; i--) {
+    final m = jsonDecode(log[i]) as Map<String, dynamic>;
+    if (m['type'] == type) return m;
+  }
+  return null;
+}
+
+/// One seat out of a `seats` payload, by seat id.
+Map<String, dynamic>? _seatIn(Map<String, dynamic>? seatsFeed, String seatId) {
+  if (seatsFeed == null) return null;
+  for (final s in (seatsFeed['seats'] as List).cast<Map<String, dynamic>>()) {
+    if (s['seatId'] == seatId) return s;
+  }
+  return null;
+}
 
 /// Cluster-registry stub that refuses the first claim — as if another
 /// replica already owns that code — then behaves like a normal CAS map.
@@ -69,8 +98,7 @@ class _RefusingOnceRegistry implements RoomRegistry {
   final _tokens = <String, String?>{};
 
   @override
-  Future<bool> register(String code, String instanceId,
-      {String? owner}) async {
+  Future<bool> register(String code, String instanceId, {String? owner}) async {
     if (refusedCode == null) {
       refusedCode = code;
       return false;
@@ -98,8 +126,7 @@ class _RefusingAlwaysRegistry implements RoomRegistry {
   final attempted = <String>[];
 
   @override
-  Future<bool> register(String code, String instanceId,
-      {String? owner}) async {
+  Future<bool> register(String code, String instanceId, {String? owner}) async {
     attempted.add(code);
     return false;
   }
@@ -121,8 +148,7 @@ class _SlowClaimRegistry implements RoomRegistry {
   final unregistered = <String>[];
 
   @override
-  Future<bool> register(String code, String instanceId,
-      {String? owner}) async {
+  Future<bool> register(String code, String instanceId, {String? owner}) async {
     await Future<void>.delayed(delay);
     return _inner.register(code, instanceId, owner: owner);
   }
@@ -154,8 +180,7 @@ class _HeldRegisterRegistry implements RoomRegistry {
   }
 
   @override
-  Future<bool> register(String code, String instanceId,
-      {String? owner}) async {
+  Future<bool> register(String code, String instanceId, {String? owner}) async {
     final gate = _held;
     if (gate != null) await gate.future;
     return inner.register(code, instanceId, owner: owner);
@@ -229,8 +254,11 @@ void main() {
     test('host is seated in the first clockwise corner (red)', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.green));
-      expect(room.members.values.single.color, LudoColor.red,
-          reason: 'seat color is assigned by the authority, not the client');
+      expect(
+        room.members.values.single.color,
+        LudoColor.red,
+        reason: 'seat color is assigned by the authority, not the client',
+      );
       expect(room.code.length, 4);
     });
 
@@ -238,8 +266,11 @@ void main() {
       // The server reserves a code cluster-wide BEFORE creating the room;
       // the room must adopt that exact code and token.
       final auth = GameAuthority(rng: Random(1));
-      final room = auth.createRoom(_member(LudoColor.red),
-          code: 'ZZ99', registryToken: 'room-pre-claimed');
+      final room = auth.createRoom(
+        _member(LudoColor.red),
+        code: 'ZZ99',
+        registryToken: 'room-pre-claimed',
+      );
       expect(room.code, 'ZZ99');
       expect(room.registryToken, 'room-pre-claimed');
       expect(auth.rooms['ZZ99'], same(room));
@@ -248,17 +279,25 @@ void main() {
     test('createRoom refuses an explicit code that already lives locally', () {
       final auth = GameAuthority(rng: Random(1));
       final first = auth.createRoom(_member(LudoColor.red), code: 'DUPE');
-      expect(() => auth.createRoom(_member(LudoColor.blue), code: 'DUPE'),
-          throwsStateError);
-      expect(auth.rooms['DUPE'], same(first),
-          reason: 'the racing creation must never overwrite the original');
+      expect(
+        () => auth.createRoom(_member(LudoColor.blue), code: 'DUPE'),
+        throwsStateError,
+      );
+      expect(
+        auth.rooms['DUPE'],
+        same(first),
+        reason: 'the racing creation must never overwrite the original',
+      );
     });
 
     test('joinWithColor honors a free preferred corner', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinWithColor(
-          room.code, _member(LudoColor.yellow, seatId: 'y'), LudoColor.yellow);
+        room.code,
+        _member(LudoColor.yellow, seatId: 'y'),
+        LudoColor.yellow,
+      );
       expect(room.ownerOf(LudoColor.yellow)!.seatId, 'y');
     });
 
@@ -266,12 +305,24 @@ void main() {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinWithColor(
-          room.code, _member(LudoColor.green, seatId: 'g'), LudoColor.red);
-      // Clockwise order is red -> blue -> yellow -> green, so the first
-      // free corner after red is blue.
-      expect(room.ownerOf(LudoColor.blue), isNotNull);
-      expect(room.ownerOf(LudoColor.red)!.seatId, 'red',
-          reason: 'the host keeps red; a latecomer cannot steal it');
+        room.code,
+        _member(LudoColor.green, seatId: 'g'),
+        LudoColor.red,
+      );
+      // Red is spoken for, and a two-player ludo table faces across the
+      // board rather than sitting side by side — so the latecomer lands on
+      // yellow, not on the neighbouring corner.
+      expect(room.ownerOf(LudoColor.yellow)!.seatId, 'g');
+      expect(
+        room.ownerOf(LudoColor.red)!.seatId,
+        'red',
+        reason: 'the host keeps red; a latecomer cannot steal it',
+      );
+      // With nobody opposite anyone, the classic clockwise circuit resumes
+      // and fills what is left — so turn order for 3 and 4 players is the
+      // one everyone already knows.
+      auth.joinRoom(room.code, _member(LudoColor.blue, seatId: 'b'));
+      expect(room.ownerOf(LudoColor.blue)!.seatId, 'b');
     });
 
     test('duplicate seat id is rejected', () {
@@ -300,10 +351,13 @@ void main() {
     test('an emptied lobby closes and unregisters immediately', () async {
       final registry = InMemoryRoomRegistry();
       final closed = <String>[];
-      final auth = GameAuthority(rng: Random(1), onRoomClosed: (code, token) {
-        closed.add(code);
-        registry.unregister(code, owner: token);
-      });
+      final auth = GameAuthority(
+        rng: Random(1),
+        onRoomClosed: (code, token) {
+          closed.add(code);
+          registry.unregister(code, owner: token);
+        },
+      );
       final room = auth.createRoom(_member(LudoColor.red));
       await registry.register(room.code, 'game-1', owner: room.registryToken);
 
@@ -311,82 +365,103 @@ void main() {
 
       expect(room.removed, isTrue);
       expect(auth.rooms, isEmpty);
-      expect(closed, [room.code],
-          reason: 'the registry hook must fire at once, not on a later sweep');
-      expect(await registry.lookup(room.code), isNull,
-          reason: 'a stale route would send joins to a dead room');
+      expect(closed, [
+        room.code,
+      ], reason: 'the registry hook must fire at once, not on a later sweep');
+      expect(
+        await registry.lookup(room.code),
+        isNull,
+        reason: 'a stale route would send joins to a dead room',
+      );
     });
 
-    test('an abandoned started room unregisters after the grace period',
-        () async {
-      final registry = InMemoryRoomRegistry();
-      final closed = <String>[];
-      final auth = GameAuthority(
+    test(
+      'an abandoned started room unregisters after the grace period',
+      () async {
+        final registry = InMemoryRoomRegistry();
+        final closed = <String>[];
+        final auth = GameAuthority(
           rng: Random(1),
           emptyRoomGrace: const Duration(milliseconds: 20),
           onRoomClosed: (code, token) {
             closed.add(code);
             registry.unregister(code, owner: token);
-          });
-      final room = auth.createRoom(_member(LudoColor.red));
-      auth.joinRoom(room.code, _member(LudoColor.blue));
-      await registry.register(room.code, 'game-1', owner: room.registryToken);
-      auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+          },
+        );
+        final room = auth.createRoom(_member(LudoColor.red));
+        auth.joinRoom(room.code, _member(LudoColor.blue));
+        await registry.register(room.code, 'game-1', owner: room.registryToken);
+        auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'start'},
+        );
 
-      // Everyone drops; a started room lingers for the grace period first.
-      auth.leaveRoom(room.code, 'red');
-      auth.leaveRoom(room.code, 'blue');
-      expect(room.removed, isFalse);
-      await Future<void>.delayed(const Duration(milliseconds: 80));
+        // Everyone drops; a started room lingers for the grace period first.
+        auth.leaveRoom(room.code, 'red');
+        auth.leaveRoom(room.code, 'blue');
+        expect(room.removed, isFalse);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
 
-      expect(room.removed, isTrue);
-      expect(auth.rooms, isEmpty);
-      expect(closed, [room.code]);
-      expect(await registry.lookup(room.code), isNull);
-    });
+        expect(room.removed, isTrue);
+        expect(auth.rooms, isEmpty);
+        expect(closed, [room.code]);
+        expect(await registry.lookup(room.code), isNull);
+      },
+    );
 
-    test('a late close delete never erases a newer room on the same code',
-        () async {
-      final registry = InMemoryRoomRegistry();
-      final auth = GameAuthority(rng: Random(1));
-      final old = auth.createRoom(_member(LudoColor.red));
-      await registry.register(old.code, 'game-1', owner: old.registryToken);
+    test(
+      'a late close delete never erases a newer room on the same code',
+      () async {
+        final registry = InMemoryRoomRegistry();
+        final auth = GameAuthority(rng: Random(1));
+        final old = auth.createRoom(_member(LudoColor.red));
+        await registry.register(old.code, 'game-1', owner: old.registryToken);
 
-      // The old room closes: its scoped delete frees the code (in the Turso
-      // registry the row could equally have expired and been GC'd).
-      await registry.unregister(old.code, owner: old.registryToken);
-      expect(await registry.lookup(old.code), isNull);
+        // The old room closes: its scoped delete frees the code (in the Turso
+        // registry the row could equally have expired and been GC'd).
+        await registry.unregister(old.code, owner: old.registryToken);
+        expect(await registry.lookup(old.code), isNull);
 
-      // A newer room recycles the code and claims the live route ...
-      final newer = auth.createRoom(_member(LudoColor.blue, seatId: 'blue2'));
-      await registry.register(old.code, 'game-1', owner: newer.registryToken);
-      expect(await registry.lookup(old.code), 'game-1');
+        // A newer room recycles the code and claims the live route ...
+        final newer = auth.createRoom(_member(LudoColor.blue, seatId: 'blue2'));
+        await registry.register(old.code, 'game-1', owner: newer.registryToken);
+        expect(await registry.lookup(old.code), 'game-1');
 
-      // ... and only now does a late (or retried) delete from the old close
-      // land — the slow Turso pipeline. It is scoped to the closed room's
-      // token, so the live route survives.
-      await registry.unregister(old.code, owner: old.registryToken);
-      expect(await registry.lookup(old.code), 'game-1',
-          reason: 'the stale delete must not erase the newer room');
+        // ... and only now does a late (or retried) delete from the old close
+        // land — the slow Turso pipeline. It is scoped to the closed room's
+        // token, so the live route survives.
+        await registry.unregister(old.code, owner: old.registryToken);
+        expect(
+          await registry.lookup(old.code),
+          'game-1',
+          reason: 'the stale delete must not erase the newer room',
+        );
 
-      // A competing claim while the newer row is live is refused outright:
-      // the two creations must never both believe they own the code, or the
-      // loser's cleanup would delete the winner's live route.
-      expect(
-        await registry.register(old.code, 'game-1',
-            owner: '${newer.registryToken}-other'),
-        isFalse,
-      );
-      expect(await registry.lookup(old.code), 'game-1');
-    });
+        // A competing claim while the newer row is live is refused outright:
+        // the two creations must never both believe they own the code, or the
+        // loser's cleanup would delete the winner's live route.
+        expect(
+          await registry.register(
+            old.code,
+            'game-1',
+            owner: '${newer.registryToken}-other',
+          ),
+          isFalse,
+        );
+        expect(await registry.lookup(old.code), 'game-1');
+      },
+    );
 
     test('a started room rejects new joiners', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
       expect(auth.joinRoom(room.code, _member(LudoColor.yellow)), isNull);
     });
 
@@ -395,11 +470,20 @@ void main() {
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
-          room: room, connectionId: 'blue', msg: {'type': 'start'});
-      expect(room.started, isFalse,
-          reason: 'blue is not the host — start is ignored');
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'start'},
+      );
+      expect(
+        room.started,
+        isFalse,
+        reason: 'blue is not the host — start is ignored',
+      );
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
       expect(room.started, isTrue);
     });
 
@@ -420,11 +504,13 @@ void main() {
       final hostLog = <String>[];
       final guestLog = <String>[];
       final auth = GameAuthority(rng: Random(1));
-      final room = auth.createRoom(
-          _member(LudoColor.red, on: hostLog.add));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
       auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
       return (room, auth, hostLog, guestLog);
     }
 
@@ -434,9 +520,15 @@ void main() {
       final hostBase = host.length, guestBase = guest.length;
       final before = room.state.rollSeq;
       auth.handleIntent(
-          room: room, connectionId: 'blue', msg: {'type': 'roll'});
-      expect(room.state.rollSeq, before,
-          reason: 'blue is not the current player — no dice');
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'roll'},
+      );
+      expect(
+        room.state.rollSeq,
+        before,
+        reason: 'blue is not the current player — no dice',
+      );
       expect(host.length, hostBase, reason: 'no broadcast for a wrong seat');
       expect(guest.length, guestBase);
     });
@@ -444,8 +536,7 @@ void main() {
     test('roll by the current seat advances the game and broadcasts', () {
       final (room, auth, host, guest) = playRoom();
       final hostBase = host.length, guestBase = guest.length;
-      auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'roll'});
+      auth.handleIntent(room: room, connectionId: 'red', msg: {'type': 'roll'});
       expect(room.state.rollSeq, 1);
       expect(host.length, hostBase + 1);
       expect(guest.length, guestBase + 1);
@@ -456,16 +547,21 @@ void main() {
 
     test('move from base without a six is rejected as illegal', () {
       final (room, auth, _, _) = playRoom();
-      auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'roll'});
+      auth.handleIntent(room: room, connectionId: 'red', msg: {'type': 'roll'});
       // Server dice is seeded, not fixed — force the illegal scenario.
       room.state
         ..lastRoll = 3
         ..phase = LudoPhase.awaitingMove;
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'move', 'token': 0});
-      expect(room.state.tokens[0].pos, -1,
-          reason: 'a base token cannot move on a 3');
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'move', 'token': 0},
+      );
+      expect(
+        room.state.tokens[0].pos,
+        -1,
+        reason: 'a base token cannot move on a 3',
+      );
     });
 
     test('legal move (spawn on six) is applied and broadcast', () {
@@ -474,9 +570,15 @@ void main() {
         ..lastRoll = 6
         ..phase = LudoPhase.awaitingMove;
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'move', 'token': 2});
-      expect(room.state.tokens[2].pos, 0,
-          reason: 'token must spawn on its own start cell');
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'move', 'token': 2},
+      );
+      expect(
+        room.state.tokens[2].pos,
+        0,
+        reason: 'token must spawn on its own start cell',
+      );
       expect(host.last, contains('"type":"state"'));
       expect(guest.last, contains('"type":"state"'));
     });
@@ -488,22 +590,28 @@ void main() {
         ..phase = LudoPhase.awaitingMove;
       final before = room.state.tokens[0].pos;
       auth.handleIntent(
-          room: room, connectionId: 'blue', msg: {'type': 'move', 'token': 0});
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'move', 'token': 0},
+      );
       expect(room.state.tokens[0].pos, before);
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'move', 'token': 9});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'move', 'token': 9},
+      );
       expect(room.state.tokens[0].pos, before);
     });
 
     test('chat is relayed to every member with the sender name', () {
       final (room, auth, host, guest) = playRoom();
       auth.handleIntent(
-          room: room,
-          connectionId: 'red',
-          msg: {'type': 'chat', 'text': '  hello  '});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'chat', 'text': '  hello  '},
+      );
       for (final log in [host, guest]) {
-        final msg =
-            jsonDecode(log.last) as Map<String, dynamic>;
+        final msg = jsonDecode(log.last) as Map<String, dynamic>;
         expect(msg['type'], 'chat');
         expect(msg['from'], 'Red');
         expect(msg['text'], 'hello');
@@ -524,7 +632,9 @@ void main() {
     /// buffered message up to and including the match, so successive
     /// calls always advance to *new* messages.
     Future<Map<String, dynamic>> nextMsg(
-        List<Map<String, dynamic>> buf, String type) async {
+      List<Map<String, dynamic>> buf,
+      String type,
+    ) async {
       final deadline = DateTime.now().add(const Duration(seconds: 10));
       while (DateTime.now().isBefore(deadline)) {
         for (var i = 0; i < buf.length; i++) {
@@ -554,9 +664,11 @@ void main() {
       await host.ready;
       await guest.ready;
       host.stream.listen(
-          (d) => hostBuf.add(jsonDecode(d as String) as Map<String, dynamic>));
-      guest.stream.listen((d) =>
-          guestBuf.add(jsonDecode(d as String) as Map<String, dynamic>));
+        (d) => hostBuf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      guest.stream.listen(
+        (d) => guestBuf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
     });
 
     tearDown(() async {
@@ -567,13 +679,25 @@ void main() {
 
     test('quick match auto-pairs two strangers and auto-starts', () async {
       // Both players ask the server to match them — nobody shares a code.
-      host.sink.add(jsonEncode(
-          {'type': 'hello', 'seatId': 'qm-1', 'name': 'Solo', 'match': true}));
+      host.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'qm-1',
+          'name': 'Solo',
+          'match': true,
+        }),
+      );
       final hj = await nextMsg(hostBuf, 'joined');
       expect(hj['game'], 'ludo');
 
-      guest.sink.add(jsonEncode(
-          {'type': 'hello', 'seatId': 'qm-2', 'name': 'Rival', 'match': true}));
+      guest.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'qm-2',
+          'name': 'Rival',
+          'match': true,
+        }),
+      );
       final gj = await nextMsg(guestBuf, 'joined');
       expect(gj['code'], hj['code'], reason: 'matched into the same room');
 
@@ -590,7 +714,8 @@ void main() {
       addTearDown(() => roomRegistry = saved);
 
       host.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'dup-1', 'name': 'Dup'}));
+        jsonEncode({'type': 'hello', 'seatId': 'dup-1', 'name': 'Dup'}),
+      );
       final joined = await nextMsg(hostBuf, 'joined');
       final code = joined['code'] as String;
 
@@ -598,114 +723,158 @@ void main() {
       // player must land in a freshly claimed room, never the stolen one.
       expect(code, isNot(stubborn.refusedCode));
       expect(authority.rooms[code], isNotNull);
-      expect(authority.rooms[stubborn.refusedCode], isNull,
-          reason: 'the duplicate code was never turned into a room');
+      expect(
+        authority.rooms[stubborn.refusedCode],
+        isNull,
+        reason: 'the duplicate code was never turned into a room',
+      );
     });
 
-    test('a registry that refuses every code fails the hello cleanly',
-        () async {
-      final refusing = _RefusingAlwaysRegistry();
-      final saved = roomRegistry;
-      roomRegistry = refusing;
-      addTearDown(() => roomRegistry = saved);
-      final before = authority.rooms.keys.toSet();
+    test(
+      'a registry that refuses every code fails the hello cleanly',
+      () async {
+        final refusing = _RefusingAlwaysRegistry();
+        final saved = roomRegistry;
+        roomRegistry = refusing;
+        addTearDown(() => roomRegistry = saved);
+        final before = authority.rooms.keys.toSet();
 
-      host.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'ex-1', 'name': 'Ex'}));
-      final err = await nextMsg(hostBuf, 'error');
-      expect(err['text'], contains('could not create a room'));
-      expect(refusing.attempted, hasLength(3),
-          reason: 'three codes are tried, then the creation gives up');
-      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
-          reason: 'no room may exist under an unclaimed code');
-    });
+        host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'ex-1', 'name': 'Ex'}),
+        );
+        final err = await nextMsg(hostBuf, 'error');
+        expect(err['text'], contains('could not create a room'));
+        expect(
+          refusing.attempted,
+          hasLength(3),
+          reason: 'three codes are tried, then the creation gives up',
+        );
+        expect(
+          authority.rooms.keys.toSet().difference(before),
+          isEmpty,
+          reason: 'no room may exist under an unclaimed code',
+        );
+      },
+    );
 
-    test('quick match fails cleanly when every generated code is refused',
-        () async {
-      final refusing = _RefusingAlwaysRegistry();
-      final saved = roomRegistry;
-      roomRegistry = refusing;
-      addTearDown(() => roomRegistry = saved);
-      final before = authority.rooms.keys.toSet();
+    test(
+      'quick match fails cleanly when every generated code is refused',
+      () async {
+        final refusing = _RefusingAlwaysRegistry();
+        final saved = roomRegistry;
+        roomRegistry = refusing;
+        addTearDown(() => roomRegistry = saved);
+        final before = authority.rooms.keys.toSet();
 
-      host.sink.add(jsonEncode(
-          {'type': 'hello', 'seatId': 'ex-2', 'name': 'Ex', 'match': true}));
-      final err = await nextMsg(hostBuf, 'error');
-      expect(err['text'], contains('could not open a room'));
-      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
-          reason: 'a quick-matcher must never be seated in an '
-              'unroutable room');
-    });
+        host.sink.add(
+          jsonEncode({
+            'type': 'hello',
+            'seatId': 'ex-2',
+            'name': 'Ex',
+            'match': true,
+          }),
+        );
+        final err = await nextMsg(hostBuf, 'error');
+        expect(err['text'], contains('could not open a room'));
+        expect(
+          authority.rooms.keys.toSet().difference(before),
+          isEmpty,
+          reason:
+              'a quick-matcher must never be seated in an '
+              'unroutable room',
+        );
+      },
+    );
 
-    test('a created room only becomes visible after its claim succeeds',
-        () async {
-      final slow = _SlowClaimRegistry(const Duration(milliseconds: 200));
-      final saved = roomRegistry;
-      roomRegistry = slow;
-      addTearDown(() => roomRegistry = saved);
-      final before = authority.rooms.keys.toSet();
+    test(
+      'a created room only becomes visible after its claim succeeds',
+      () async {
+        final slow = _SlowClaimRegistry(const Duration(milliseconds: 200));
+        final saved = roomRegistry;
+        roomRegistry = slow;
+        addTearDown(() => roomRegistry = saved);
+        final before = authority.rooms.keys.toSet();
 
-      host.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'vis-1', 'name': 'Vis'}));
-      // Mid-claim: nobody can join, match, or watch a room whose code is
-      // not claimed yet — a refused claim must never strand a joiner in a
-      // room the server would then drop.
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
-          reason: 'a room awaiting its claim is not visible to anyone yet');
-      final joined = await nextMsg(hostBuf, 'joined');
-      expect(authority.rooms[joined['code']], isNotNull,
-          reason: 'once the claim lands the room opens normally');
-    });
+        host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'vis-1', 'name': 'Vis'}),
+        );
+        // Mid-claim: nobody can join, match, or watch a room whose code is
+        // not claimed yet — a refused claim must never strand a joiner in a
+        // room the server would then drop.
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        expect(
+          authority.rooms.keys.toSet().difference(before),
+          isEmpty,
+          reason: 'a room awaiting its claim is not visible to anyone yet',
+        );
+        final joined = await nextMsg(hostBuf, 'joined');
+        expect(
+          authority.rooms[joined['code']],
+          isNotNull,
+          reason: 'once the claim lands the room opens normally',
+        );
+      },
+    );
 
-    test('a disconnect during the claim leaves no phantom room or stale route',
-        () async {
-      final slow = _SlowClaimRegistry(const Duration(milliseconds: 250));
-      final saved = roomRegistry;
-      roomRegistry = slow;
-      addTearDown(() => roomRegistry = saved);
-      // The production onRoomClosed wiring lives in main(); mirror it here
-      // so the test can observe the room's row being released on close.
-      final savedAuthority = authority;
-      authority = GameAuthority(onRoomClosed: (code, token) {
-        roomRegistry.unregister(code, owner: token).catchError((Object _) {});
-      });
-      addTearDown(() => authority = savedAuthority);
-      final before = authority.rooms.keys.toSet();
+    test(
+      'a disconnect during the claim leaves no phantom room or stale route',
+      () async {
+        final slow = _SlowClaimRegistry(const Duration(milliseconds: 250));
+        final saved = roomRegistry;
+        roomRegistry = slow;
+        addTearDown(() => roomRegistry = saved);
+        // The production onRoomClosed wiring lives in main(); mirror it here
+        // so the test can observe the room's row being released on close.
+        final savedAuthority = authority;
+        authority = GameAuthority(
+          onRoomClosed: (code, token) {
+            roomRegistry
+                .unregister(code, owner: token)
+                .catchError((Object _) {});
+          },
+        );
+        addTearDown(() => authority = savedAuthority);
+        final before = authority.rooms.keys.toSet();
 
-      final dying = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
-      await dying.ready;
-      dying.sink.add(jsonEncode(
-          {'type': 'hello', 'seatId': 'ghost', 'name': 'Ghost'}));
-      // Hang up while the remote claim is still in flight.
-      await Future<void>.delayed(const Duration(milliseconds: 30));
-      await dying.sink.close();
-      // Let the claim answer, the cleanup notice the dead socket, and the
-      // room close its registry row.
-      await Future<void>.delayed(const Duration(milliseconds: 600));
+        final dying = WebSocketChannel.connect(
+          Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+        );
+        await dying.ready;
+        dying.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'ghost', 'name': 'Ghost'}),
+        );
+        // Hang up while the remote claim is still in flight.
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await dying.sink.close();
+        // Let the claim answer, the cleanup notice the dead socket, and the
+        // room close its registry row.
+        await Future<void>.delayed(const Duration(milliseconds: 600));
 
-      expect(authority.rooms.keys.toSet().difference(before), isEmpty,
-          reason: 'no phantom occupied room may survive the dead host');
-      expect(slow.unregistered, isNotEmpty,
-          reason: 'the freshly claimed code must be released again');
-    });
+        expect(
+          authority.rooms.keys.toSet().difference(before),
+          isEmpty,
+          reason: 'no phantom occupied room may survive the dead host',
+        );
+        expect(
+          slow.unregistered,
+          isNotEmpty,
+          reason: 'the freshly claimed code must be released again',
+        );
+      },
+    );
 
-    test('/stats counts live WebSockets and drops them after close',
-        () async {
+    test('/stats counts live WebSockets and drops them after close', () async {
       // The test binding stubs every HTTP client with empty 400 responses
       // via a global HttpOverrides; a zone-local no-op override opts back
       // into real networking (the base createHttpClient builds the real
       // HttpClient) without touching the global mock.
       Future<int?> connections() =>
-          HttpOverrides.runWithHttpOverrides<Future<int>>(
-            () async {
-              final resp = await http
-                  .get(Uri.parse('http://127.0.0.1:${srv.port}/stats'));
-              return jsonDecode(resp.body)['connections'] as int;
-            },
-            _RealHttpOverrides(),
-          );
+          HttpOverrides.runWithHttpOverrides<Future<int>>(() async {
+            final resp = await http.get(
+              Uri.parse('http://127.0.0.1:${srv.port}/stats'),
+            );
+            return jsonDecode(resp.body)['connections'] as int;
+          }, _RealHttpOverrides());
 
       // The setUp sockets (and any leftovers from a previous test) are the
       // baseline — the gauge must react to deltas, not absolute values.
@@ -714,7 +883,8 @@ void main() {
       // A raw socket counts before it even says hello: the gauge is the
       // capacity metric, not the lobby roster.
       final socket = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
+        Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+      );
       addTearDown(socket.sink.close);
       await socket.ready;
       expect(await connections(), before + 1);
@@ -727,31 +897,41 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 25));
         after = await connections();
       }
-      expect(after, before,
-          reason: 'closing the socket must decrement the gauge');
+      expect(
+        after,
+        before,
+        reason: 'closing the socket must decrement the gauge',
+      );
     });
 
     test('hello -> joined -> lobby -> start -> state, full protocol', () async {
       // Host creates a room; guest joins by code.
-      host.sink.add(jsonEncode(
-          {'type': 'hello', 'seatId': 'host-1', 'name': 'Host'}));
+      host.sink.add(
+        jsonEncode({'type': 'hello', 'seatId': 'host-1', 'name': 'Host'}),
+      );
       final joined = await nextMsg(hostBuf, 'joined');
       final code = joined['code'] as String;
       expect(code, hasLength(4));
       expect(joined['color'], 'red');
 
-      guest.sink.add(jsonEncode({
-        'type': 'hello',
-        'seatId': 'guest-1',
-        'name': 'Guest',
-        'code': code,
-      }));
-      expect((await nextMsg(guestBuf, 'joined'))['color'], 'blue');
+      guest.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'guest-1',
+          'name': 'Guest',
+          'code': code,
+        }),
+      );
+      // A two-player ludo table seats the pair opposite each other, so the
+      // guest lands across from the host's red instead of next to it.
+      expect((await nextMsg(guestBuf, 'joined'))['color'], 'yellow');
 
       // Both receive the lobby roster.
       final lobby = await nextMsg(guestBuf, 'lobby');
-      expect((lobby['seats'] as List).map((s) => s['name']),
-          containsAll(const ['Host', 'Guest']));
+      expect(
+        (lobby['seats'] as List).map((s) => s['name']),
+        containsAll(const ['Host', 'Guest']),
+      );
 
       // Host starts the game; both receive the first authoritative state.
       host.sink.add(jsonEncode({'type': 'start'}));
@@ -760,59 +940,85 @@ void main() {
       await nextMsg(guestBuf, 'state');
     });
 
-    test('a rolled dice reaches both clients as an authoritative state',
-        () async {
-      host.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'h2', 'name': 'H'}));
-      final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
-      guest.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'g2', 'name': 'G', 'code': code}));
-      await nextMsg(guestBuf, 'joined');
-      host.sink.add(jsonEncode({'type': 'start'}));
-      final first = await nextMsg(hostBuf, 'state');
-      final seqBefore = first['state']['rollSeq'];
+    test(
+      'a rolled dice reaches both clients as an authoritative state',
+      () async {
+        host.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'h2', 'name': 'H'}),
+        );
+        final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
+        guest.sink.add(
+          jsonEncode({
+            'type': 'hello',
+            'seatId': 'g2',
+            'name': 'G',
+            'code': code,
+          }),
+        );
+        await nextMsg(guestBuf, 'joined');
+        host.sink.add(jsonEncode({'type': 'start'}));
+        final first = await nextMsg(hostBuf, 'state');
+        final seqBefore = first['state']['rollSeq'];
 
-      host.sink.add(jsonEncode({'type': 'roll'}));
-      final second = await nextMsg(hostBuf, 'state');
-      expect(second['state']['rollSeq'], seqBefore + 1);
-      // null lastRoll == a skip turn (everyone in base, no six) — still
-      // an authoritative state both clients must receive.
-      expect(second['state']['lastRoll'],
-          anyOf(isNull, inInclusiveRange(1, 6)));
-      final guestView = await nextMsg(guestBuf, 'state');
-      expect(guestView['state']['lastRoll'], second['state']['lastRoll'],
-          reason: 'every client sees the same authoritative dice');
-    });
+        host.sink.add(jsonEncode({'type': 'roll'}));
+        final second = await nextMsg(hostBuf, 'state');
+        expect(second['state']['rollSeq'], seqBefore + 1);
+        // null lastRoll == a skip turn (everyone in base, no six) — still
+        // an authoritative state both clients must receive.
+        expect(
+          second['state']['lastRoll'],
+          anyOf(isNull, inInclusiveRange(1, 6)),
+        );
+        final guestView = await nextMsg(guestBuf, 'state');
+        expect(
+          guestView['state']['lastRoll'],
+          second['state']['lastRoll'],
+          reason: 'every client sees the same authoritative dice',
+        );
+      },
+    );
 
     test('a spectator watches a running game without a seat', () async {
-      host.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'h3', 'name': 'H'}));
+      host.sink.add(jsonEncode({'type': 'hello', 'seatId': 'h3', 'name': 'H'}));
       final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
       guest.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'g3', 'name': 'G', 'code': code}));
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'g3',
+          'name': 'G',
+          'code': code,
+        }),
+      );
       await nextMsg(guestBuf, 'joined');
       host.sink.add(jsonEncode({'type': 'start'}));
       await nextMsg(hostBuf, 'state');
 
       // The watcher connects mid-game.
       final watcher = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
+        Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+      );
       await watcher.ready;
       final buf = <Map<String, dynamic>>[];
-      watcher.stream
-          .listen((d) => buf.add(jsonDecode(d as String) as Map<String, dynamic>));
-      watcher.sink.add(jsonEncode({
-        'type': 'hello',
-        'seatId': 'watcher-1',
-        'name': 'Watcher',
-        'code': code,
-        'spectate': true,
-      }));
+      watcher.stream.listen(
+        (d) => buf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      watcher.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'watcher-1',
+          'name': 'Watcher',
+          'code': code,
+          'spectate': true,
+        }),
+      );
 
       final wJoined = await nextMsg(buf, 'joined');
       expect(wJoined['spectator'], isTrue);
-      expect(wJoined.containsKey('color'), isFalse,
-          reason: 'spectators claim no corner');
+      expect(
+        wJoined.containsKey('color'),
+        isFalse,
+        reason: 'spectators claim no corner',
+      );
       final snapshot = await nextMsg(buf, 'state');
       expect((snapshot['state'] as Map)['players'], hasLength(2));
 
@@ -820,8 +1026,10 @@ void main() {
       watcher.sink.add(jsonEncode({'type': 'roll'}));
       host.sink.add(jsonEncode({'type': 'roll'}));
       final after = await nextMsg(buf, 'state');
-      expect(after['state']['rollSeq'],
-          (snapshot['state'] as Map)['rollSeq'] + 1);
+      expect(
+        after['state']['rollSeq'],
+        (snapshot['state'] as Map)['rollSeq'] + 1,
+      );
       // The watcher's own lobby roster names them.
       final roster = await nextMsg(buf, 'lobby');
       expect(roster['spectators'], contains('Watcher'));
@@ -831,17 +1039,21 @@ void main() {
 
     test('joining a bogus room code yields an error message', () async {
       final stranger = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
+        Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+      );
       await stranger.ready;
       final buf = <Map<String, dynamic>>[];
-      stranger.stream
-          .listen((d) => buf.add(jsonDecode(d as String) as Map<String, dynamic>));
-      stranger.sink.add(jsonEncode({
-        'type': 'hello',
-        'seatId': 'x',
-        'name': 'X',
-        'code': 'ZZZZ',
-      }));
+      stranger.stream.listen(
+        (d) => buf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      stranger.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'x',
+          'name': 'X',
+          'code': 'ZZZZ',
+        }),
+      );
       expect((await nextMsg(buf, 'error'))['text'], contains('ZZZZ'));
       await stranger.sink.close();
     });
@@ -850,18 +1062,16 @@ void main() {
       host.sink.add('not json at all');
       expect((await nextMsg(hostBuf, 'error'))['text'], 'bad json');
       // The connection must still accept a valid hello afterwards.
-      host.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'h', 'name': 'H'}));
+      host.sink.add(jsonEncode({'type': 'hello', 'seatId': 'h', 'name': 'H'}));
       expect(await nextMsg(hostBuf, 'joined'), isNotNull);
     });
 
     test('dropped player rejoins mid-game and resumes the game', () async {
-      host.sink.add(
-          jsonEncode({'type': 'hello', 'seatId': 'h', 'name': 'H'}));
-      final code =
-          (await nextMsg(hostBuf, 'joined'))['code'] as String;
-      guest.sink.add(jsonEncode(
-          {'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}));
+      host.sink.add(jsonEncode({'type': 'hello', 'seatId': 'h', 'name': 'H'}));
+      final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
+      guest.sink.add(
+        jsonEncode({'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}),
+      );
       await nextMsg(guestBuf, 'joined');
       host.sink.add(jsonEncode({'type': 'start'}));
       final before =
@@ -874,27 +1084,370 @@ void main() {
 
       // Same profile comes back on a fresh socket.
       final guest2 = WebSocketChannel.connect(
-          Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
+        Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+      );
       await guest2.ready;
       final guest2Buf = <Map<String, dynamic>>[];
-      guest2.stream.listen((d) => guest2Buf
-          .add(jsonDecode(d as String) as Map<String, dynamic>));
-      guest2.sink.add(jsonEncode(
-          {'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}));
+      guest2.stream.listen(
+        (d) => guest2Buf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      guest2.sink.add(
+        jsonEncode({'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}),
+      );
       await nextMsg(guest2Buf, 'joined');
       // The rejoining client immediately receives the current snapshot.
-      final resumed = (await nextMsg(guest2Buf, 'state'))['state']
-          as Map<String, dynamic>;
+      final resumed =
+          (await nextMsg(guest2Buf, 'state'))['state'] as Map<String, dynamic>;
       expect(resumed['rollSeq'], before['rollSeq']);
       expect(resumed['currentPlayerIndex'], before['currentPlayerIndex']);
 
       // And the reconnected seat is live in the broadcast path again.
       host.sink.add(jsonEncode({'type': 'roll'}));
-      final after = (await nextMsg(guest2Buf, 'state'))['state']
-          as Map<String, dynamic>;
+      final after =
+          (await nextMsg(guest2Buf, 'state'))['state'] as Map<String, dynamic>;
       expect(after['rollSeq'], 1);
       await guest2.sink.close();
     });
+  });
+
+  // ---------------------------------- seat status: hand-overs and walk-outs
+
+  group('GameAuthority: handed-over seats and walk-outs', () {
+    test('the lobby answers chat and autoplay instead of dropping them', () {
+      final host = <String>[];
+      final guest = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.green, seatId: 'g', id: 'c2', on: guest.add),
+      );
+      expect(room.started, isFalse);
+      host.clear();
+      guest.clear();
+
+      // The lobby is exactly the phase where a chat box exists, and the
+      // "no game yet" guard used to run ahead of everything but 'start' —
+      // so the box appeared to work for the sender and did nothing at all.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c2',
+        msg: {'type': 'chat', 'text': 'one minute'},
+      );
+      expect(
+        _sentTypes(host),
+        contains('chat'),
+        reason: 'the lobby relays talk before the first roll',
+      );
+      expect(_lastSent(host, 'chat')!['text'], 'one minute');
+      expect(_lastSent(host, 'chat')!['from'], 'Green');
+
+      // Handing a seat to the table is likewise something a player does while
+      // waiting for the host to press Start — stepping away before the first
+      // dice is the most common case of all.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c2',
+        msg: {'type': 'autoplay', 'on': true},
+      );
+      expect(room.autoSeats, contains('g'));
+      expect(
+        _seatIn(_lastSent(host, 'seats'), 'g')!['auto'],
+        isTrue,
+        reason: 'the other player is told the seat is being looked after',
+      );
+    });
+
+    test('the table plays a seat its own player handed over', () async {
+      final host = <String>[];
+      final guest = <String>[];
+      final auth = GameAuthority(
+        rng: Random(11),
+        autoStepDelay: const Duration(milliseconds: 25),
+      );
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.green, seatId: 'g', id: 'c2', on: guest.add),
+      );
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c2',
+        msg: {'type': 'autoplay', 'on': true},
+      );
+
+      // Turn the dice by hand until the corner the table is playing comes up.
+      // A six keeps the turn, so this can take several rolls, and a roll that
+      // cannot move anything passes the turn on by itself.
+      for (var i = 0; i < 20 && room.state.currentPlayer.id != 'g'; i++) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'c1',
+          msg: {'type': 'roll'},
+        );
+        if (room.state.phase == LudoPhase.awaitingMove) {
+          auth.handleIntent(
+            room: room,
+            connectionId: 'c1',
+            msg: {
+              'type': 'move',
+              'token': legalMoves(room.state).first.tokenIndex,
+            },
+          );
+        }
+      }
+      expect(
+        room.state.currentPlayer.id,
+        'g',
+        reason: 'the turn reached a corner nobody is pressing buttons for',
+      );
+      guest.clear();
+
+      // Nothing will ever arrive from that socket. Without the table taking
+      // the turn, everyone behind it is stuck waiting on a corner that cannot
+      // answer — which reads on screen as a game that has simply stopped.
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (room.state.currentPlayer.id == 'g' &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        room.state.currentPlayer.id,
+        isNot('g'),
+        reason: 'autoplay rolled, moved, and passed the turn on',
+      );
+      expect(
+        _sentTypes(guest),
+        contains('state'),
+        reason: 'the played-for seat still watches its own pawn move',
+      );
+    });
+
+    test('a human taking a handed-over seat back stops the table', () async {
+      final host = <String>[];
+      final guest = <String>[];
+      // Long enough that a step is certainly still pending when the player
+      // changes their mind, short enough to keep the test quick.
+      final auth = GameAuthority(
+        rng: Random(4),
+        autoStepDelay: const Duration(milliseconds: 200),
+      );
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.green, seatId: 'g', id: 'c2', on: guest.add),
+      );
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c2',
+        msg: {'type': 'autoplay', 'on': true},
+      );
+      for (var i = 0; i < 20 && room.state.currentPlayer.id != 'g'; i++) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'c1',
+          msg: {'type': 'roll'},
+        );
+        if (room.state.phase == LudoPhase.awaitingMove) {
+          auth.handleIntent(
+            room: room,
+            connectionId: 'c1',
+            msg: {
+              'type': 'move',
+              'token': legalMoves(room.state).first.tokenIndex,
+            },
+          );
+        }
+      }
+      expect(room.state.currentPlayer.id, 'g');
+      final rollSeq = room.state.rollSeq;
+
+      // The player is back and wants their turns. Taking the seat back has to
+      // stop the table with a step already in the air, or two drivers would
+      // move one seat and the second move would be a dice roll nobody chose.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'c2',
+        msg: {'type': 'autoplay', 'on': false},
+      );
+      expect(room.autoSeats, isEmpty);
+      expect(
+        _seatIn(_lastSent(host, 'seats'), 'g')!['auto'],
+        isNot(true),
+        reason: 'the other player sees the seat is back in human hands',
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(
+        room.state.rollSeq,
+        rollSeq,
+        reason: 'a seat that took itself back is not rolled for',
+      );
+      expect(
+        room.state.currentPlayer.id,
+        'g',
+        reason: 'and the turn is left waiting for the human, not the table',
+      );
+    });
+  });
+
+  group('GameAuthority: walk-outs', () {
+    test('a two-player walk-out decides the game and gives up the chair', () {
+      final host = <String>[];
+      final auth = GameAuthority(rng: Random(2));
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'g', id: 'c2'));
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'roll'});
+
+      auth.handleIntent(room: room, connectionId: 'c2', msg: {'type': 'leave'});
+
+      expect(
+        _sentTypes(host),
+        containsAllInOrder(['left', 'seats', 'state']),
+        reason:
+            'the player who stayed is told who went, then shown the '
+            'board they are left with',
+      );
+      expect(_lastSent(host, 'left')!['name'], 'Green');
+      expect(_seatIn(_lastSent(host, 'seats'), 'g')!['left'], isTrue);
+      // A table of two has nothing left to play: the survivor takes it by
+      // forfeit instead of staring at a turn that will never be taken.
+      expect(room.state.phase, LudoPhase.gameOver);
+      expect(room.state.rankings, [
+        'red',
+        'g',
+      ], reason: 'survivor first, walk-out last');
+      // Walking out is not a pause. The chair is gone, so a walk-out cannot
+      // be retried until the board suits them better.
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'g', id: 'c3'),
+        ),
+        isNull,
+      );
+      expect(
+        auth.joinRoom(
+          room.code,
+          _member(LudoColor.blue, seatId: 'g', id: 'c4'),
+        ),
+        isNull,
+      );
+    });
+
+    test('a three-player walk-out empties the corner and the game goes on', () {
+      final host = <String>[];
+      final auth = GameAuthority(rng: Random(6));
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: host.add),
+      );
+      auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'g', id: 'c2'));
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.yellow, seatId: 'y', id: 'c3'),
+      );
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'roll'});
+
+      auth.handleIntent(room: room, connectionId: 'c2', msg: {'type': 'leave'});
+
+      expect(room.state.players.map((p) => p.id), [
+        'red',
+        'y',
+      ], reason: 'the departed corner leaves the authoritative board');
+      expect(
+        room.state.tokens.every((t) => t.color != LudoColor.green),
+        isTrue,
+        reason: 'and their pawns stop haunting the track',
+      );
+      expect(room.state.phase, LudoPhase.awaitingRoll);
+      expect(
+        room.state.players.map((p) => p.id),
+        contains(room.state.currentPlayer.id),
+        reason: 'the turn rests with someone who is still at the table',
+      );
+
+      // The survivors are not stranded by the walk-out: with three corners a
+      // game is still a game, and the empty one is skipped from now on.
+      final connections = {'red': 'c1', 'y': 'c3'};
+      final rollSeq = room.state.rollSeq;
+      auth.handleIntent(
+        room: room,
+        connectionId: connections[room.state.currentPlayer.id]!,
+        msg: {'type': 'roll'},
+      );
+      expect(room.state.rollSeq, rollSeq + 1);
+      expect(room.state.players.map((p) => p.id), isNot(contains('g')));
+    });
+
+    test(
+      'a dropped link is not a walk-out: the seat waits and can be retaken',
+      () {
+        final host = <String>[];
+        final auth = GameAuthority(rng: Random(8));
+        final room = auth.createRoom(
+          _member(LudoColor.red, id: 'c1', on: host.add),
+        );
+        auth.joinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'g', id: 'c2'),
+        );
+        auth.handleIntent(
+          room: room,
+          connectionId: 'c1',
+          msg: {'type': 'start'},
+        );
+        host.clear();
+
+        // The socket dies on its own — the player never said they were leaving.
+        auth.leaveRoom(room.code, 'c2');
+
+        final seats = _lastSent(host, 'seats');
+        expect(
+          seats,
+          isNotNull,
+          reason:
+              'the table is told the corner went quiet, rather than '
+              'wondering why nobody answers',
+        );
+        expect(_seatIn(seats, 'g')!['connected'], isFalse);
+        expect(
+          _seatIn(seats, 'g')!['left'],
+          isNot(true),
+          reason: 'a lost link must never be reported as someone giving up',
+        );
+        expect(_sentTypes(host), isNot(contains('left')));
+        expect(
+          room.state.players.map((p) => p.id),
+          contains('g'),
+          reason: 'their pawns stay exactly where they left them',
+        );
+
+        // Same profile, same chair — the game was waiting for them. Which
+        // corner that is stays the authority's business (a two-player ludo
+        // table seats the pair opposite each other), so this compares against
+        // what the room recorded for the seat instead of assuming a color.
+        final seatedColor = room.seatRegistry['g'];
+        final back = _member(LudoColor.yellow, seatId: 'g', id: 'c9');
+        expect(auth.rejoinRoom(room.code, back), same(room));
+        expect(
+          back.color,
+          seatedColor,
+          reason: 'the returning player sits back down in the same corner',
+        );
+      },
+    );
   });
 
   // -------------------------------------------------- reconnect (authority)
@@ -905,7 +1458,10 @@ void main() {
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
       expect(room.started, isTrue);
 
       // red drops; blue remains.
@@ -914,19 +1470,29 @@ void main() {
 
       // red returns on a new connection and gets the same corner back.
       final sinkJson = <String>[];
-      final rejoining =
-          _member(LudoColor.green, seatId: 'red', id: 'c9', on: sinkJson.add);
+      final rejoining = _member(
+        LudoColor.green,
+        seatId: 'red',
+        id: 'c9',
+        on: sinkJson.add,
+      );
       final rejoined = auth.rejoinRoom(room.code, rejoining);
       expect(rejoined, same(room));
-      expect(rejoining.color, LudoColor.red,
-          reason: 'the returning player reclaims their original seat');
+      expect(
+        rejoining.color,
+        LudoColor.red,
+        reason: 'the returning player reclaims their original seat',
+      );
       expect(room.members, hasLength(2));
 
       // The authority's turn check matches on seatId, so the returned
       // member can act as their old self again.
       auth.handleIntent(room: room, connectionId: 'c9', msg: {'type': 'roll'});
-      expect(sinkJson, isNotEmpty,
-          reason: 'the reconnected member receives state broadcasts');
+      expect(
+        sinkJson,
+        isNotEmpty,
+        reason: 'the reconnected member receives state broadcasts',
+      );
       expect(room.stateOrNull!.rollSeq, 1);
     });
 
@@ -951,22 +1517,32 @@ void main() {
       expect(room.members.keys, ['c1']);
     });
 
-    test('a started empty room survives the grace period, then is dropped',
-        () async {
-      final auth = GameAuthority(
-          rng: Random(1), emptyRoomGrace: const Duration(milliseconds: 40));
-      final room = auth.createRoom(_member(LudoColor.red));
-      auth.joinRoom(room.code, _member(LudoColor.blue));
-      auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
-      auth.leaveRoom(room.code, 'red');
-      auth.leaveRoom(room.code, 'blue');
-      expect(auth.rooms.containsKey(room.code), isTrue,
-          reason: 'the game stays recoverable for a moment');
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      expect(auth.rooms.containsKey(room.code), isFalse);
-      expect(room.removed, isTrue);
-    });
+    test(
+      'a started empty room survives the grace period, then is dropped',
+      () async {
+        final auth = GameAuthority(
+          rng: Random(1),
+          emptyRoomGrace: const Duration(milliseconds: 40),
+        );
+        final room = auth.createRoom(_member(LudoColor.red));
+        auth.joinRoom(room.code, _member(LudoColor.blue));
+        auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'start'},
+        );
+        auth.leaveRoom(room.code, 'red');
+        auth.leaveRoom(room.code, 'blue');
+        expect(
+          auth.rooms.containsKey(room.code),
+          isTrue,
+          reason: 'the game stays recoverable for a moment',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        expect(auth.rooms.containsKey(room.code), isFalse);
+        expect(room.removed, isTrue);
+      },
+    );
 
     test('an emptied lobby room is removed immediately', () {
       final auth = GameAuthority(rng: Random(1));
@@ -978,18 +1554,28 @@ void main() {
 
     test('rejoining cancels the abandon timer', () async {
       final auth = GameAuthority(
-          rng: Random(1), emptyRoomGrace: const Duration(milliseconds: 40));
+        rng: Random(1),
+        emptyRoomGrace: const Duration(milliseconds: 40),
+      );
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
       auth.leaveRoom(room.code, 'red');
       auth.leaveRoom(room.code, 'blue');
       auth.rejoinRoom(
-          room.code, _member(LudoColor.red, seatId: 'red', id: 'c1'));
+        room.code,
+        _member(LudoColor.red, seatId: 'red', id: 'c1'),
+      );
       await Future<void>.delayed(const Duration(milliseconds: 60));
-      expect(auth.rooms.containsKey(room.code), isTrue,
-          reason: 'a returning player keeps the room alive');
+      expect(
+        auth.rooms.containsKey(room.code),
+        isTrue,
+        reason: 'a returning player keeps the room alive',
+      );
     });
   });
 
@@ -1001,20 +1587,23 @@ void main() {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
-      final watcher =
-          auth.spectateRoom(room.code, _member(LudoColor.green, seatId: 'w',
-              id: 'w1', on: seen.add));
+      final watcher = auth.spectateRoom(
+        room.code,
+        _member(LudoColor.green, seatId: 'w', id: 'w1', on: seen.add),
+      );
       expect(watcher, isNotNull);
       expect(room.spectators, hasLength(1));
 
       room.broadcast({'type': 'lobby', 'code': room.code});
-      expect(seen, hasLength(1),
-          reason: 'spectators are on the broadcast feed');
+      expect(
+        seen,
+        hasLength(1),
+        reason: 'spectators are on the broadcast feed',
+      );
 
       // The watcher cannot start or roll — handleIntent only looks at
       // seated members.
-      auth.handleIntent(
-          room: room, connectionId: 'w1', msg: {'type': 'start'});
+      auth.handleIntent(room: room, connectionId: 'w1', msg: {'type': 'start'});
       auth.handleIntent(room: room, connectionId: 'w1', msg: {'type': 'roll'});
       expect(room.started, isFalse);
     });
@@ -1037,8 +1626,11 @@ void main() {
       auth.leaveRoom(room.code, 'w');
       expect(auth.rooms.containsKey(room.code), isTrue);
       auth.leaveRoom(room.code, 'red');
-      expect(auth.rooms.containsKey(room.code), isTrue,
-          reason: 'started games linger for the grace period');
+      expect(
+        auth.rooms.containsKey(room.code),
+        isTrue,
+        reason: 'started games linger for the grace period',
+      );
     });
   });
 
@@ -1051,7 +1643,10 @@ void main() {
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
 
       final s = room.state;
       // Force the endgame: three of red's tokens home, the last one one
@@ -1064,7 +1659,10 @@ void main() {
         ..lastRoll = 1
         ..phase = LudoPhase.awaitingMove;
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'move', 'token': 0});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'move', 'token': 0},
+      );
 
       expect(s.phase, LudoPhase.gameOver);
       expect(s.rankings, ['red', 'blue']);
@@ -1088,7 +1686,10 @@ void main() {
       final room = auth.createRoom(_member(LudoColor.red));
       auth.joinRoom(room.code, _member(LudoColor.blue));
       auth.handleIntent(
-          room: room, connectionId: 'red', msg: {'type': 'start'});
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
       for (final t in room.state.tokens) {
         t.pos = t.color == LudoColor.red && t.index == 0 ? 55 : 56;
       }
@@ -1097,7 +1698,10 @@ void main() {
         ..phase = LudoPhase.awaitingMove;
       expect(
         () => auth.handleIntent(
-            room: room, connectionId: 'red', msg: {'type': 'move', 'token': 0}),
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'move', 'token': 0},
+        ),
         returnsNormally,
       );
       expect(room.state.phase, LudoPhase.gameOver);
@@ -1127,8 +1731,11 @@ void main() {
       final snakes = auth.findMatch(_member(LudoColor.blue), game: 'snakes');
       expect(ludo.gameType, 'ludo');
       expect(snakes.gameType, 'snakes');
-      expect(ludo.code, isNot(snakes.code),
-          reason: 'a snakes player must never land in a ludo room');
+      expect(
+        ludo.code,
+        isNot(snakes.code),
+        reason: 'a snakes player must never land in a ludo room',
+      );
       // A second snakes player pairs with the first snakes room.
       final s2 = auth.findMatch(_member(LudoColor.green), game: 'snakes');
       expect(s2.code, snakes.code);
@@ -1149,8 +1756,7 @@ void main() {
       auth.findMatch(_member(LudoColor.yellow));
       auth.findMatch(_member(LudoColor.green));
       room.start(); // full room started — must be invisible to matchmaking
-      final lateJoiner = auth.findMatch(
-          _member(LudoColor.red, seatId: 'late'));
+      final lateJoiner = auth.findMatch(_member(LudoColor.red, seatId: 'late'));
       expect(lateJoiner.code, isNot(room.code));
       expect(lateJoiner.members.length, 1);
     });
@@ -1164,13 +1770,17 @@ void main() {
       final store = SqliteLeaderboardStore.inMemory();
       leaderboardStore = store;
       authority = GameAuthority(rng: Random(1), leaderboard: store);
-      await store.recordResults(gameId: 'g1', results: [
-        GameResult(seatId: 'w', name: 'Winnie', color: 'red', rank: 1),
-        GameResult(seatId: 'l', name: 'Louie', color: 'blue', rank: 2),
-      ]);
+      await store.recordResults(
+        gameId: 'g1',
+        results: [
+          GameResult(seatId: 'w', name: 'Winnie', color: 'red', rank: 1),
+          GameResult(seatId: 'l', name: 'Louie', color: 'blue', rank: 2),
+        ],
+      );
 
-      final resp = await leaderboardHandler(shelf.Request(
-          'GET', Uri.parse('http://localhost/leaderboard')));
+      final resp = await leaderboardHandler(
+        shelf.Request('GET', Uri.parse('http://localhost/leaderboard')),
+      );
       expect(resp.statusCode, 200);
       final body =
           jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
@@ -1182,8 +1792,9 @@ void main() {
       expect(players.first['wins'], 1);
       expect(players.first['avgRank'], 1.0);
 
-      final post = await leaderboardHandler(shelf.Request(
-          'POST', Uri.parse('http://localhost/leaderboard')));
+      final post = await leaderboardHandler(
+        shelf.Request('POST', Uri.parse('http://localhost/leaderboard')),
+      );
       expect(post.statusCode, 405);
     });
   });
@@ -1191,37 +1802,43 @@ void main() {
   // ------------------------------------------------- scaling endpoints
 
   group('GET /stats and /rooms/lookup (production handlers)', () {
-    test('stats reports instance, connections, rooms, and spectators',
-        () async {
-      // Fresh authority with one room: two seated players + a spectator.
-      final auth = GameAuthority(rng: Random(1));
-      authority = auth;
-      final room = auth.createRoom(_member(LudoColor.red));
-      auth.joinRoom(room.code, _member(LudoColor.blue));
-      auth.spectateRoom(room.code, _member(LudoColor.green, seatId: 'spec'));
+    test(
+      'stats reports instance, connections, rooms, and spectators',
+      () async {
+        // Fresh authority with one room: two seated players + a spectator.
+        final auth = GameAuthority(rng: Random(1));
+        authority = auth;
+        final room = auth.createRoom(_member(LudoColor.red));
+        auth.joinRoom(room.code, _member(LudoColor.blue));
+        auth.spectateRoom(room.code, _member(LudoColor.green, seatId: 'spec'));
 
-      final resp = await statsHandler(
-          shelf.Request('GET', Uri.parse('http://localhost/stats')));
-      expect(resp.statusCode, 200);
-      final body =
-          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
-      expect(body['ok'], isTrue);
-      expect(body['instance'], instanceId);
-      expect(body['rooms'], 1);
-      expect(body['spectators'], 1);
-      // Connections counts only live WebSockets in this process; a direct
-      // handler call has none, and the joined-room map is not double-counted.
-      expect(body['connections'], isA<int>());
-    });
+        final resp = await statsHandler(
+          shelf.Request('GET', Uri.parse('http://localhost/stats')),
+        );
+        expect(resp.statusCode, 200);
+        final body =
+            jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+        expect(body['ok'], isTrue);
+        expect(body['instance'], instanceId);
+        expect(body['rooms'], 1);
+        expect(body['spectators'], 1);
+        // Connections counts only live WebSockets in this process; a direct
+        // handler call has none, and the joined-room map is not double-counted.
+        expect(body['connections'], isA<int>());
+      },
+    );
 
-    test('rooms/lookup resolves a code registered by this instance',
-        () async {
+    test('rooms/lookup resolves a code registered by this instance', () async {
       final registry = InMemoryRoomRegistry();
       roomRegistry = registry;
       await registry.register('ABCD', 'game-2');
 
-      final resp = await roomLookupHandler(shelf.Request(
-          'GET', Uri.parse('http://localhost/rooms/lookup?code=ABCD')));
+      final resp = await roomLookupHandler(
+        shelf.Request(
+          'GET',
+          Uri.parse('http://localhost/rooms/lookup?code=ABCD'),
+        ),
+      );
       expect(resp.statusCode, 200);
       final body =
           jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
@@ -1236,8 +1853,12 @@ void main() {
       roomRegistry = registry;
       await registry.register('AB12', 'game-3');
 
-      final resp = await roomLookupHandler(shelf.Request(
-          'GET', Uri.parse('http://localhost/rooms/lookup?code=ab12')));
+      final resp = await roomLookupHandler(
+        shelf.Request(
+          'GET',
+          Uri.parse('http://localhost/rooms/lookup?code=ab12'),
+        ),
+      );
       expect(resp.statusCode, 200);
       final body =
           jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
@@ -1247,16 +1868,25 @@ void main() {
     test('rooms/lookup 404s unknown codes and 400s missing ones', () async {
       roomRegistry = InMemoryRoomRegistry();
 
-      final missing = await roomLookupHandler(shelf.Request('GET',
-          Uri.parse('http://localhost/rooms/lookup?code=ZZZZ')));
+      final missing = await roomLookupHandler(
+        shelf.Request(
+          'GET',
+          Uri.parse('http://localhost/rooms/lookup?code=ZZZZ'),
+        ),
+      );
       expect(missing.statusCode, 404);
 
       final noCode = await roomLookupHandler(
-          shelf.Request('GET', Uri.parse('http://localhost/rooms/lookup')));
+        shelf.Request('GET', Uri.parse('http://localhost/rooms/lookup')),
+      );
       expect(noCode.statusCode, 400);
 
-      final post = await roomLookupHandler(shelf.Request('POST',
-          Uri.parse('http://localhost/rooms/lookup?code=ABCD')));
+      final post = await roomLookupHandler(
+        shelf.Request(
+          'POST',
+          Uri.parse('http://localhost/rooms/lookup?code=ABCD'),
+        ),
+      );
       expect(post.statusCode, 405);
     });
   });
@@ -1265,56 +1895,73 @@ void main() {
     test('stays well under the configured TTL', () {
       // Default (null -> 120 s TTL) keeps the historical 30 s sweep.
       expect(registryRefreshInterval(null), const Duration(seconds: 30));
-      expect(registryRefreshInterval(const Duration(seconds: 120)),
-          const Duration(seconds: 30));
+      expect(
+        registryRefreshInterval(const Duration(seconds: 120)),
+        const Duration(seconds: 30),
+      );
       // A short TTL shortens the sweep; a fixed 30 s cadence with a 10 s
       // TTL left live rooms expiring (lookup 404) for ~20 s per cycle.
-      expect(registryRefreshInterval(const Duration(seconds: 10)),
-          const Duration(seconds: 3));
-      expect(registryRefreshInterval(const Duration(seconds: 45)),
-          const Duration(seconds: 15));
+      expect(
+        registryRefreshInterval(const Duration(seconds: 10)),
+        const Duration(seconds: 3),
+      );
+      expect(
+        registryRefreshInterval(const Duration(seconds: 45)),
+        const Duration(seconds: 15),
+      );
       // Degenerate TTLs still yield a valid, positive timer period.
-      expect(registryRefreshInterval(const Duration(seconds: 1)),
-          const Duration(seconds: 1));
-      expect(registryRefreshInterval(Duration.zero),
-          const Duration(seconds: 1));
+      expect(
+        registryRefreshInterval(const Duration(seconds: 1)),
+        const Duration(seconds: 1),
+      );
+      expect(
+        registryRefreshInterval(Duration.zero),
+        const Duration(seconds: 1),
+      );
     });
   });
 
   // ------------------------------------------------- registry advertisements
 
   group('advertiseRoom (production route upkeep)', () {
-    test('a route is never restored for a room that closed mid-registration',
-        () async {
-      final registry = _HeldRegisterRegistry();
-      final savedRegistry = roomRegistry;
-      roomRegistry = registry;
-      addTearDown(() => roomRegistry = savedRegistry);
-      // Mirror the production wiring: closing a room drops its route.
-      final savedAuthority = authority;
-      final auth = GameAuthority(onRoomClosed: (code, token) {
-        registry.unregister(code, owner: token);
-      });
-      authority = auth;
-      addTearDown(() => authority = savedAuthority);
+    test(
+      'a route is never restored for a room that closed mid-registration',
+      () async {
+        final registry = _HeldRegisterRegistry();
+        final savedRegistry = roomRegistry;
+        roomRegistry = registry;
+        addTearDown(() => roomRegistry = savedRegistry);
+        // Mirror the production wiring: closing a room drops its route.
+        final savedAuthority = authority;
+        final auth = GameAuthority(
+          onRoomClosed: (code, token) {
+            registry.unregister(code, owner: token);
+          },
+        );
+        authority = auth;
+        addTearDown(() => authority = savedAuthority);
 
-      final room = auth.createRoom(_member(LudoColor.red));
-      registry.holdNext();
-      final advertising = advertiseRoom(room);
-      // The room closes while the registration is still in flight: its
-      // close callback removes the row first, so the registration that
-      // lands afterwards would otherwise put a route to a dead room back
-      // (and /rooms/lookup would keep sending joins there until the entry
-      // expired).
-      auth.leaveRoom(room.code, 'red');
-      expect(room.removed, isTrue);
-      registry.release();
-      await advertising;
+        final room = auth.createRoom(_member(LudoColor.red));
+        registry.holdNext();
+        final advertising = advertiseRoom(room);
+        // The room closes while the registration is still in flight: its
+        // close callback removes the row first, so the registration that
+        // lands afterwards would otherwise put a route to a dead room back
+        // (and /rooms/lookup would keep sending joins there until the entry
+        // expired).
+        auth.leaveRoom(room.code, 'red');
+        expect(room.removed, isTrue);
+        registry.release();
+        await advertising;
 
-      expect(await registry.lookup(room.code), isNull,
-          reason: 'lookups must not route joins to a closed room');
-      expect(registry.unregistered, contains(room.code));
-    });
+        expect(
+          await registry.lookup(room.code),
+          isNull,
+          reason: 'lookups must not route joins to a closed room',
+        );
+        expect(registry.unregistered, contains(room.code));
+      },
+    );
 
     test('a live room keeps its route across the advertisement', () async {
       final registry = _HeldRegisterRegistry();
@@ -1326,15 +1973,19 @@ void main() {
       addTearDown(() => authority.leaveRoom(room.code, 'green'));
       await advertiseRoom(room);
 
-      expect(await registry.lookup(room.code), instanceId,
-          reason: 'a live room stays advertised');
+      expect(
+        await registry.lookup(room.code),
+        instanceId,
+        reason: 'a live room stays advertised',
+      );
     });
   });
 
   group('GET /health (production handler)', () {
     test('health returns the documented JSON payload', () async {
       final resp = await healthHandler(
-          shelf.Request('GET', Uri.parse('http://localhost/health')));
+        shelf.Request('GET', Uri.parse('http://localhost/health')),
+      );
       expect(resp.statusCode, 200);
       final body =
           jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
@@ -1349,8 +2000,7 @@ void main() {
       // Deployments may configure the web build location in .env, not the
       // process environment; the server must serve the UI in both cases.
       final tmp = await Directory.systemTemp.createTemp('game-club-web');
-      File('${tmp.path}/index.html')
-          .writeAsStringSync('<html>game ui</html>');
+      File('${tmp.path}/index.html').writeAsStringSync('<html>game ui</html>');
       final prev = serverEnv;
       serverEnv = {'WEB_DIR': tmp.path};
       addTearDown(() {
@@ -1395,87 +2045,106 @@ void main() {
     /// assembles it: the headers live in the wrapping layer, not the
     /// handlers, so the test must see them wrapped.
     Future<shelf.Response> viaMiddleware(
-            String path, shelf.Request req) async =>
-        corsMiddleware((_) async => routed(path, req))(req);
+      String path,
+      shelf.Request req,
+    ) async => corsMiddleware((_) async => routed(path, req))(req);
 
-    test('the browser-visible routes carry CORS headers and answer OPTIONS',
-        () async {
-      // A Flutter `flutter run -d chrome` page lives on a different origin
-      // than the game server, so the browser blocks the response unless the
-      // server explicitly opts in. These are read-only routes with no auth,
-      // so reflecting the Origin is the right call; writes stay 405.
-      for (final path in ['health', 'leaderboard', 'stats', 'rooms/lookup']) {
-        final get = await viaMiddleware(
-          path,
+    test(
+      'the browser-visible routes carry CORS headers and answer OPTIONS',
+      () async {
+        // A Flutter `flutter run -d chrome` page lives on a different origin
+        // than the game server, so the browser blocks the response unless the
+        // server explicitly opts in. These are read-only routes with no auth,
+        // so reflecting the Origin is the right call; writes stay 405.
+        for (final path in ['health', 'leaderboard', 'stats', 'rooms/lookup']) {
+          final get = await viaMiddleware(
+            path,
+            shelf.Request(
+              'GET',
+              Uri.parse('http://localhost/$path'),
+              headers: {'origin': 'http://localhost:42891'},
+            ),
+          );
+          expect(get.statusCode, isNot(0));
+          expect(
+            get.headers['access-control-allow-origin'],
+            'http://localhost:42891',
+          );
+          expect(get.headers['vary'], 'Origin');
+          final preflight = await viaMiddleware(
+            path,
+            shelf.Request(
+              'OPTIONS',
+              Uri.parse('http://localhost/$path'),
+              headers: {
+                'origin': 'http://localhost:42891',
+                'access-control-request-method': 'GET',
+              },
+            ),
+          );
+          expect(preflight.statusCode, 200);
+          expect(
+            preflight.headers['access-control-allow-origin'],
+            'http://localhost:42891',
+          );
+        }
+      },
+    );
+
+    test(
+      'a POST still gets 405 even though CORS allows the preflight',
+      () async {
+        // CORS answers the browser's "may I read?" question; the 405 stands
+        // for anything that is not a read — the two layers are independent.
+        final resp = await viaMiddleware(
+          'leaderboard',
           shelf.Request(
-            'GET',
-            Uri.parse('http://localhost/$path'),
+            'POST',
+            Uri.parse('http://localhost/leaderboard'),
             headers: {'origin': 'http://localhost:42891'},
           ),
         );
-        expect(get.statusCode, isNot(0));
-        expect(get.headers['access-control-allow-origin'],
-            'http://localhost:42891');
-        expect(get.headers['vary'], 'Origin');
-        final preflight = await viaMiddleware(
-          path,
+        expect(resp.statusCode, 405);
+        expect(
+          resp.headers['access-control-allow-origin'],
+          'http://localhost:42891',
+        );
+      },
+    );
+
+    test(
+      'a store failure reaches the browser as a readable JSON 500',
+      () async {
+        // The deployed failure: Turso rejects its token mid-request. Left to
+        // throw, the error escapes to shelf's own page, which is written
+        // outside the middleware chain — plain text, no CORS headers — so the
+        // browser reports a cross-origin block and the app blames the
+        // connection while the fault is the server's own database.
+        leaderboardStore = _RevokedTursoStore();
+        final pipeline = corsMiddleware(
+          jsonErrorMiddleware(leaderboardHandler),
+        );
+        final resp = await pipeline(
           shelf.Request(
-            'OPTIONS',
-            Uri.parse('http://localhost/$path'),
-            headers: {
-              'origin': 'http://localhost:42891',
-              'access-control-request-method': 'GET',
-            },
+            'GET',
+            Uri.parse('http://localhost/leaderboard'),
+            headers: {'origin': 'http://localhost:42891'},
           ),
         );
-        expect(preflight.statusCode, 200);
-        expect(preflight.headers['access-control-allow-origin'],
-            'http://localhost:42891');
-      }
-    });
-
-    test('a POST still gets 405 even though CORS allows the preflight',
-        () async {
-      // CORS answers the browser's "may I read?" question; the 405 stands
-      // for anything that is not a read — the two layers are independent.
-      final resp = await viaMiddleware(
-        'leaderboard',
-        shelf.Request(
-          'POST',
-          Uri.parse('http://localhost/leaderboard'),
-          headers: {'origin': 'http://localhost:42891'},
-        ),
-      );
-      expect(resp.statusCode, 405);
-      expect(resp.headers['access-control-allow-origin'],
-          'http://localhost:42891');
-    });
-
-    test('a store failure reaches the browser as a readable JSON 500',
-        () async {
-      // The deployed failure: Turso rejects its token mid-request. Left to
-      // throw, the error escapes to shelf's own page, which is written
-      // outside the middleware chain — plain text, no CORS headers — so the
-      // browser reports a cross-origin block and the app blames the
-      // connection while the fault is the server's own database.
-      leaderboardStore = _RevokedTursoStore();
-      final pipeline = corsMiddleware(jsonErrorMiddleware(leaderboardHandler));
-      final resp = await pipeline(shelf.Request(
-        'GET',
-        Uri.parse('http://localhost/leaderboard'),
-        headers: {'origin': 'http://localhost:42891'},
-      ));
-      expect(resp.statusCode, 500);
-      expect(resp.headers['content-type'], contains('application/json'));
-      expect(resp.headers['access-control-allow-origin'],
-          'http://localhost:42891');
-      final body =
-          jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
-      expect(body['ok'], isFalse);
-      // The cause is logged, not broadcast: this route is public and a store
-      // failure can quote the database URL.
-      expect(body['text'], isNot(contains('libsql')));
-    });
+        expect(resp.statusCode, 500);
+        expect(resp.headers['content-type'], contains('application/json'));
+        expect(
+          resp.headers['access-control-allow-origin'],
+          'http://localhost:42891',
+        );
+        final body =
+            jsonDecode(await resp.readAsString()) as Map<String, dynamic>;
+        expect(body['ok'], isFalse);
+        // The cause is logged, not broadcast: this route is public and a store
+        // failure can quote the database URL.
+        expect(body['text'], isNot(contains('libsql')));
+      },
+    );
   });
 }
 
@@ -1483,19 +2152,19 @@ void main() {
 /// token is revoked: the route is fine, the database behind it is not.
 class _RevokedTursoStore implements LeaderboardStore {
   @override
-  Future<void> recordResults(
-          {required String gameId, required List<GameResult> results}) async
-      =>
-      throw StateError('libsql: 401 unauthorized');
+  Future<void> recordResults({
+    required String gameId,
+    required List<GameResult> results,
+  }) async => throw StateError('libsql: 401 unauthorized');
 
   @override
   Future<List<LeaderboardEntry>> topPlayers({int limit = 10}) async =>
       throw StateError('libsql: 401 unauthorized');
 
   @override
-  Future<int> totalGames() async => throw StateError('libsql: 401 unauthorized');
+  Future<int> totalGames() async =>
+      throw StateError('libsql: 401 unauthorized');
 
   @override
   void close() {}
 }
-
