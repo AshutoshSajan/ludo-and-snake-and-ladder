@@ -2301,6 +2301,39 @@ void main() {
         expect(body['text'], isNot(contains('libsql')));
       },
     );
+
+    test(
+      'a WebSocket upgrade passes through the middleware untouched',
+      () async {
+        // /ws signals a successful upgrade by throwing HijackException, which
+        // shelf_io uses for control flow. This middleware used to catch it and
+        // answer 500 — so every single connection logged a fake
+        // "!! 500 on GET /ws" and shelf_io then reported being handed a
+        // response for a request it had already hijacked. The upgrade itself
+        // always worked; only the log lied. Shelf's own guidance is that
+        // middleware capturing exceptions must rethrow this one.
+        Object? caught;
+        shelf.Response? answered;
+        final pipeline = corsMiddleware(
+          jsonErrorMiddleware((_) async {
+            throw const shelf.HijackException();
+          }),
+        );
+        try {
+          answered = await pipeline(
+            shelf.Request('GET', Uri.parse('http://localhost/ws')),
+          );
+        } catch (e) {
+          caught = e;
+        }
+        expect(
+          caught,
+          isA<shelf.HijackException>(),
+          reason: 'the hijack must reach shelf_io, not be turned into a 500',
+        );
+        expect(answered, isNull, reason: 'no response for a hijacked request');
+      },
+    );
   });
 }
 
