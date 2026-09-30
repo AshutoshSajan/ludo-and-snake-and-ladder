@@ -66,6 +66,41 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 LeaderboardStore is now an abstract interface with two backends: the local SQLite file (renamed SqliteLeaderboardStore, unchanged behavior) and a new TursoLeaderboardStore that speaks Turso SQL-over-HTTP (POST /v2/pipeline, Bearer auth) via package:http — no native driver. Selected from TURSO_DATABASE_URL + TURSO_AUTH_TOKEN in bin/server.dart, falling back to the SQLite file. Store methods are async; GameAuthority fire-and-forgets idempotent writes and lets a failed write retry on the next room action. Wire format, row decoding (integers as strings), error surfacing and env selection are covered by 10 new tests.
 ### Fixed
+- Fix(deploy): install ca-certificates in the runtime image
+
+The deployed leaderboard answered HTTP 500 on every request. The cause
+was not Turso and not the token: the runtime stage of the Dockerfile
+installed libsqlite3-0 but not ca-certificates, and debian:bookworm-slim
+ships no /etc/ssl/certs directory at all. Dart verifies TLS against the
+system trust store, so every HTTPS call to Turso failed with
+
+    HandshakeException: CERTIFICATE_VERIFY_FAILED:
+    unable to get local issuer certificate
+
+That reads exactly like a revoked token, which is where the debugging
+went first. /health had been reporting it faithfully all along, as
+storeError data rather than a failed probe, so the instance stayed up
+and served games perfectly -- but the scoreboard could never load, and
+the room registry could never register a route, so matchmaking and
+join-by-code could not find rooms across instances.
+
+The build stage already installed ca-certificates; the stage that
+actually talks to Turso is the one that needed it.
+
+Verified by building the image and running the real server from it
+against the real database:
+
+  /health        {"games":null,"storeError":"...CERTIFICATE_VERIFY_FAILED..."}
+                 -> {"games":3,"store":"turso"}
+  /leaderboard   500 -> 200 with rows
+  /rooms/lookup  500 -> 404 "room 'ZZZZ' unknown to the cluster" (correct)
+
+A full online Snakes game played to gameOver inside that container and
+its result was written to Turso (games 3 -> 4, ImgA 1W/1G).
+
+A test now asserts the runtime stage installs ca-certificates: it
+fails on the old Dockerfile and passes on this one, so the invariant
+cannot be lost by editing the build stage alone.
 - Fix(server): let a WebSocket upgrade through the JSON error middleware
 
 /ws tells shelf_io a connection is now a WebSocket by throwing
