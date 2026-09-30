@@ -696,6 +696,27 @@ Future<void> main(List<String> args) async {
     'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
     'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})',
   );
+
+  // Prove the store is actually reachable, and say so out loud. The deployed
+  // leaderboard spent a long time answering 500 because the runtime image had
+  // no CA certificates, so every TLS handshake to Turso failed. Nothing at
+  // boot said so: the server started, announced "leaderboard: Turso", and the
+  // only symptom was a HandshakeException buried in a 500 on some later
+  // request — which reads exactly like a revoked token and sends the debugging
+  // after the credentials instead of after the image. One line here names it.
+  if (turso != null) {
+    try {
+      final games = await leaderboardStore.totalGames();
+      stdout.writeln('Turso reachable: $games game(s) recorded.');
+    } catch (e) {
+      stderr.writeln(
+        '!! Turso is NOT reachable: $e\n'
+        '   If this says CERTIFICATE_VERIFY_FAILED, the runtime image is '
+        'missing ca-certificates (debian:bookworm-slim ships no '
+        '/etc/ssl/certs) — fix the Dockerfile, not the token.',
+      );
+    }
+  }
 }
 
 /// A static handler for a Flutter web build (`flutter build web`), or null
