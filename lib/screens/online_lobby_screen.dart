@@ -82,11 +82,31 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final id = await storage.loadOnlinePlayerId();
     final name = await storage.loadOnlineName();
     if (!mounted) return;
+    // A first-time player is given a name rather than an empty field, and it
+    // is derived from their id so it is stable: the same player is always the
+    // same "Swift Otter", rather than a new name each visit filling the
+    // leaderboard with rows of the same person.
+    final resolved = name.isNotEmpty ? name : _defaultNameFor(id);
     setState(() {
       _seatId = id;
-      if (name.isNotEmpty) _nameCtrl.text = name;
-      _name = name;
+      _nameCtrl.text = resolved;
+      _name = resolved;
     });
+    if (name.isEmpty) {
+      // Persist it now, so it is the same name next time even before they play.
+      await StorageService().saveOnlineName(resolved);
+    }
+  }
+
+  /// A stable default name for [id], mixed from the id itself so it is
+  /// reproducible rather than a fresh draw on every visit.
+  String _defaultNameFor(String id) {
+    // Base-36 digits of the id give a seed that is unique per player.
+    var salt = 0;
+    for (final unit in id.codeUnits) {
+      salt = (salt * 31 + unit) & 0x7fffffff;
+    }
+    return DefaultNames.generate(salt: salt);
   }
 
   /// Remembers the name so it is offered next time. The id is never changed

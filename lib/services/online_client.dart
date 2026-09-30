@@ -6,6 +6,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -65,7 +66,82 @@ class LobbySeat {
   bool get inGame => status != SeatStatus.left;
 }
 
-/// One aggregated row of the server-side leaderboard.
+/// A friendly default name for a first-time player.
+///
+/// A new player is handed something they can play with immediately rather than
+/// an empty text field — and, more importantly, something *stable*, because the
+/// name is saved and reused. A name that changed on every visit would be worse
+/// than none: the leaderboard would fill with rows of the same person under
+/// different names.
+///
+/// Deliberately built from two small word lists rather than pulled in as a
+/// package. A name generator is a dozen lines; a dependency is a permanent
+/// supply-chain surface, a `pubspec.lock` entry and a future version bump, for
+/// something the app only needs once. The `names` package would also be the
+/// wrong shape: it has no notion of being reproducible, which is the one
+/// property that actually matters here — a second call must return the same
+/// name for the same player.
+class DefaultNames {
+  DefaultNames._();
+
+  static const _adjectives = <String>[
+    'Swift',
+    'Quiet',
+    'Bold',
+    'Lucky',
+    'Clever',
+    'Brave',
+    'Calm',
+    'Bright',
+    'Nimble',
+    'Steady',
+    'Sharp',
+    'Keen',
+    'Merry',
+    'Quick',
+    'Silent',
+    'Witty',
+  ];
+
+  static const _animals = <String>[
+    'Otter',
+    'Falcon',
+    'Heron',
+    'Badger',
+    'Marten',
+    'Ibis',
+    'Lynx',
+    'Raven',
+    'Sparrow',
+    'Tapir',
+    'Vole',
+    'Wren',
+    'Gecko',
+    'Ibex',
+    'Kite',
+    'Newt',
+  ];
+
+  /// A name like `Swift Otter`.
+  ///
+  /// With a [salt] the result is *deterministic* — the same salt always yields
+  /// the same name, which is the whole point: a player's name is derived from
+  /// their id, so they are the same "Swift Otter" on every visit and their
+  /// leaderboard career stays in one row. Mixing any randomness into the
+  /// salted path would defeat that, so a salt bypasses the generator entirely.
+  /// Without one, a name is drawn at random.
+  static String generate({int? salt, Random? random}) {
+    if (salt != null) {
+      final a = _adjectives[salt.abs() % _adjectives.length];
+      final n = _animals[(salt.abs() ~/ 7) % _animals.length];
+      return '$a $n';
+    }
+    final rnd = random ?? Random();
+    return '${_adjectives[rnd.nextInt(_adjectives.length)]} '
+        '${_animals[rnd.nextInt(_animals.length)]}';
+  }
+}
+
 class LeaderboardRow {
   LeaderboardRow({
     required this.name,
