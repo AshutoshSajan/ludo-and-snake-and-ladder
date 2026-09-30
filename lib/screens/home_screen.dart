@@ -64,7 +64,13 @@ class HomeScreen extends ConsumerWidget {
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.emoji_events),
-                          label: const Text('Leaderboards'),
+                          // "Leaderboards" and "Online Leaderboard" sat next to
+                          // each other with nothing to say which was which, and
+                          // both plausibly read as the online one. These are
+                          // per-device stats that the online board cannot show
+                          // (the server never sees a local game), so the split
+                          // is real and the labels should say so.
+                          label: const Text('On this device'),
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (_) => const LeaderboardScreen(),
@@ -99,8 +105,8 @@ class HomeScreen extends ConsumerWidget {
                   const SizedBox(height: 8),
                   Center(
                     child: OutlinedButton.icon(
-                      icon: const Icon(Icons.emoji_events_outlined, size: 18),
-                      label: const Text('Online Leaderboard'),
+                      icon: const Icon(Icons.cloud_outlined, size: 18),
+                      label: const Text('Online — all players'),
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => const ScoreboardScreen(),
