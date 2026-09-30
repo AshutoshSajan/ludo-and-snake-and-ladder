@@ -42,6 +42,25 @@
   export PATH="$PWD/_flutter/bin:$PATH"
   flutter config --no-analytics
   flutter pub get
+  # Fail the build when GAME_SERVER_URL is missing, instead of shipping a
+  # client that cannot play.
+  #
+  # Without it, defaultServerUrl() falls back to same-origin, so the client
+  # opens wss://<site>.netlify.app/ws. That request is a real 200 — the SPA
+  # rule answers it with index.html — so the failure surfaces as a WebSocket
+  # handshake against an HTML document, on a page that looks perfectly healthy
+  # and deployed. A green build plus a 200 on the site are exactly the signals
+  # that read as success here, which is why this is checked at build time.
+  #
+  # Netlify scopes env vars per context (Production / Deploy previews / Branch
+  # deploys), so a var added under one context is invisible to the others.
+  if [ -z "${GAME_SERVER_URL:-}" ]; then
+    echo "::error::GAME_SERVER_URL is not set for this build context."
+    echo "::error::Set it to wss://ludo-1zpb.onrender.com/ws under the context"
+    echo "::error::being built (Site settings > Environment variables)."
+    exit 1
+  fi
+  echo "Building with GAME_SERVER_URL=$GAME_SERVER_URL"
   flutter build web --release --dart-define=GAME_SERVER_URL=$GAME_SERVER_URL
   """
   publish = "build/web"

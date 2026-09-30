@@ -74,6 +74,70 @@ void main() {
     });
   });
 
+  group('the per-game tabs label what they count', () {
+    // The tabs used to read "Ludo 1", "All 12" — a bare number that reads as
+    // the number of players below it. They are the number of finished games,
+    // and the two differ whenever a game has more than one player, which is
+    // every game. "All 12" over 9 rows looked like a broken ranking.
+    testWidgets('a tab count is labelled as games, never a bare number',
+        (tester) async {
+      await show(
+        tester,
+        (_) async => LeaderboardData(
+          games: 12,
+          game: 'all',
+          gamesByGame: const {'ludo': 1, 'snakes': 6},
+          rows: [
+            LeaderboardRow(name: 'Ana', wins: 1, games: 1, avgRank: 1),
+            LeaderboardRow(name: 'Ben', wins: 1, games: 1, avgRank: 1),
+          ],
+        ),
+      );
+      expect(find.text('Ludo · 1 game'), findsOneWidget);
+      expect(find.text('Snakes · 6 games'), findsOneWidget);
+      expect(find.text('All · 12 games'), findsOneWidget);
+      // The old, ambiguous wording must be gone.
+      expect(find.text('All 12'), findsNothing);
+      expect(find.text('Ludo 1'), findsNothing);
+    });
+
+    testWidgets('per-game counts that do not sum to the total are still games',
+        (tester) async {
+      // gamesByGame counts only rows tagged with a game; pre-migration rows
+      // have game = '' and appear on the combined board alone. So the tabs are
+      // 1 + 6 = 7 while "All" says 12, and the labels must not "correct" it.
+      await show(
+        tester,
+        (_) async => LeaderboardData(
+          games: 12,
+          game: 'all',
+          gamesByGame: const {'ludo': 1, 'snakes': 6},
+          rows: [LeaderboardRow(name: 'Ana', wins: 1, games: 1, avgRank: 1)],
+        ),
+      );
+      expect(find.text('All · 12 games'), findsOneWidget);
+      expect(find.text('All 12'), findsNothing);
+      // The summary counts games too, so the two numbers agree instead of
+      // inviting the reading that 12 games means 12 players.
+      expect(find.text('12 games recorded here'), findsOneWidget);
+    });
+
+    testWidgets('a server that reports no split gets no tabs', (tester) async {
+      // An old server has no gamesByGame; the numbers would all read 0, which
+      // is worse than no tabs at all.
+      await show(
+        tester,
+        (_) async => LeaderboardData(
+          games: 5,
+          rows: [LeaderboardRow(name: 'Ana', wins: 1, games: 1, avgRank: 1)],
+        ),
+      );
+      expect(find.text('Ludo · 0 games'), findsNothing);
+      expect(find.text('All · 5 games'), findsNothing);
+      expect(find.textContaining('5 games recorded here'), findsOneWidget);
+    });
+  });
+
   group('fetchLeaderboard failure kinds', () {
     test('a non-200 is reported as a server answer, with its status',
         () async {

@@ -40,6 +40,23 @@ void main() {
       expect(toml, contains(r'--dart-define=GAME_SERVER_URL=$GAME_SERVER_URL'));
     });
 
+    test('refuses to build without GAME_SERVER_URL', () {
+      // Shipping without it is the failure this guards: the client falls back
+      // to same-origin and opens wss://<site>.netlify.app/ws, which answers
+      // 200 with index.html. A green build plus a healthy-looking site are
+      // exactly the signals that read as success while online play is broken.
+      expect(toml, contains(r'if [ -z "${GAME_SERVER_URL:-}" ]; then'));
+      // The guard must come before the build, or it is decoration.
+      //
+      // Compared against lastIndexOf, not indexOf: the file's header comment
+      // names `flutter build web --release` to explain what the build produces,
+      // and the first match sits ~3k characters before the real command. An
+      // indexOf assertion here passes for the wrong reason.
+      expect(toml.indexOf('GAME_SERVER_URL:-'),
+          lessThan(toml.lastIndexOf('flutter build web --release')),
+          reason: 'the guard must precede the build command');
+    });
+
     test('pins the same Flutter version as the Dockerfile', () {
       // pubspec needs Dart ^3.13.2, which ships with Flutter 3.47.2. The
       // cirruslabs images cannot resolve it, so a drift here breaks the build.

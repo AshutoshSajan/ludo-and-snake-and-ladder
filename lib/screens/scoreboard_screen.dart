@@ -125,6 +125,12 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   /// squashed. Losing the icons buys the room, and the horizontal scroll means
   /// a longer name or a bigger count can never hide a tab again.
   Widget _tabs(LeaderboardData data) {
+    // The count is labelled "games" because it counts finished games, not the
+    // players listed underneath. A bare number beside a game name reads as a
+    // row count, and the two genuinely differ — 12 games can belong to 9
+    // players — so "All 12" above 9 rows looked like broken ranking rather than
+    // a label that never claimed to be a row count.
+    String label(String g, int n) => '$g · $n ${n == 1 ? 'game' : 'games'}';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       child: SingleChildScrollView(
@@ -133,15 +139,15 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           segments: [
             ButtonSegment<String?>(
               value: 'ludo',
-              label: Text('Ludo ${data.ludoGames}'),
+              label: Text(label('Ludo', data.ludoGames)),
             ),
             ButtonSegment<String?>(
               value: 'snakes',
-              label: Text('Snakes ${data.snakesGames}'),
+              label: Text(label('Snakes', data.snakesGames)),
             ),
             ButtonSegment<String?>(
               value: null,
-              label: Text('All ${data.games}'),
+              label: Text(label('All', data.games)),
             ),
           ],
           selected: {_game},

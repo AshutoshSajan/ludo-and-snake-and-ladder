@@ -15,6 +15,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Feat: horizontal scaling — room registry, /stats, sticky LB config
 - Feat: persistent leaderboard via Turso (libSQL HTTP API)
 ### Fixed
+- Fix the leaderboard tab counts and refuse a Netlify build with no game server
+- Fix cliff.toml rendering whole commit bodies as changelog entries
 - Fix(deploy): revalidate the app shell, and give new players a name
 - Fix(snakes): home area, dice tumble, sound, leave dialog, and a pulse
 - Fix(server): prove the store is reachable at startup, and name TLS failures
