@@ -65,6 +65,24 @@ void main() {
       expect(c.chatOpen, isFalse, reason: 'reading is not the same as opening');
     });
 
+
+    test('the chime is wired by the game view, not the chat sheet', () {
+      // Regression guard for the reason the sound was missing entirely: it used
+      // to be wired in GameChatSheet.initState, so it could only fire after
+      // that sheet had been opened at least once. The first messages of a game
+      // - the ones you most want to hear - arrived in silence, and to a player
+      // who had never tapped the icon there was no sound at all, ever.
+      final c = client();
+      var chimed = 0;
+      // What LudoSession.online and OnlineSnakesView do on attach.
+      c.onMessageArrived = (_) => chimed++;
+      deliver(c, 'Ana', 'are you there?');
+      deliver(c, 'Bo', 'starting now');
+      expect(chimed, 2,
+          reason: 'a message must sound without the sheet ever being opened');
+      expect(c.unreadChats, 2);
+    });
+
     test('onChat carries the sender and text for the notification', () {
       final c = client();
       ({String from, String text})? seen;

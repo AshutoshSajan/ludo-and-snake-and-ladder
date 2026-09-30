@@ -41,7 +41,8 @@ class SnakesSession extends ChangeNotifier {
     required this.profiles,
     required this.sound,
     required this.onGameOver,
-  }) {
+    Random? rng,
+  }) : _rng = rng ?? Random() {
     final players = <SnakesPlayer>[];
     for (var i = 0; i < seats.length; i++) {
       final seat = seats[i];
@@ -61,7 +62,7 @@ class SnakesSession extends ChangeNotifier {
   final SoundService sound;
   final void Function(SnakesState) onGameOver;
 
-  final _rng = Random();
+  final Random _rng;
   Timer? _timer;
   SnakesAnim? activeAnim;
   bool _busy = false;
@@ -89,6 +90,16 @@ class SnakesSession extends ChangeNotifier {
     sound.dice();
     Haptics.light();
     notifyListeners();
+
+    // A pawn still off the board cannot enter on anything but a 1, so the roll
+    // is spent: rollDice has already passed the turn and left the phase at
+    // awaitingRoll. There is no pendingMove to build waypoints from —
+    // pendingMove dereferences lastRoll and would throw on this path — and no
+    // animation to run, so stop here.
+    if (state.lastEvent == 'skip') {
+      scheduleNext();
+      return;
+    }
 
     // Exactly one move always exists: animate it, then resolve.
     final mv = pendingMove(state);

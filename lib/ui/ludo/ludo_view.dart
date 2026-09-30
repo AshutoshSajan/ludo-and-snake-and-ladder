@@ -302,11 +302,19 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         actions: [
           const SoundToggleButton(),
           // Chat is online-only: offline seats share a device, not a server,
-          // so there is nobody on the other end to talk to.
+          // so there is nobody on the other end to talk to. The red dot is the
+          // unread count, and it clears when the sheet opens.
           if (widget.onlineClient != null)
             IconButton(
-              icon: const Icon(Icons.forum_outlined),
-              tooltip: 'Table chat',
+              icon: Badge(
+                isLabelVisible: (widget.onlineClient?.unreadChats ?? 0) > 0,
+                backgroundColor: Colors.redAccent,
+                smallSize: 9,
+                child: const Icon(Icons.forum_outlined),
+              ),
+              tooltip: (widget.onlineClient?.unreadChats ?? 0) > 0
+                  ? 'Table chat (${widget.onlineClient!.unreadChats} new)'
+                  : 'Table chat',
               onPressed: () =>
                   GameChatSheet.show(context, widget.onlineClient!),
             ),

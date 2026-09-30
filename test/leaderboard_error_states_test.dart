@@ -38,7 +38,7 @@ void main() {
           findsOneWidget);
       expect(find.textContaining('HTTP 500'), findsOneWidget);
       expect(find.textContaining('Could not reach the server'), findsNothing);
-      expect(find.textContaining('dart run bin/server.dart'), findsNothing);
+      expect(find.textContaining('free-tier host waking up'), findsNothing);
     });
 
     testWidgets('a server that never answers keeps its own hint',
@@ -46,7 +46,10 @@ void main() {
       await show(tester, (_) async => throw const SocketException('refused'));
       expect(find.textContaining('Could not reach the server at'),
           findsOneWidget);
-      expect(find.textContaining('dart run bin/server.dart'), findsOneWidget);
+      // The hint must name the real likely cause. Telling someone using the
+      // hosted app to start a local server sent them off to fix the wrong thing.
+      expect(find.textContaining('free-tier host waking up'), findsOneWidget);
+      expect(find.textContaining('dart run bin/server.dart'), findsNothing);
       expect(find.textContaining('answered but could not load the scores'),
           findsNothing);
     });
@@ -146,8 +149,10 @@ void main() {
       final client =
           MockClient((_) async => http.Response('Internal Server Error', 500));
       await expectLater(
+        // retryDelay is shrunk: a 5xx is retried, and at the production backoff
+        // this test would sit through the full ~18s cold-start window.
         OnlineClient.fetchLeaderboard('ws://example.test/ws',
-            httpClient: client),
+            httpClient: client, retryDelay: const Duration(milliseconds: 1)),
         throwsA(isA<LeaderboardServerException>()
             .having((e) => e.statusCode, 'statusCode', 500)),
       );
@@ -161,6 +166,37 @@ void main() {
           httpClient: client);
       expect(data.games, 0);
       expect(data.rows, isEmpty);
+    });
+  });
+
+  group('a sleeping free-tier host', () {
+    test('a refusal is waited out rather than reported immediately', () async {
+      // A sleeping host *refuses* connections while it wakes, so every attempt
+      // fails instantly and a short flat retry budget is spent in seconds. The
+      // production settings are 10 attempts doubling from 400ms (~18s); this
+      // proves the server that answers on the 4th try is reached, using a tiny
+      // delay so the test does not actually sit through 18 seconds.
+      var calls = 0;
+      final client = MockClient((_) async {
+        calls++;
+        if (calls < 4) throw const SocketException('connection refused');
+        return http.Response(
+            '{"ok":true,"games":2,"players":[]}', 200,
+            headers: {'content-type': 'application/json'});
+      });
+      final data = await OnlineClient.fetchLeaderboard('ws://sleeping.test/ws',
+          httpClient: client, retryDelay: const Duration(milliseconds: 1));
+      expect(calls, 4);
+      expect(data.games, 2);
+    });
+
+    test('the default budget is long enough for a cold start', () {
+      // 400ms * (1+2+...+9) ~= 18s. The old flat 5 x 900ms was 4.5s, which is
+      // not a cold start — that mismatch is why a merely-asleep server was
+      // reported as unreachable.
+      final budget = [for (var i = 0; i < 9; i++) 400 * (1 << i)].fold(0, (a, b) => a + b);
+      expect(budget, greaterThanOrEqualTo(15000),
+          reason: 'the wait must cover a free-tier wake-up');
     });
   });
 }

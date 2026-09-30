@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/online_client.dart';
 import '../theme.dart';
@@ -8,7 +9,7 @@ import '../theme.dart';
 /// Chat used to exist only in the lobby — the one screen where you are not
 /// mid-game — so a table could not talk to itself while playing. This opens
 /// from a board's app bar instead, and shows recent history plus an input.
-class GameChatSheet extends StatefulWidget {
+class GameChatSheet extends ConsumerStatefulWidget {
   const GameChatSheet({super.key, required this.client});
 
   final OnlineClient client;
@@ -27,20 +28,25 @@ class GameChatSheet extends StatefulWidget {
   }
 
   @override
-  State<GameChatSheet> createState() => _GameChatSheetState();
+  ConsumerState<GameChatSheet> createState() => _GameChatSheetState();
 }
 
-class _GameChatSheetState extends State<GameChatSheet> {
+class _GameChatSheetState extends ConsumerState<GameChatSheet> {
   final _input = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     widget.client.addListener(_onClient);
+    // Opening the sheet is the read act, so mark it as such immediately —
+    // otherwise a message arriving while it is open would still count as
+    // unread and the dot on the app bar icon would never clear.
+    widget.client.setChatOpen(true);
   }
 
   @override
   void dispose() {
+    widget.client.setChatOpen(false);
     widget.client.removeListener(_onClient);
     _input.dispose();
     super.dispose();
