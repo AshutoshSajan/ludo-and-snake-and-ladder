@@ -15,12 +15,54 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../engine/snakes/snakes_engine.dart';
 
+/// How a seat is being held: the person is at their device, the table is
+/// playing for them, or they have walked out.
+enum SeatStatus { connected, auto, left }
+
 /// One lobby seat as reported by the server.
 class LobbySeat {
-  LobbySeat({required this.name, required this.color});
+  LobbySeat({
+    required this.name,
+    required this.color,
+    this.seatId = '',
+    this.status = SeatStatus.connected,
+    this.live = true,
+  });
+
+  /// Builds from the server's `seats` entry, and from the lighter `lobby`
+  /// entry that only carries a name and a color — everything else falls back
+  /// to "a person is sitting here".
+  factory LobbySeat.fromJson(Map<String, dynamic> j) {
+    var status = SeatStatus.connected;
+    if (j['auto'] == true) status = SeatStatus.auto;
+    if (j['left'] == true) status = SeatStatus.left;
+    return LobbySeat(
+      name: j['name'] as String? ?? '?',
+      color: LudoColor.values.byName(j['color'] as String),
+      seatId: j['seatId'] as String? ?? '',
+      status: status,
+      live: j['connected'] as bool? ?? true,
+    );
+  }
 
   final String name;
   final LudoColor color;
+
+  /// The profile holding this seat — how we know whether *we* are the one
+  /// who switched on autoplay. Empty in the lighter `lobby` roster.
+  final String seatId;
+  final SeatStatus status;
+
+  /// Whether a live socket is holding this seat right now. When it is not,
+  /// the table is waiting on someone whose device has gone quiet — which the
+  /// people waiting read as "the game has frozen" unless the screen says
+  /// otherwise. Defaults to true so a roster that omits the field never
+  /// accuses an innocent player of being away.
+  final bool live;
+
+  /// Still in the game (playing themselves, or having handed the seat to the
+  /// table) as opposed to having left, whose pieces sit untouched.
+  bool get inGame => status != SeatStatus.left;
 }
 
 /// One aggregated row of the server-side leaderboard.
@@ -33,11 +75,11 @@ class LeaderboardRow {
   });
 
   factory LeaderboardRow.fromJson(Map<String, dynamic> j) => LeaderboardRow(
-        name: j['name'] as String? ?? '?',
-        wins: j['wins'] as int? ?? 0,
-        games: j['games'] as int? ?? 0,
-        avgRank: (j['avgRank'] as num?)?.toDouble() ?? 0,
-      );
+    name: j['name'] as String? ?? '?',
+    wins: j['wins'] as int? ?? 0,
+    games: j['games'] as int? ?? 0,
+    avgRank: (j['avgRank'] as num?)?.toDouble() ?? 0,
+  );
 
   final String name;
   final int wins; // first-place finishes
@@ -50,12 +92,12 @@ class LeaderboardData {
   LeaderboardData({required this.games, required this.rows});
 
   factory LeaderboardData.fromJson(Map<String, dynamic> j) => LeaderboardData(
-        games: j['games'] as int? ?? 0,
-        rows: [
-          for (final r in (j['players'] as List? ?? []))
-            LeaderboardRow.fromJson(r as Map<String, dynamic>),
-        ],
-      );
+    games: j['games'] as int? ?? 0,
+    rows: [
+      for (final r in (j['players'] as List? ?? []))
+        LeaderboardRow.fromJson(r as Map<String, dynamic>),
+    ],
+  );
 
   final int games; // total finished games on the server
   final List<LeaderboardRow> rows;
@@ -109,8 +151,20 @@ class OnlineClient extends ChangeNotifier {
   /// WebSocket URL (ws://host:port/ws); the matching http(s) origin is used.
   /// Throws [LeaderboardServerException] when the server answers with a
   /// non-200 status, and the underlying error when it never answers at all.
-  static Future<LeaderboardData> fetchLeaderboard(String serverUrl,
-      {http.Client? httpClient, Duration timeout = const Duration(seconds: 5)}) async {
+  ///
+  /// One retry: a hosted instance that has been asleep answers the first
+  /// request while it is still booting — the socket is up but its database
+  /// pool is not, or a free tier box answers nothing at all. One second later
+  /// the same request usually succeeds, and a player who saw "could not
+  /// load" once and taps again is told the truth about a service that was
+  /// fine the whole time. A 4xx is a settled answer and is never retried.
+  static Future<LeaderboardData> fetchLeaderboard(
+    String serverUrl, {
+    http.Client? httpClient,
+    Duration timeout = const Duration(seconds: 5),
+    int attempts = 2,
+    Duration retryDelay = const Duration(milliseconds: 900),
+  }) async {
     final ws = Uri.parse(serverUrl);
     final base = ws.replace(
       scheme: ws.scheme == 'wss' ? 'https' : 'http',
@@ -118,12 +172,30 @@ class OnlineClient extends ChangeNotifier {
     );
     final client = httpClient ?? http.Client();
     try {
-      final resp = await client.get(base).timeout(timeout);
-      if (resp.statusCode != 200) {
-        throw LeaderboardServerException(resp.statusCode, resp.body);
+      Object? pending;
+      for (var attempt = 0; attempt < attempts; attempt++) {
+        if (attempt > 0) await Future<void>.delayed(retryDelay);
+        try {
+          final resp = await client.get(base).timeout(timeout);
+          if (resp.statusCode != 200) {
+            final failure = LeaderboardServerException(
+              resp.statusCode,
+              resp.body,
+            );
+            if (resp.statusCode < 500) throw failure;
+            pending = failure;
+            continue;
+          }
+          return LeaderboardData.fromJson(
+            jsonDecode(resp.body) as Map<String, dynamic>,
+          );
+        } on LeaderboardServerException {
+          rethrow;
+        } catch (e) {
+          pending = e; // never answered at all — worth the one retry
+        }
       }
-      return LeaderboardData.fromJson(
-          jsonDecode(resp.body) as Map<String, dynamic>);
+      throw pending ?? StateError('leaderboard request made no attempt');
     } finally {
       if (httpClient == null) client.close();
     }
@@ -149,6 +221,31 @@ class OnlineClient extends ChangeNotifier {
 
   /// Fire-and-forget chat lines: (from, text).
   final chat = <({String from, String text})>[];
+
+  /// Set when the server announces a walk-out, cleared by [clearLeftNotice]
+  /// once the screen has shown it. Kept on the client rather than folded into
+  /// the seat list because a toast is a one-time event while the seat list is
+  /// a standing fact — both are needed: the toast explains the moment, the
+  /// list keeps the corner greyed out afterwards.
+  String? leftNotice;
+
+  void clearLeftNotice() {
+    if (leftNotice == null) return;
+    leftNotice = null;
+    notifyListeners();
+  }
+
+  /// Our own seat's autoplay state, as the table sees it. Drives the toggle
+  /// so it can never disagree with the server, and survives a reconnect
+  /// because it is relearned from the `seats` broadcast on rejoin.
+  bool get iAmAuto =>
+      lobbySeats.any((s) => s.seatId == seatId && s.status == SeatStatus.auto);
+
+  /// Names of everyone who walked out, for the corner labels and the results.
+  List<String> get leftNames => [
+    for (final s in lobbySeats)
+      if (s.status == SeatStatus.left) s.name,
+  ];
 
   // Reconnect state: we keep the join code and identity, and retry with
   // exponential backoff until the server answers hello again.
@@ -182,9 +279,7 @@ class OnlineClient extends ChangeNotifier {
       !_spectating &&
       started &&
       connected &&
-      (gameType == 'snakes'
-          ? snakesState != null
-          : state != null);
+      (gameType == 'snakes' ? snakesState != null : state != null);
 
   void _send(Map<String, dynamic> msg) {
     final ch = _channel;
@@ -241,8 +336,11 @@ class OnlineClient extends ChangeNotifier {
       }
       if (params.isNotEmpty) uri = uri.replace(queryParameters: params);
       _channel = _channelFactory(uri);
-      _sub = _channel!.stream.listen(_onMessage, onDone: _onClosed,
-          onError: (_) => _onClosed());
+      _sub = _channel!.stream.listen(
+        _onMessage,
+        onDone: _onClosed,
+        onError: (_) => _onClosed(),
+      );
       _send({
         'type': 'hello',
         'seatId': seatId,
@@ -313,20 +411,35 @@ class OnlineClient extends ChangeNotifier {
           ..clear()
           ..addAll([
             for (final s in (msg['seats'] as List? ?? []))
-              LobbySeat(
-                name: (s as Map)['name'] as String,
-                color: LudoColor.values.byName(s['color'] as String),
-              ),
+              LobbySeat.fromJson((s as Map).cast<String, dynamic>()),
           ]);
         spectatorNames
           ..clear()
           ..addAll([
             for (final n in (msg['spectators'] as List? ?? [])) n as String,
           ]);
+      case 'seats':
+        // The per-seat status feed: autoplay badges, disconnected links, and
+        // the corners that are now empty because someone walked out. It
+        // arrives on every change and right after a join, so a rejoin finds
+        // the badges already correct.
+        lobbySeats
+          ..clear()
+          ..addAll([
+            for (final s in (msg['seats'] as List? ?? []))
+              LobbySeat.fromJson((s as Map).cast<String, dynamic>()),
+          ]);
+        onSeats?.call();
+      case 'left':
+        // Worth a line of its own: without it a departing player's pieces
+        // just stop moving and the reason stays invisible.
+        leftNotice = '${msg['name'] as String? ?? 'A player'} left the game';
+        onLeft?.call(leftNotice!);
       case 'state':
         if ((msg['game'] as String?) == 'snakes') {
           final incoming = SnakesState.fromJson(
-              Map<String, dynamic>.from(msg['state'] as Map));
+            Map<String, dynamic>.from(msg['state'] as Map),
+          );
           // Dice sound on a fresh roll: phase moved roll -> move.
           if (snakesState?.phase == SnakesPhase.awaitingRoll &&
               incoming.phase == SnakesPhase.awaitingMove) {
@@ -336,7 +449,8 @@ class OnlineClient extends ChangeNotifier {
           snakesState = incoming;
         } else {
           final incoming = LudoState.fromJson(
-              Map<String, dynamic>.from(msg['state'] as Map));
+            Map<String, dynamic>.from(msg['state'] as Map),
+          );
           // Dice sound on every new roll (rollSeq-based, like local play).
           if (incoming.rollSeq != _seenRollSeq) {
             _seenRollSeq = incoming.rollSeq;
@@ -348,10 +462,7 @@ class OnlineClient extends ChangeNotifier {
         started = true;
         status = OnlineStatus.playing;
       case 'chat':
-        chat.add((
-          from: msg['from'] as String,
-          text: msg['text'] as String,
-        ));
+        chat.add((from: msg['from'] as String, text: msg['text'] as String));
         onChat?.call();
       case 'roomClosed':
         // The authority dropped an abandoned room (grace period expired).
@@ -393,10 +504,14 @@ class OnlineClient extends ChangeNotifier {
   void Function(SnakesState? oldState, SnakesState newState)? onSnakesState;
   void Function()? onChat;
 
+  /// Seat-status changes (autoplay badges, corners emptied by a walk-out) and
+  /// the walk-out announcement itself, which the screen turns into a toast.
+  void Function()? onSeats;
+  void Function(String notice)? onLeft;
+
   // ------------------------------------------------------------ intents
 
-  void sendStart() =>
-      _spectating ? _noop() : _send({'type': 'start'});
+  void sendStart() => _spectating ? _noop() : _send({'type': 'start'});
   void sendRoll() => _spectating ? _noop() : _send({'type': 'roll'});
   void sendMove(int tokenIndex) =>
       _spectating ? _noop() : _send({'type': 'move', 'token': tokenIndex});
@@ -406,6 +521,23 @@ class OnlineClient extends ChangeNotifier {
   void sendSnakesMove() => _spectating ? _noop() : _send({'type': 'move'});
   void sendChat(String text) =>
       _spectating ? _noop() : _send({'type': 'chat', 'text': text});
+
+  /// Hand the seat to the table. The decision lives on the server, so the
+  /// table keeps playing our turn when this tab is closed, the phone is
+  /// locked, or the app is killed outright — which is the whole point: nobody
+  /// waits for a player who stepped away. A human who comes back can still
+  /// roll and move by hand; the driver only steps in when a turn is pending.
+  void sendAutoplay(bool on) =>
+      _spectating ? _noop() : _send({'type': 'autoplay', 'on': on});
+
+  /// Walk out on purpose. Unlike a dropped link — which the table reads as a
+  /// wobble and waits through — this releases the seat, lifts our pieces off
+  /// the board so they stop blocking squares, and tells everyone who went.
+  /// Spectators just hang up: leaving a room you never sat in is not news.
+  Future<void> sendLeave() async {
+    if (!_spectating) _send({'type': 'leave'});
+    await disconnect();
+  }
 
   /// Spectators are read-only; their intents are dropped client-side so the
   /// server never even sees them.

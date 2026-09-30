@@ -7,6 +7,38 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(online): seat hand-over, walk-outs and autoplay across the online tables
+
+- lib/server/game_server.dart: seats feed — every join/leave/autoplay change
+  broadcasts seatsJson(), so a table always knows who is where, including the
+  seats that are quiet (connected: false) and the ones that walked out
+- lib/server/game_server.dart: autoplay intents — a seat can hand its turns to
+  the table, the server rolls on its own clock, and a human taking the seat
+  back stops it mid-thought instead of letting a pending roll land
+- lib/server/game_server.dart: walk-outs — leaving gives the chair up for
+  good (no rejoin, no reuse); two players decide the table by forfeit, three
+  or four play on without the empty corner, and a dropped socket is not a
+  walk-out: the seat waits and the same profile can reclaim it
+- lib/server/game_server.dart: chat relay accepts the 'text' field; a
+  two-player ludo table seats the pair opposite each other
+- bin/server.dart: /health fails open — a scoreboard store that is down is
+  reported in the body (store, storeError) instead of turning the game server
+  into a 500 that a load balancer would read as a dead instance
+- lib/services/online_client.dart: seats/left events, sendAutoplay and
+  sendLeave, and a chat payload field the server actually reads
+- lib/ui/shared/seat_status_strip.dart: one strip for both boards — autoplay
+  outranks a dropped socket ("playing for you" beats "connection lost"), and
+  it stays hidden while every seat is present and live
+- lib/ui/ludo/ludo_view.dart, lib/ui/snakes/online_snakes_view.dart: autoplay
+  toggle, leave confirmation, and a notice when a seat walks out
+- lib/screens/online_lobby_screen.dart: the roster keeps seats that walked out
+  apart from seats that went quiet, and an explicit Leave says so before the
+  socket is dropped
+- lib/controllers/ludo_session.dart: the session forwards the autoplay and
+  leave intents to the client
+- test/online_server_test.dart: authority coverage — lobby chat and autoplay,
+  a handed-over seat played by the table, the human taking it back, 2P and 3P
+  walk-outs, and a dropped link that is not a walk-out
 - Feat: Render deploy — .env support, single-service web+server image
 
 - bin/server.dart: .env loader (real env wins), PORT support, serves the

@@ -81,7 +81,10 @@ int _connCounter = 0;
 /// [RoomRegistryException] when three consecutive codes are refused: that
 /// means the registry keeps handing our codes to other replicas, and
 /// creating anyway would strand the host's code on a foreign route.
-Future<Room> _createClaimedRoom(ServerMember host, {required String game}) async {
+Future<Room> _createClaimedRoom(
+  ServerMember host, {
+  required String game,
+}) async {
   var token = newRegistryToken();
   for (var attempt = 0; attempt < 3; attempt++) {
     final code = authority.newCode();
@@ -89,15 +92,22 @@ Future<Room> _createClaimedRoom(ServerMember host, {required String game}) async
     try {
       claimed = await roomRegistry.register(code, instanceId, owner: token);
     } on RoomRegistryException catch (_) {
-      return authority.createRoom(host, game: game); // registry down — host locally
+      return authority.createRoom(
+        host,
+        game: game,
+      ); // registry down — host locally
     }
     if (!claimed) {
       token = newRegistryToken(); // the row belongs to another replica
       continue;
     }
     try {
-      return authority.createRoom(host,
-          game: game, code: code, registryToken: token);
+      return authority.createRoom(
+        host,
+        game: game,
+        code: code,
+        registryToken: token,
+      );
     } on StateError catch (_) {
       // Astronomically rare: a concurrent local creation took the code
       // while the remote claim was in flight (only reachable when the
@@ -109,14 +119,17 @@ Future<Room> _createClaimedRoom(ServerMember host, {required String game}) async
       // advertiseRoom re-checks the room afterwards: should it close while
       // the hand-back is in flight, the route is dropped again instead of
       // pointing at a dead room.
-      await roomRegistry.unregister(code, owner: token).catchError((Object _) {});
+      await roomRegistry
+          .unregister(code, owner: token)
+          .catchError((Object _) {});
       final winner = authority.rooms[code];
       if (winner != null) await advertiseRoom(winner);
       token = newRegistryToken();
     }
   }
   throw RoomRegistryException(
-      'every generated room code is already owned by another replica');
+    'every generated room code is already owned by another replica',
+  );
 }
 
 /// (Re)advertises [room]'s route in the cluster registry. Every route
@@ -134,8 +147,11 @@ Future<Room> _createClaimedRoom(ServerMember host, {required String game}) async
 /// a registry outage simply leaves the route to the sweep's next attempt.
 Future<void> advertiseRoom(Room room) async {
   try {
-    await roomRegistry.register(room.code, instanceId,
-        owner: room.registryToken);
+    await roomRegistry.register(
+      room.code,
+      instanceId,
+      owner: room.registryToken,
+    );
   } on RoomRegistryException {
     return; // registry down — nothing was advertised; the sweep retries
   }
@@ -146,191 +162,215 @@ Future<void> advertiseRoom(Room room) async {
 }
 
 shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
-      final connId = 'c${_connCounter++}';
-      _openConnections.add(connId); // counted from the raw socket up
-      String? roomCode;
-      ServerMember? member;
+  final connId = 'c${_connCounter++}';
+  _openConnections.add(connId); // counted from the raw socket up
+  String? roomCode;
+  ServerMember? member;
 
-      webSocket.stream.listen(
-        (data) async {
-          Map<String, dynamic> msg;
+  webSocket.stream.listen(
+    (data) async {
+      Map<String, dynamic> msg;
+      try {
+        msg = jsonDecode(data as String) as Map<String, dynamic>;
+      } catch (_) {
+        webSocket.sink.add(jsonEncode({'type': 'error', 'text': 'bad json'}));
+        return;
+      }
+
+      // First message must be hello.
+      if (member == null) {
+        if (msg['type'] != 'hello') {
+          webSocket.sink.add(
+            jsonEncode({'type': 'error', 'text': 'say hello first'}),
+          );
+          return;
+        }
+        final seatId = msg['seatId'] as String? ?? '';
+        final name = (msg['name'] as String? ?? 'Player').trim();
+        if (seatId.isEmpty) {
+          webSocket.sink.add(
+            jsonEncode({'type': 'error', 'text': 'seatId required'}),
+          );
+          return;
+        }
+        final color = LudoColor.values.firstWhere(
+          (c) => c.name == msg['color'],
+          orElse: () => LudoColor.red,
+        );
+        final code = (msg['code'] as String? ?? '').trim();
+        final spectate = msg['spectate'] as bool? ?? false;
+        final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
+        final match = msg['match'] as bool? ?? false;
+
+        member = ServerMember(
+          id: connId,
+          seatId: seatId,
+          name: name.isEmpty ? 'Player' : name,
+          color: color,
+          sink: (json) => webSocket.sink.add(json),
+        );
+
+        final Room room;
+        if (spectate) {
+          if (code.isEmpty) {
+            webSocket.sink.add(
+              jsonEncode({
+                'type': 'error',
+                'text': 'a room code is required to spectate',
+              }),
+            );
+            return;
+          }
+          final watched = authority.spectateRoom(code, member!);
+          if (watched == null) {
+            final owner = await _foreignOwnerOf(code);
+            webSocket.sink.add(
+              jsonEncode({
+                'type': 'error',
+                'text':
+                    "room '$code' not found "
+                    '(or you are already playing in it)',
+                'owner': ?owner,
+              }),
+            );
+            return;
+          }
+          room = watched;
+        } else if (code.isEmpty && match) {
+          // Quick match: join the first waiting room of this game
+          // type, or open one — then start as soon as two are seated.
+          // Matched rooms are already claimed (they predate this
+          // connection); opened ones go through _createClaimedRoom, so
+          // the code the player receives always routes back here. If
+          // every generated code is refused, the hello fails with an
+          // error instead of stranding the player on an unroutable
+          // room.
           try {
-            msg = jsonDecode(data as String) as Map<String, dynamic>;
-          } catch (_) {
-            webSocket.sink.add(jsonEncode({'type': 'error', 'text': 'bad json'}));
+            room =
+                authority.matchExisting(member!, game: game) ??
+                await _createClaimedRoom(member!, game: game);
+          } on RoomRegistryException catch (_) {
+            webSocket.sink.add(
+              jsonEncode({
+                'type': 'error',
+                'text': 'could not open a room — try again in a moment',
+              }),
+            );
             return;
           }
-
-          // First message must be hello.
-          if (member == null) {
-            if (msg['type'] != 'hello') {
-              webSocket.sink
-                  .add(jsonEncode({'type': 'error', 'text': 'say hello first'}));
-              return;
-            }
-            final seatId = msg['seatId'] as String? ?? '';
-            final name = (msg['name'] as String? ?? 'Player').trim();
-            if (seatId.isEmpty) {
-              webSocket.sink
-                  .add(jsonEncode({'type': 'error', 'text': 'seatId required'}));
-              return;
-            }
-            final color = LudoColor.values.firstWhere(
-              (c) => c.name == msg['color'],
-              orElse: () => LudoColor.red,
+          if (!room.started && room.members.length >= 2) {
+            room.start();
+            // Push the initial snapshot to everyone — most importantly
+            // the first player who has been waiting in the lobby.
+            room.broadcastState();
+          }
+        } else if (code.isEmpty) {
+          try {
+            room = await _createClaimedRoom(member!, game: game);
+          } on RoomRegistryException catch (_) {
+            webSocket.sink.add(
+              jsonEncode({
+                'type': 'error',
+                'text': 'could not create a room — try again in a moment',
+              }),
             );
-            final code = (msg['code'] as String? ?? '').trim();
-            final spectate = msg['spectate'] as bool? ?? false;
-            final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
-            final match = msg['match'] as bool? ?? false;
-
-            member = ServerMember(
-              id: connId,
-              seatId: seatId,
-              name: name.isEmpty ? 'Player' : name,
-              color: color,
-              sink: (json) => webSocket.sink.add(json),
+            return;
+          }
+        } else {
+          var joined = authority.joinWithColor(code, member!, color);
+          // Not a fresh join — maybe a returning player reclaiming
+          // their seat (lobby or mid-game).
+          joined ??= authority.rejoinRoom(code, member!);
+          if (joined == null) {
+            final owner = await _foreignOwnerOf(code);
+            webSocket.sink.add(
+              jsonEncode({
+                'type': 'error',
+                'text': roomFullOrMissing(code),
+                'owner': ?owner,
+              }),
             );
-
-            final Room room;
-            if (spectate) {
-              if (code.isEmpty) {
-                webSocket.sink.add(jsonEncode({
-                  'type': 'error',
-                  'text': 'a room code is required to spectate',
-                }));
-                return;
-              }
-              final watched = authority.spectateRoom(code, member!);
-              if (watched == null) {
-                final owner = await _foreignOwnerOf(code);
-                webSocket.sink.add(jsonEncode({
-                  'type': 'error',
-                  'text': "room '$code' not found "
-                      '(or you are already playing in it)',
-                  'owner': ?owner,
-                }));
-                return;
-              }
-              room = watched;
-            } else if (code.isEmpty && match) {
-              // Quick match: join the first waiting room of this game
-              // type, or open one — then start as soon as two are seated.
-              // Matched rooms are already claimed (they predate this
-              // connection); opened ones go through _createClaimedRoom, so
-              // the code the player receives always routes back here. If
-              // every generated code is refused, the hello fails with an
-              // error instead of stranding the player on an unroutable
-              // room.
-              try {
-                room = authority.matchExisting(member!, game: game) ??
-                    await _createClaimedRoom(member!, game: game);
-              } on RoomRegistryException catch (_) {
-                webSocket.sink.add(jsonEncode({
-                  'type': 'error',
-                  'text': 'could not open a room — try again in a moment',
-                }));
-                return;
-              }
-              if (!room.started && room.members.length >= 2) {
-                room.start();
-                // Push the initial snapshot to everyone — most importantly
-                // the first player who has been waiting in the lobby.
-                room.broadcastState();
-              }
-            } else if (code.isEmpty) {
-              try {
-                room = await _createClaimedRoom(member!, game: game);
-              } on RoomRegistryException catch (_) {
-                webSocket.sink.add(jsonEncode({
-                  'type': 'error',
-                  'text': 'could not create a room — try again in a moment',
-                }));
-                return;
-              }
-            } else {
-              var joined = authority.joinWithColor(code, member!, color);
-              // Not a fresh join — maybe a returning player reclaiming
-              // their seat (lobby or mid-game).
-              joined ??= authority.rejoinRoom(code, member!);
-              if (joined == null) {
-                final owner = await _foreignOwnerOf(code);
-                webSocket.sink.add(jsonEncode({
-                  'type': 'error',
-                  'text': roomFullOrMissing(code),
-                  'owner': ?owner,
-                }));
-                return;
-              }
-              room = joined;
-            }
-            // The hello above can await the registry (creation claim,
-            // foreign-owner lookup), which gives the socket time to die.
-            // If it did, undo the seating instead of announcing into a
-            // dead connection: leaveRoom drops the just-created (empty)
-            // room — closing it and unregistering the freshly claimed
-            // code — or simply removes this player from a room that keeps
-            // living without them.
-            if (!_openConnections.contains(connId)) {
-              authority.leaveRoom(room.code, connId);
-              return;
-            }
-            roomCode = room.code;
-            _connections[connId] = room.code;
-            // Advertise the room immediately so a reconnect through any
-            // edge can find this instance; the sweep keeps it fresh. For
-            // claimed creations this is a no-op refresh under the same
-            // token; for join/spectate/match paths it re-asserts a room
-            // that may predate a registry outage. A refusal here is a
-            // stale conflicting row for an already-live local room —
-            // nothing this connection can fix, so it is ignored — and a
-            // room that closes while the registration is in flight has its
-            // route withdrawn again by [advertiseRoom].
-            unawaited(advertiseRoom(room));
-            webSocket.sink.add(jsonEncode({
-              'type': 'joined',
-              'code': room.code,
+            return;
+          }
+          room = joined;
+        }
+        // The hello above can await the registry (creation claim,
+        // foreign-owner lookup), which gives the socket time to die.
+        // If it did, undo the seating instead of announcing into a
+        // dead connection: leaveRoom drops the just-created (empty)
+        // room — closing it and unregistering the freshly claimed
+        // code — or simply removes this player from a room that keeps
+        // living without them.
+        if (!_openConnections.contains(connId)) {
+          authority.leaveRoom(room.code, connId);
+          return;
+        }
+        roomCode = room.code;
+        _connections[connId] = room.code;
+        // Advertise the room immediately so a reconnect through any
+        // edge can find this instance; the sweep keeps it fresh. For
+        // claimed creations this is a no-op refresh under the same
+        // token; for join/spectate/match paths it re-asserts a room
+        // that may predate a registry outage. A refusal here is a
+        // stale conflicting row for an already-live local room —
+        // nothing this connection can fix, so it is ignored — and a
+        // room that closes while the registration is in flight has its
+        // route withdrawn again by [advertiseRoom].
+        unawaited(advertiseRoom(room));
+        webSocket.sink.add(
+          jsonEncode({
+            'type': 'joined',
+            'code': room.code,
+            'game': room.gameType,
+            if (!spectate) 'color': member!.color.name,
+            if (spectate) 'spectator': true,
+          }),
+        );
+        _lobby(room);
+        // Who holds which corner, whether their link is live, whether the
+        // table is playing for them, and who has left: the corner badges
+        // and the "X left the game" notice both read this.
+        room.broadcast(room.seatsJson());
+        if (room.started) {
+          // A mid-game rejoin or a spectator needs the current snapshot
+          // to resume / watch; lobby players just wait for the broadcast
+          // at start.
+          webSocket.sink.add(
+            jsonEncode({
+              'type': 'state',
               'game': room.gameType,
-              if (!spectate) 'color': member!.color.name,
-              if (spectate) 'spectator': true,
-            }));
-            _lobby(room);
-            if (room.started) {
-              // A mid-game rejoin or a spectator needs the current snapshot
-              // to resume / watch; lobby players just wait for the broadcast
-              // at start.
-              webSocket.sink.add(jsonEncode({
-                'type': 'state',
-                'game': room.gameType,
-                'state': room.stateJson(),
-              }));
-            }
-            return;
-          }
+              'state': room.stateJson(),
+            }),
+          );
+        }
+        return;
+      }
 
-          // Subsequent messages are game intents.
-          if (roomCode != null) {
-            final room = authority.rooms[roomCode];
-            if (room != null) {
-              authority.handleIntent(
-                  room: room, connectionId: connId, msg: msg);
-              if (room.started) _lobby(room); // keep roster fresh
-            }
-          }
-        },
-        onDone: () {
-          if (roomCode != null) authority.leaveRoom(roomCode!, connId);
-          _connections.remove(connId);
-          _openConnections.remove(connId);
-        },
-        onError: (_) {
-          if (roomCode != null) authority.leaveRoom(roomCode!, connId);
-          _connections.remove(connId);
-          _openConnections.remove(connId);
-        },
-        cancelOnError: true,
-      );
-    });
+      // Subsequent messages are game intents.
+      if (roomCode != null) {
+        final room = authority.rooms[roomCode];
+        if (room != null) {
+          authority.handleIntent(room: room, connectionId: connId, msg: msg);
+          // Keep the roster fresh — in the lobby too, where a player who
+          // walks out must disappear from everyone's seat list and not
+          // only once a game happens to be running.
+          _lobby(room);
+        }
+      }
+    },
+    onDone: () {
+      if (roomCode != null) authority.leaveRoom(roomCode!, connId);
+      _connections.remove(connId);
+      _openConnections.remove(connId);
+    },
+    onError: (_) {
+      if (roomCode != null) authority.leaveRoom(roomCode!, connId);
+      _connections.remove(connId);
+      _openConnections.remove(connId);
+    },
+    cancelOnError: true,
+  );
+});
 
 String roomFullOrMissing(String code) =>
     "room '$code' not found, already started, or full";
@@ -358,31 +398,56 @@ void _lobby(Room room) {
     'type': 'lobby',
     'code': room.code,
     'started': room.started,
-    'seats': [
-      for (final m in room.orderedMembers)
-        {'name': m.name, 'color': m.color.name}
-    ],
-    'spectators': [
-      for (final m in room.spectators.values) m.name,
-    ],
+    // The same entries the `seats` feed carries, so whichever of the two
+    // arrives last cannot wipe the seat ids and statuses the other one
+    // reported — two shapes for one roster is how badges start disappearing
+    // at random, depending on the order the broadcasts land in.
+    'seats': room.seatsJson()['seats'],
+    'spectators': [for (final m in room.spectators.values) m.name],
   });
 }
 
 /// The documented JSON health check. Always served at GET /health; at GET /
 /// only when no web build ships (with a build, / serves the game UI, so
 /// probes must use /health).
-Future<shelf.Response> healthHandler(shelf.Request req) async => shelf.Response.ok(
-      jsonEncode({
-        'ok': true,
-        'rooms': authority.rooms.length,
-        'games': await leaderboardStore.totalGames(),
-      }),
-      headers: {'content-type': 'application/json'},
-    );
+///
+/// Liveness does not depend on the leaderboard: a box whose Turso token is
+/// wrong, or whose database is still waking up, is serving games perfectly
+/// well, and calling it unhealthy makes the platform recycle an instance that
+/// needed no recycling. So a store failure is reported *as data* — the `store`
+/// field plus a `storeError` — instead of failing the probe.
+Future<shelf.Response> healthHandler(shelf.Request req) async {
+  Object? storeError;
+  int? games;
+  try {
+    games = await leaderboardStore.totalGames();
+  } catch (e) {
+    storeError = e;
+  }
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'rooms': authority.rooms.length,
+      'games': games,
+      'store': leaderboardBackend,
+      if (storeError != null) 'storeError': '$storeError',
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
 
-/// Capacity metrics for load balancers and dashboards. Connections counts
-/// every open WebSocket (joined or not); rooms/spectators come from the
-/// authority. Intentionally touches no remote store so it stays cheap.
+/// Which leaderboard backend this instance writes to. Reported by /health and
+/// /stats because the two ways the scoreboard can be broken look identical
+/// from a phone — "the scores won't load" — and only one of them is fixed by
+/// deploying code: without TURSO_DATABASE_URL + TURSO_AUTH_TOKEN the server
+/// silently falls back to a SQLite file inside an ephemeral container, so its
+/// scores reset on every restart, while a bad token fails every read outright.
+String get leaderboardBackend {
+  final store = leaderboardStore;
+  if (store is TursoLeaderboardStore) return 'turso';
+  if (store is SqliteLeaderboardStore) return 'sqlite';
+  return store.runtimeType.toString();
+}
 
 /// CORS for the read-only JSON API (`/health`, `/leaderboard`, `/stats`,
 /// `/rooms/lookup`): the Flutter web dev server runs on another origin, so
@@ -394,7 +459,8 @@ Future<shelf.Response> healthHandler(shelf.Request req) async => shelf.Response.
 ///
 /// Public (not `_`-private) so the server integration tests can exercise the
 /// exact middleware the deployed pipeline assembles.
-shelf.Middleware get corsMiddleware => (inner) => (req) async {
+shelf.Middleware get corsMiddleware =>
+    (inner) => (req) async {
       if (req.method == 'OPTIONS') {
         return shelf.Response.ok('', headers: _corsHeaders(req));
       }
@@ -403,10 +469,10 @@ shelf.Middleware get corsMiddleware => (inner) => (req) async {
     };
 
 Map<String, String> _corsHeaders(shelf.Request req) => {
-      'access-control-allow-origin': req.headers['origin'] ?? '*',
-      'access-control-allow-methods': 'GET, OPTIONS',
-      'vary': 'Origin',
-    };
+  'access-control-allow-origin': req.headers['origin'] ?? '*',
+  'access-control-allow-methods': 'GET, OPTIONS',
+  'vary': 'Origin',
+};
 
 /// Turns a throw inside a route into an answer the client can actually read.
 /// Left alone, the throw escapes to shelf's own error page: plain text, and
@@ -416,7 +482,8 @@ Map<String, String> _corsHeaders(shelf.Request req) => {
 /// looked like a dead server. Must sit inside [corsMiddleware] so the 500 it
 /// produces still gets the headers, and it names the failing route because
 /// the deployed log otherwise shows a 500 with nothing to trace.
-shelf.Middleware get jsonErrorMiddleware => (inner) => (req) async {
+shelf.Middleware get jsonErrorMiddleware =>
+    (inner) => (req) async {
       try {
         return await inner(req);
       } catch (error) {
@@ -424,13 +491,20 @@ shelf.Middleware get jsonErrorMiddleware => (inner) => (req) async {
         // The detail stays in the log: a store failure can quote the Turso
         // URL or token, and this route is public.
         return shelf.Response.internalServerError(
-          body: jsonEncode(
-              {'ok': false, 'text': 'Internal server error (see server log)'}),
+          body: jsonEncode({
+            'ok': false,
+            'text': 'Internal server error (see server log)',
+          }),
           headers: {'content-type': 'application/json'},
         );
       }
     };
 
+/// Capacity metrics for load balancers and dashboards. Connections counts
+/// every open WebSocket (joined or not); rooms/spectators come from the
+/// authority. Intentionally touches no remote store so it stays cheap —
+/// unlike `/health`, which is allowed to answer even when the scoreboard
+/// store is down, so a broken leaderboard never looks like a dead server.
 Future<shelf.Response> statsHandler(shelf.Request req) async {
   var spectators = 0;
   for (final room in authority.rooms.values) {
@@ -453,22 +527,30 @@ Future<shelf.Response> statsHandler(shelf.Request req) async {
 /// forwards or 302s the client to the returned instance.
 Future<shelf.Response> roomLookupHandler(shelf.Request req) async {
   if (req.method != 'GET') {
-    return shelf.Response(405,
-        body: jsonEncode({'ok': false, 'text': 'GET only'}),
-        headers: {'content-type': 'application/json'});
+    return shelf.Response(
+      405,
+      body: jsonEncode({'ok': false, 'text': 'GET only'}),
+      headers: {'content-type': 'application/json'},
+    );
   }
   final code = (req.url.queryParameters['code'] ?? '').trim().toUpperCase();
   if (code.isEmpty) {
-    return shelf.Response(400,
-        body: jsonEncode({'ok': false, 'text': 'code query param required'}),
-        headers: {'content-type': 'application/json'});
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': 'code query param required'}),
+      headers: {'content-type': 'application/json'},
+    );
   }
   final owner = await roomRegistry.lookup(code);
   if (owner == null) {
-    return shelf.Response(404,
-        body: jsonEncode(
-            {'ok': false, 'text': "room '$code' unknown to the cluster"}),
-        headers: {'content-type': 'application/json'});
+    return shelf.Response(
+      404,
+      body: jsonEncode({
+        'ok': false,
+        'text': "room '$code' unknown to the cluster",
+      }),
+      headers: {'content-type': 'application/json'},
+    );
   }
   return shelf.Response.ok(
     jsonEncode({'ok': true, 'code': code, 'instance': owner}),
@@ -478,16 +560,18 @@ Future<shelf.Response> roomLookupHandler(shelf.Request req) async {
 
 Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
   if (req.method != 'GET') {
-    return shelf.Response(405,
-        body: jsonEncode({'ok': false, 'text': 'GET only'}),
-        headers: {'content-type': 'application/json'});
+    return shelf.Response(
+      405,
+      body: jsonEncode({'ok': false, 'text': 'GET only'}),
+      headers: {'content-type': 'application/json'},
+    );
   }
   return shelf.Response.ok(
     jsonEncode({
       'ok': true,
       'games': await leaderboardStore.totalGames(),
       'players': [
-        for (final e in await leaderboardStore.topPlayers()) e.toJson()
+        for (final e in await leaderboardStore.topPlayers()) e.toJson(),
       ],
     }),
     headers: {'content-type': 'application/json'},
@@ -528,17 +612,18 @@ Future<void> main(List<String> args) async {
   final turso = TursoLeaderboardStore.fromEnvironment(env);
   leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
   authority = GameAuthority(
-      leaderboard: leaderboardStore,
-      // Closing a room unregisters it from the cluster registry at once, so
-      // /rooms/lookup stops routing joins to rooms this instance dropped.
-      // The delete is scoped to the closing room's token: its code can be
-      // recycled into a new room before the slow Turso delete lands, and
-      // that live room's route must survive.
-      onRoomClosed: (code, registryToken) {
-        roomRegistry
-            .unregister(code, owner: registryToken)
-            .catchError((Object _) {});
-      });
+    leaderboard: leaderboardStore,
+    // Closing a room unregisters it from the cluster registry at once, so
+    // /rooms/lookup stops routing joins to rooms this instance dropped.
+    // The delete is scoped to the closing room's token: its code can be
+    // recycled into a new room before the slow Turso delete lands, and
+    // that live room's route must survive.
+    onRoomClosed: (code, registryToken) {
+      roomRegistry
+          .unregister(code, owner: registryToken)
+          .catchError((Object _) {});
+    },
+  );
 
   // Same env vars drive the cross-instance room registry: with Turso,
   // rooms are discoverable by every replica behind the load balancer;
@@ -552,8 +637,7 @@ Future<void> main(List<String> args) async {
   // stay well under the TTL — sweeping no more often than the TTL would
   // let live rooms expire between sweeps (lookups 404 for rooms that
   // still exist).
-  Timer.periodic(
-      registryRefreshInterval(tursoRegistry?.ttl), (_) {
+  Timer.periodic(registryRefreshInterval(tursoRegistry?.ttl), (_) {
     for (final room in authority.rooms.values) {
       // A room can close mid-round-trip; advertiseRoom withdraws the route
       // again when that happens, so the sweep never revives a dead room.
@@ -592,26 +676,29 @@ Future<void> main(List<String> args) async {
       });
 
   final server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
-  stdout.writeln('Game Club server listening on '
-      'ws://${server.address.host}:${server.port}/ws '
-      '(instance: $instanceId, '
-      'leaderboard: ${turso != null ? 'Turso' : dbPath}, '
-      'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
-      'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})');
+  stdout.writeln(
+    'Game Club server listening on '
+    'ws://${server.address.host}:${server.port}/ws '
+    '(instance: $instanceId, '
+    'leaderboard: ${turso != null ? 'Turso' : dbPath}, '
+    'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
+    'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})',
+  );
 }
 
 /// A static handler for a Flutter web build (`flutter build web`), or null
 /// when WEB_DIR (default build/web) has no index.html.
 shelf.Handler? _webStaticHandler() {
   final dir = webDir;
-  return dir == null ? null : createStaticHandler(dir, defaultDocument: 'index.html');
+  return dir == null
+      ? null
+      : createStaticHandler(dir, defaultDocument: 'index.html');
 }
 
 String? get webDir {
   // Real environment wins over .env, mirroring _loadEnvironment's merge.
-  final path = Platform.environment['WEB_DIR'] ??
-      serverEnv['WEB_DIR'] ??
-      'build/web';
+  final path =
+      Platform.environment['WEB_DIR'] ?? serverEnv['WEB_DIR'] ?? 'build/web';
   if (!Directory(path).existsSync()) return null;
   if (File('$path/index.html').existsSync()) return path;
   return null;
@@ -626,7 +713,8 @@ String? get webDir {
 /// default cadence for the 120 s TTL).
 Duration registryRefreshInterval(Duration? ttl) {
   var refresh = Duration(
-      seconds: (ttl ?? const Duration(seconds: 120)).inSeconds ~/ 3);
+    seconds: (ttl ?? const Duration(seconds: 120)).inSeconds ~/ 3,
+  );
   if (refresh < const Duration(seconds: 1)) {
     refresh = const Duration(seconds: 1);
   }
