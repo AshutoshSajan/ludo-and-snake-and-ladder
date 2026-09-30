@@ -20,6 +20,8 @@ import 'ludo_board_painter.dart';
 import 'ludo_overlays.dart';
 import 'ludo_token_layer.dart';
 import '../shared/sound_toggle_button.dart';
+import '../shared/pulse.dart';
+import '../shared/game_chat_sheet.dart';
 
 /// Full Ludo game screen: board, tokens, dice, HUD and pause menu.
 class LudoGameView extends ConsumerStatefulWidget {
@@ -299,6 +301,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             : const Text('Ludo'),
         actions: [
           const SoundToggleButton(),
+          // Chat is online-only: offline seats share a device, not a server,
+          // so there is nobody on the other end to talk to.
+          if (widget.onlineClient != null)
+            IconButton(
+              icon: const Icon(Icons.forum_outlined),
+              tooltip: 'Table chat',
+              onPressed: () =>
+                  GameChatSheet.show(context, widget.onlineClient!),
+            ),
           IconButton(
             icon: const Icon(Icons.undo),
             tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
@@ -497,16 +508,23 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       alignment: alignment,
       child: Padding(
         padding: const EdgeInsets.all(10),
-        child: DiceWidget(
-          value: isCurrent || tumbling ? face : null,
-          rolling: tumbling,
-          enabled: canRoll,
-          onTap: session.roll,
-          size: (MediaQuery.sizeOf(context).shortestSide * 0.15).clamp(
-            60.0,
-            92.0,
+        // Ludo already tinted the die with the corner colour; added the pulse
+        // so the seat on turn gets a die that breathes as well as wears its
+        // colour. Driven by `isCurrent` rather than "is my turn": every corner
+        // has its own die, and an AI or remote seat's corner needs the cue too.
+        child: Pulse(
+          active: isCurrent,
+          child: DiceWidget(
+            value: isCurrent || tumbling ? face : null,
+            rolling: tumbling,
+            enabled: canRoll,
+            onTap: session.roll,
+            size: (MediaQuery.sizeOf(context).shortestSide * 0.15).clamp(
+              60.0,
+              92.0,
+            ),
+            accent: AppColors.ludo(p.color),
           ),
-          accent: AppColors.ludo(p.color),
         ),
       ),
     );

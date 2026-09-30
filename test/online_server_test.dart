@@ -498,6 +498,60 @@ void main() {
 
   // ---------------------------------------------------- gameplay authority
 
+  group('chat reaches a table that is mid-game', () {
+    // Chat used to be reachable only from the lobby, which left a running game
+    // unable to talk to itself. The server half was never the problem: chat is
+    // handled ahead of the "no game yet" guard, so it works in any phase. This
+    // pins that, because moving it behind the guard later would quietly break
+    // in-game chat again while the lobby kept working.
+    test('is broadcast during a running game, to every seat', () {
+      final hostLog = <String>[];
+      final guestLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
+      auth.handleIntent(
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'start'},
+      );
+
+      final hostBase = hostLog.length, guestBase = guestLog.length;
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'chat', 'text': 'nice ladder!'},
+      );
+
+      final hostChat = hostLog.skip(hostBase).map(jsonDecode).cast<Map>();
+      final guestChat = guestLog.skip(guestBase).map(jsonDecode).cast<Map>();
+      final message = hostChat.firstWhere((m) => m['type'] == 'chat');
+      expect(message['from'], isNotNull);
+      expect(message['text'], 'nice ladder!');
+      // Everyone at the table hears it, not just the sender.
+      expect(
+        guestChat.any(
+          (m) => m['type'] == 'chat' && m['text'] == 'nice ladder!',
+        ),
+        isTrue,
+      );
+    });
+
+    test('an empty or oversized message is dropped', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: (_) {}));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: (_) {}));
+      for (final bad in ['', '   ', 'x' * 201]) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'chat', 'text': bad},
+        );
+      }
+      expect(room.started, isFalse, reason: 'chat must not start a game');
+    });
+  });
+
   group('GameAuthority: gameplay', () {
     // Two seated members with recording sinks.
     (Room, GameAuthority, List<String>, List<String>) playRoom() {
