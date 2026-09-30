@@ -138,6 +138,37 @@ on neither per-game board, and a test says exactly that.
 
 LeaderboardStore is now an abstract interface with two backends: the local SQLite file (renamed SqliteLeaderboardStore, unchanged behavior) and a new TursoLeaderboardStore that speaks Turso SQL-over-HTTP (POST /v2/pipeline, Bearer auth) via package:http — no native driver. Selected from TURSO_DATABASE_URL + TURSO_AUTH_TOKEN in bin/server.dart, falling back to the SQLite file. Store methods are async; GameAuthority fire-and-forgets idempotent writes and lets a failed write retry on the next room action. Wire format, row decoding (integers as strings), error surfacing and env selection are covered by 10 new tests.
 ### Fixed
+- Fix(deploy): revalidate the app shell, and give new players a name
+
+Flutter's web files are not content-hashed — `main.dart.js` is always
+that name — so a browser that cached it went on running the previous
+deploy. "Fixed on the server" and "fixed in your browser" were two
+different things, and this cost a debugging session more than once: a
+report that a shipped feature was missing turned out to be a stale tab,
+then a stale bundle.
+
+The shell (index.html, main.dart.js, the bootstrap and service worker)
+now revalidates on every load — a cheap 304 when nothing changed, never
+a stale body — while fonts, canvaskit and icons are held for a year,
+since those *are* versioned by name and are most of the payload.
+
+`/` is handled explicitly. The static handler answers it with
+index.html, but the *request* path has no file name, so keying off the
+name alone quietly gave the home page a year-long immutable cache. That
+was caught by checking the headers a real server actually returned,
+not by reading the policy.
+
+A new player is also given a default name instead of an empty field.
+Derived from their id, so it is *stable*: the same player is always the
+same "Swift Otter" rather than a new name each visit. An unstable
+default would be worse than none, scattering one player's career across
+the leaderboard.
+
+Built from two small word lists rather than a package. A name generator
+is a dozen lines; a dependency is a permanent supply-chain surface and a
+pubspec.lock entry for something used once. The `names` package is also
+the wrong shape — it has no notion of being reproducible, which is the
+one property that matters here.
 - Fix(snakes): home area, dice tumble, sound, leave dialog, and a pulse
 
 Six defects in the Snakes & Ladders boards, online and offline.
