@@ -34,6 +34,32 @@ class ServerMember {
 
   /// Profile id — stable across reconnects; dedupes seats.
   final String seatId;
+
+  /// Appends a short tag derived from [seatId] when [takenNames] already
+  /// contains [name], so two players who picked the same name are still
+  /// distinguishable in a seat list or on the leaderboard.
+  ///
+  /// The tag comes from the seat id — the same value the leaderboard groups by
+  /// — so it is stable for this player across games and cannot collide with a
+  /// different player's. Nobody is renamed when there is no clash.
+  void disambiguate(Iterable<String> takenNames) {
+    final taken = takenNames.toSet();
+    if (!taken.contains(name)) return;
+    var hash = 0;
+    for (final unit in seatId.codeUnits) {
+      hash = (hash * 31 + unit) & 0x7fffffff;
+    }
+    final tag = (hash % 0x10000).toRadixString(32).toUpperCase().padLeft(4, '0');
+    var candidate = '$name #$tag';
+    var n = 2;
+    // Astronomically unlikely, but the fallback costs three lines and
+    // guarantees two rows never render identically.
+    while (taken.contains(candidate)) {
+      candidate = '$name #$tag·$n';
+      n++;
+    }
+    name = candidate;
+  }
   String name;
   LudoColor color; // reassigned by the authority when a corner is unavailable
   final void Function(String json) sink; // send-to-client callback
@@ -360,6 +386,12 @@ class GameAuthority {
     if (room.members.values.any((m) => m.seatId == member.seatId)) {
       return null;
     }
+    // Two players may pick the same display name, but the room and the
+    // leaderboard must still tell them apart — "Asha" twice is unreadable in a
+    // seat list. The seat id is already unique and is what the leaderboard
+    // groups by, so a short tag derived from it disambiguates without
+    // rejecting anyone or renaming somebody's identity.
+    member.disambiguate(room.members.values.map((m) => m.name));
     // Seat in the first free clockwise corner and bind the member to it,
     // so two members can never share a color at start(). One exception:
     // a two-player ludo table sits *across* the board from each other (red ↔

@@ -2420,6 +2420,39 @@ void main() {
     );
   });
 
+  group('duplicate display names in one room', () {
+    ServerMember member(String id, String name) => ServerMember(
+          id: 'conn-$id',
+          seatId: id,
+          name: name,
+          color: LudoColor.red,
+          sink: (_) {},
+        );
+
+    test('are left alone when nothing clashes', () {
+      final m = member('uhmrA', 'Asha');
+      m.disambiguate(['Someone else']);
+      expect(m.name, 'Asha');
+    });
+
+    test('are tagged from the seat id, so the two rows read differently', () {
+      final a = member('uhmrA', 'Asha');
+      final b = member('uhmrB', 'Asha');
+      a.disambiguate([]);
+      b.disambiguate([a.name]);
+      expect(b.name, isNot(a.name));
+      expect(b.name, startsWith('Asha'), reason: 'the chosen name is kept');
+    });
+
+    test('keep the same tag for the same player across rooms', () {
+      // Stability matters: a player who is Asha in one game and Asha-B in the
+      // next looks like two people on a career leaderboard.
+      final one = member('uhmrSame', 'Asha')..disambiguate(['Asha']);
+      final two = member('uhmrSame', 'Asha')..disambiguate(['Asha']);
+      expect(one.name, two.name);
+    });
+  });
+
   group('web client cache policy', () {
     // Flutter's web files are not content-hashed, so a cached main.dart.js kept
     // running the previous deploy. That made "fixed on the server" and "fixed
