@@ -1,0 +1,146 @@
+# Netlify configuration — the Flutter web client.
+#
+# The web app is a static site: `flutter build web --release` emits build/web,
+# published below. The Dart WebSocket game server (bin/server.dart) does NOT
+# and cannot run here — Netlify's functions cannot hold a long-lived
+# WebSocket connection — so it stays on Render (see render.yaml).
+#
+# Set GAME_SERVER_URL in the Netlify UI (Site settings > Environment
+# variables) to the Render socket:
+#
+#     wss://ludo-1zpb.onrender.com/ws
+#
+# It is baked in at build time via --dart-define, which
+# OnlineLobbyScreen.defaultServerUrl() prefers over same-origin. Leave it
+# unset and the build still succeeds, falling back to same-origin — harmless,
+# but there is no game server on a *.netlify.app host, so the lobby would not
+# connect until someone typed the URL into its server field.
+#
+# The cache policy below deliberately mirrors lib/server/web_cache.dart, so
+# the Netlify origin and the Render fallback agree exactly. It is not
+# cosmetic: a stale cached app shell is what makes a freshly deployed build
+# look like it did not ship, and the shell names are not content-hashed.
+
+[build]
+  # Netlify's stock image has no Flutter, and the obvious fix does not work
+  # here: the cirruslabs/flutter images froze at 3.44.0 / Dart 3.12 and cannot
+  # resolve this project (pubspec requires Dart ^3.13.2, which ships with
+  # Flutter 3.47.2). The Dockerfile records the same finding, so this pulls the
+  # official 3.47.2 tarball instead and is pinned to match it — bump both.
+  #
+  # The SDK is unpacked inside the repo so Netlify's build cache keeps it
+  # between builds; the `if [ ! -x ]` guard makes that cache the fast path.
+  command = """
+  if ! command -v xz >/dev/null 2>&1; then
+    sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xz-utils unzip
+  fi
+  if [ ! -x _flutter/bin/flutter ]; then
+    mkdir -p _flutter
+    curl -fsSL "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz" \
+      | tar xJ --no-same-owner -C _flutter --strip-components=1
+  fi
+  export PATH="$PWD/_flutter/bin:$PATH"
+  flutter config --no-analytics
+  flutter pub get
+  flutter build web --release --dart-define=GAME_SERVER_URL=$GAME_SERVER_URL
+  """
+  publish = "build/web"
+
+# SPA fallback: a deep link or refresh resolves to the app shell. Not forced,
+# so a request for a file that exists is served from publish/ and never
+# rewritten — otherwise /assets/* and /canvaskit/* would resolve to index.html
+# and the game would load with no engine.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ---------------------------------------------------------------------------
+# Headers. Netlify merges every matching rule and, for a duplicated header
+# key, the first match wins — so the specific app-shell rules come first and
+# the catch-all last. Reversing them would pin the shell immutable for a year.
+# ---------------------------------------------------------------------------
+
+# The app shell: never a stale body.
+#
+# "/" is listed explicitly and it is not redundant. A request for the site
+# root has no filename, so it does not match "/index.html" — it matches the
+# catch-all below. That is the same trap web_cache.dart documents, where
+# keying off the filename left the home page cached for a year.
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/main.dart.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/flutter_bootstrap.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/flutter.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/flutter_service_worker.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/version.json"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+# Versioned build output: hold it for a year. These directories are named
+# rather than blanket-matched on purpose.
+#
+# The obvious `for = "/*"` catch-all is wrong here, and wrong in a way that only
+# shows up in production. A deep link like /ludo/abc does not exist in publish/,
+# so the SPA rule rewrites it to index.html — but the header is chosen from the
+# path the browser *asked for*, not the file that answers it. A catch-all would
+# therefore serve the app shell with a one-year immutable cache on every deep
+# link and refresh, and the fix is invisible until someone hard-refreshes a
+# shared game URL and gets last week's build.
+#
+# Listing the versioned directories instead means anything unrecognised — a
+# deep link, a file Flutter adds in a future release — falls through to
+# Netlify's own default of `public, max-age=0, must-revalidate`. Wrong in the
+# safe direction: a revalidation costs a request, a stale shell costs a bug
+# report.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/canvaskit/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/fonts/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Security headers for everything, including the rewritten shell.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "SAMEORIGIN"
