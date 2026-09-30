@@ -777,6 +777,7 @@ class GameAuthority {
               name: p.name,
               color: p.color.name,
               rank: rankings.indexOf(p.id) + 1,
+              game: 'ludo',
             ),
         ];
       case snakes.SnakesState s when s.phase == snakes.SnakesPhase.gameOver:
@@ -791,6 +792,7 @@ class GameAuthority {
               // Pawn slot -> corner seat color, stable across reconnects.
               color: LudoBoard.colorOrder[p.tokenIndex.clamp(0, 3)].name,
               rank: s.rankings.indexOf(p.id) + 1,
+              game: 'snakes',
             ),
         ];
       default:

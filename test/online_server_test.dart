@@ -2376,11 +2376,13 @@ class _RevokedTursoStore implements LeaderboardStore {
   }) async => throw StateError('libsql: 401 unauthorized');
 
   @override
-  Future<List<LeaderboardEntry>> topPlayers({int limit = 10}) async =>
-      throw StateError('libsql: 401 unauthorized');
+  Future<List<LeaderboardEntry>> topPlayers({
+    int limit = 10,
+    String? game,
+  }) async => throw StateError('libsql: 401 unauthorized');
 
   @override
-  Future<int> totalGames() async =>
+  Future<int> totalGames({String? game}) async =>
       throw StateError('libsql: 401 unauthorized');
 
   @override

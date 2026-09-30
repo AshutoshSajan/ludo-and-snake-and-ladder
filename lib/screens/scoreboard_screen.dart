@@ -23,21 +23,37 @@ class ScoreboardScreen extends StatefulWidget {
 class _ScoreboardScreenState extends State<ScoreboardScreen> {
   late Future<LeaderboardData> _future;
 
+  /// Which board is shown: 'ludo', 'snakes', or null for the combined one.
+  /// The server records the game on every result, so each game gets its own
+  /// career stats instead of one merged list.
+  String? _game;
+
   String get _serverUrl =>
       widget.serverUrl ?? OnlineLobbyScreen.defaultServerUrl();
 
-  Future<LeaderboardData> get _fetch =>
-      (widget.load ?? OnlineClient.fetchLeaderboard)(_serverUrl);
+  Future<LeaderboardData> _fetch() {
+    final load = widget.load;
+    if (load != null) return load(_serverUrl);
+    return OnlineClient.fetchLeaderboard(_serverUrl, game: _game);
+  }
 
   @override
   void initState() {
     super.initState();
-    _future = _fetch;
+    _future = _fetch();
   }
 
   void _reload() => setState(() {
-        _future = _fetch;
-      });
+    _future = _fetch();
+  });
+
+  void _selectGame(String? game) {
+    if (_game == game) return;
+    setState(() {
+      _game = game;
+      _future = _fetch();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -59,27 +75,71 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           }
           if (snap.hasError) return _error(snap.error!);
           final data = snap.data!;
-          if (data.rows.isEmpty) return _empty(data.games);
-          return RefreshIndicator(
-            onRefresh: () async => _reload(),
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-              children: [
-                Text(
-                  '${data.games} '
-                  '${data.games == 1 ? 'game' : 'games'} recorded here',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      color: AppColors.ivoryDark, fontSize: 13),
-                ),
-                const SizedBox(height: 16),
-                ..._podium(data.rows),
-                for (var i = 3; i < data.rows.length; i++)
-                  _row(i + 1, data.rows[i]),
-              ],
-            ),
+          return Column(
+            children: [
+              // The tabs sit outside the FutureBuilder so switching games is
+              // instant to tap and the selection survives a reload. They are
+              // only worth showing once the server has said it can split the
+              // board; an older server would offer a Snakes tab that could
+              // only ever come back with the combined list.
+              if (data.hasPerGameCounts) _tabs(data),
+              Expanded(
+                child: data.rows.isEmpty
+                    ? _empty(data.games)
+                    : RefreshIndicator(
+                        onRefresh: () async => _reload(),
+                        child: ListView(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                          children: [
+                            Text(
+                              '${data.games} '
+                              '${data.games == 1 ? 'game' : 'games'} recorded here',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: AppColors.ivoryDark,
+                                fontSize: 13,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            ..._podium(data.rows),
+                            for (var i = 3; i < data.rows.length; i++)
+                              _row(i + 1, data.rows[i]),
+                          ],
+                        ),
+                      ),
+              ),
+            ],
           );
         },
+      ),
+    );
+  }
+
+  /// Ludo / Snakes & Ladders / All, labelled with each game's finished count
+  /// so an empty tab is visibly empty rather than looking broken.
+  Widget _tabs(LeaderboardData data) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: SegmentedButton<String?>(
+        segments: [
+          ButtonSegment<String?>(
+            value: 'ludo',
+            label: Text('Ludo ${data.ludoGames}'),
+            icon: const Icon(Icons.casino_outlined, size: 18),
+          ),
+          ButtonSegment<String?>(
+            value: 'snakes',
+            label: Text('Snakes ${data.snakesGames}'),
+            icon: const Icon(Icons.grid_on_outlined, size: 18),
+          ),
+          ButtonSegment<String?>(
+            value: null,
+            label: Text('All ${data.games}'),
+            icon: const Icon(Icons.emoji_events_outlined, size: 18),
+          ),
+        ],
+        selected: {_game},
+        onSelectionChanged: (sel) => _selectGame(sel.first),
       ),
     );
   }
@@ -91,10 +151,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   Widget _error(Object failure) {
     final detail = failure is LeaderboardServerException
         ? 'The server at $_serverUrl answered but could not load the scores '
-            '(HTTP ${failure.statusCode}).\nIt is running — the problem is '
-            'inside it, so read the server log.'
+              '(HTTP ${failure.statusCode}).\nIt is running — the problem is '
+              'inside it, so read the server log.'
         : 'Could not reach the server at $_serverUrl.\n'
-            'Is `dart run bin/server.dart` running?';
+              'Is `dart run bin/server.dart` running?';
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -107,7 +167,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               detail,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                  color: AppColors.ivory, fontSize: 14, height: 1.5),
+                color: AppColors.ivory,
+                fontSize: 14,
+                height: 1.5,
+              ),
             ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
@@ -122,16 +185,31 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   }
 
   Widget _empty(int games) {
+    // Naming the game matters: an empty Snakes tab on a server full of Ludo
+    // games should say so, not read as a broken leaderboard.
+    final game = switch (_game) {
+      'ludo' => 'Ludo',
+      'snakes' => 'Snakes & Ladders',
+      _ => null,
+    };
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Text(
           games == 0
-              ? 'No games finished yet on this server.\nWin one — make history.'
-              : 'The leaderboard is empty.',
+              ? game == null
+                    ? 'No games finished yet on this server.\nWin one — make history.'
+                    : 'No $game games finished on this server yet.\n'
+                          'Win one — make history.'
+              : 'The $game leaderboard is empty.'
+                    '${games == 1 ? 'game' : 'games'} finished, but nobody '
+                    'has been recorded in it.',
           textAlign: TextAlign.center,
-          style:
-              const TextStyle(color: AppColors.ivory, fontSize: 15, height: 1.5),
+          style: const TextStyle(
+            color: AppColors.ivory,
+            fontSize: 15,
+            height: 1.5,
+          ),
         ),
       ),
     );
@@ -165,27 +243,35 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(rows[i].name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: AppColors.ivory,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold)),
+                        Text(
+                          rows[i].name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.ivory,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                         Text(
                           '${rows[i].wins} wins · ${rows[i].games} games · '
                           'avg ${rows[i].avgRank.toStringAsFixed(1)}',
                           style: const TextStyle(
-                              color: AppColors.ivoryDark, fontSize: 12),
+                            color: AppColors.ivoryDark,
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  Text(medals[i],
-                      style: TextStyle(
-                          color: medalColors[i],
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold)),
+                  Text(
+                    medals[i],
+                    style: TextStyle(
+                      color: medalColors[i],
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -201,29 +287,37 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
         children: [
           SizedBox(
             width: 30,
-            child: Text('$place',
-                style:
-                    const TextStyle(color: AppColors.ivoryDark, fontSize: 14)),
+            child: Text(
+              '$place',
+              style: const TextStyle(color: AppColors.ivoryDark, fontSize: 14),
+            ),
           ),
           Expanded(
-            child: Text(r.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: AppColors.ivory, fontSize: 15)),
+            child: Text(
+              r.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.ivory, fontSize: 15),
+            ),
           ),
-          Text('${r.wins}W',
-              style: const TextStyle(
-                  color: AppColors.gold,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold)),
+          Text(
+            '${r.wins}W',
+            style: const TextStyle(
+              color: AppColors.gold,
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(width: 12),
-          Text('${r.games}G',
-              style:
-                  const TextStyle(color: AppColors.ivoryDark, fontSize: 13)),
+          Text(
+            '${r.games}G',
+            style: const TextStyle(color: AppColors.ivoryDark, fontSize: 13),
+          ),
           const SizedBox(width: 12),
-          Text('avg ${r.avgRank.toStringAsFixed(1)}',
-              style:
-                  const TextStyle(color: AppColors.ivoryDark, fontSize: 13)),
+          Text(
+            'avg ${r.avgRank.toStringAsFixed(1)}',
+            style: const TextStyle(color: AppColors.ivoryDark, fontSize: 13),
+          ),
         ],
       ),
     );

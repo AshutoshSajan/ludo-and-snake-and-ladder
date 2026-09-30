@@ -1,13 +1,19 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/snakes/snakes_engine.dart';
+import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
+import '../shared/sound_toggle_button.dart';
+import '../shared/pulse.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
 /// snapshots ([OnlineClient.snakesState]) and forwards intents.
@@ -37,11 +43,43 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   /// Guards the game-over dialog.
   bool _gameOverShown = false;
 
+  /// Whether the die is tumbling. The offline view reads this off the
+  /// session's animation timeline; online there is no session, so the roll is
+  /// timed here instead. The `rolling` flag was hardcoded false, which is why
+  /// the online die never tumbled and simply snapped to its new face while the
+  /// offline one rolled.
+  bool _rolling = false;
+  Timer? _rollTimer;
+
+  /// The phase last seen, so a roll can be told apart from a plain re-render:
+  /// awaitingRoll -> awaitingMove is exactly when the server has accepted a
+  /// roll and published its value.
+  SnakesPhase? _lastPhase;
+
+  /// How long the die tumbles. Matches the online Ludo view, and fits inside
+  /// the 700ms beat before the forced move is sent, so the roll is seen before
+  /// the pawn moves.
+  static const _rollMs = 600;
+
   @override
   void initState() {
     super.initState();
     widget.client.addListener(_onClientUpdate);
+    // Online Snakes was the only game view that never made a sound: the Ludo
+    // view gets its dice sound through LudoSession, and this view has no
+    // session, so nothing was ever wired to the client's roll callback and a
+    // whole game played in silence. Wired here, from the same provider the
+    // local view uses, and detached again on dispose.
+    widget.client.onRoll = _onRoll;
     _onClientUpdate();
+  }
+
+  void _onRoll() {
+    ProviderScope.containerOf(
+      context,
+      listen: false,
+    ).read(soundServiceProvider).dice();
+    Haptics.light();
   }
 
   @override
@@ -49,7 +87,9 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.client != widget.client) {
       oldWidget.client.removeListener(_onClientUpdate);
+      if (oldWidget.client.onRoll == _onRoll) oldWidget.client.onRoll = null;
       widget.client.addListener(_onClientUpdate);
+      widget.client.onRoll = _onRoll;
       _onClientUpdate();
     }
   }
@@ -57,6 +97,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   @override
   void dispose() {
     widget.client.removeListener(_onClientUpdate);
+    _rollTimer?.cancel();
+    // Only clear the hook if it is still ours: a view replaced by another
+    // must not silence the one that replaced it.
+    if (widget.client.onRoll == _onRoll) widget.client.onRoll = null;
     super.dispose();
   }
 
@@ -78,6 +122,21 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     }
     final s = widget.client.snakesState;
     if (s == null) return;
+
+    if (_lastPhase == SnakesPhase.awaitingRoll &&
+        s.phase == SnakesPhase.awaitingMove) {
+      // The roll landed: tumble the die, then settle on the face.
+      _rollTimer?.cancel();
+      setState(() => _rolling = true);
+      _rollTimer = Timer(const Duration(milliseconds: _rollMs), () {
+        if (mounted) setState(() => _rolling = false);
+      });
+    } else if (_lastPhase != s.phase) {
+      // A new turn (or the game ending) must never leave a die mid-tumble.
+      _rollTimer?.cancel();
+      if (_rolling) setState(() => _rolling = false);
+    }
+    _lastPhase = s.phase;
 
     if (s.phase == SnakesPhase.gameOver) {
       if (!_gameOverShown) {
@@ -125,7 +184,13 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         ),
         actions: [
           FilledButton(
-            onPressed: widget.onLeave,
+            // The dialog is not barrier-dismissible, so leaving without
+            // popping it first left the player staring at "Back to lobby"
+            // forever: the route underneath was gone, the dialog was not.
+            onPressed: () {
+              Navigator.of(context).pop();
+              widget.onLeave();
+            },
             child: const Text('Back to lobby'),
           ),
         ],
@@ -178,64 +243,6 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
 
   // ------------------------------------------------------------------ HUD
 
-  Widget _playerStrip(SnakesState s) {
-    return SizedBox(
-      height: 64,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        itemCount: s.players.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, i) {
-          final p = s.players[i];
-          final isCurrent = i == s.currentPlayerIndex;
-          final isMe = p.id == widget.client.seatId;
-          final color = AppColors.snakesColors[p.tokenIndex];
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: isCurrent
-                  ? color.withValues(alpha: 0.85)
-                  : AppColors.feltLight,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isCurrent ? AppColors.gold : Colors.white24,
-                width: isCurrent ? 2 : 1,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.person,
-                  size: 18,
-                  color: isCurrent ? Colors.white : Colors.white70,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  isMe ? 'You' : p.name,
-                  style: TextStyle(
-                    color: isCurrent ? Colors.white : AppColors.ivory,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  p.square == 0 ? 'start' : '#${p.square}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isCurrent ? Colors.white : Colors.white60,
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final s = widget.client.snakesState;
@@ -257,6 +264,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       appBar: AppBar(
         title: const Text('Snakes & Ladders'),
         actions: [
+          const SoundToggleButton(),
           IconButton(
             icon: Icon(
               widget.client.iAmAuto
@@ -283,19 +291,32 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       body: SafeArea(
         child: Column(
           children: [
-            _playerStrip(s),
             SeatStatusStrip(
               seats: widget.client.lobbySeats,
               mySeatId: widget.client.seatId,
             ),
             Expanded(
               child: Center(
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: LayoutBuilder(
-                    builder: (context, cons) {
-                      final boardSize = cons.biggest.width;
-                      return Stack(
+                child: LayoutBuilder(
+                  builder: (context, cons) {
+                    // The board keeps its square shape and the home area sits
+                    // directly under it, inside the same Stack — the layout
+                    // the offline view already uses. Online had no home area
+                    // at all: the board numbers 1..100, so square 0 has no
+                    // cell, and squareCenter(0) fell through the
+                    // boustrophedon maths onto square 10's cell. Every pawn
+                    // still waiting to enter was drawn on top of a numbered
+                    // square, which is why the home area looked missing.
+                    final homeH = _homeStripH;
+                    final boardSize = math.min(
+                      cons.biggest.width,
+                      math.max(cons.biggest.height - homeH, 0.0),
+                    );
+                    return SizedBox(
+                      width: boardSize,
+                      height: boardSize + homeH,
+                      child: Stack(
+                        clipBehavior: Clip.none,
                         children: [
                           CustomPaint(
                             size: Size.square(boardSize),
@@ -307,10 +328,11 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                             ),
                           ),
                           ..._pawnWidgets(s, boardSize),
+                          _homeArea(boardSize, s),
                         ],
-                      );
-                    },
-                  ),
+                      ),
+                    );
+                  },
                 ),
               ),
             ),
@@ -326,7 +348,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                 children: [
                   DiceWidget(
                     value: s.lastRoll,
-                    rolling: false,
+                    rolling: _rolling,
                     enabled: canRoll,
                     onTap: widget.client.sendRoll,
                   ),
@@ -344,10 +366,143 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     );
   }
 
+  // ------------------------------------------------------------- home area
+
+  // Same geometry as the offline view, so both games lay the panel out the
+  // same way and a player moving between them sees the same board furniture.
+
+  /// One home area for the whole table, drawn directly under the board.
+  /// Fixed sizes so the chips come out of one formula.
+  static const double _homePad = 8;
+  static const double _homeCaptionH = 20;
+  static const double _homeRowH = 40;
+  static const double _chipGap = 6;
+  static const double _chipMax = 34;
+
+  /// Caption row plus one row of pawns, whatever the seat count.
+  static const double _homeStripH = _homePad * 2 + _homeCaptionH + _homeRowH;
+
+  /// Diameter of a pawn chip, shrunk so every seat fits the panel's width.
+  static double _chipSize(double boardSize, int players) {
+    final n = math.max(players, 1);
+    final avail = boardSize - _homePad * 2 - _chipGap * (n - 1);
+    return math.min(_chipMax, math.max(avail / n, 12));
+  }
+
+  /// The home area: one panel for the whole table, holding every pawn that has
+  /// not yet entered the board. A pawn that has left is simply gone from the
+  /// panel.
+  Widget _homeArea(double boardSize, SnakesState s) {
+    final waiting = [
+      for (final p in s.players)
+        if (p.square == 0) p,
+    ];
+    final d = _chipSize(boardSize, s.players.length);
+    final total = s.players.length * d + (s.players.length - 1) * _chipGap;
+    final left = (boardSize - total) / 2;
+    return Positioned(
+      key: const ValueKey('home-area'),
+      left: 0,
+      top: boardSize,
+      width: boardSize,
+      height: _homeStripH,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: AppColors.feltLight.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: _homePad,
+              right: _homePad,
+              top: _homePad * 0.7,
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.home_rounded,
+                    size: 15,
+                    color: AppColors.gold,
+                  ),
+                  const SizedBox(width: 5),
+                  const Text(
+                    'Home',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.ivory,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      waiting.isEmpty
+                          ? 'every pawn is out'
+                          : '${waiting.length} of ${s.players.length} waiting to enter',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.white60,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            for (final p in waiting)
+              Positioned(
+                key: ValueKey('home-pawn-${p.tokenIndex}'),
+                left: left + p.tokenIndex * (d + _chipGap),
+                top: _homePad + _homeCaptionH + (_homeRowH - d) / 2,
+                width: d,
+                height: d,
+                child: Pulse(
+                  active:
+                      p.id == s.currentPlayer.id &&
+                      s.phase != SnakesPhase.gameOver,
+                  child: _pawnDot(p, d),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A seat's pawn as a filled circle in its own colour.
+  Widget _pawnDot(SnakesPlayer p, double d) {
+    final color = AppColors.snakesColors[p.tokenIndex];
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [color.withValues(alpha: 0.95), color],
+          stops: const [0.4, 1],
+        ),
+        border: Border.all(color: Colors.white, width: 1.5),
+      ),
+      child: Center(
+        child: Text(
+          '${p.tokenIndex + 1}',
+          style: TextStyle(
+            fontSize: d * 0.4,
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
   List<Widget> _pawnWidgets(SnakesState s, double boardSize) {
     final cell = boardSize / 10;
     final bySquare = <int, List<SnakesPlayer>>{};
     for (final p in s.players) {
+      // Square 0 has no board cell; those pawns live in the home strip, and
+      // drawing them here too would put them on top of square 10.
+      if (p.square == 0) continue;
       bySquare.putIfAbsent(p.square, () => []).add(p);
     }
     final widgets = <Widget>[];
@@ -362,26 +517,35 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         final color = AppColors.snakesColors[p.tokenIndex];
         widgets.add(
           Positioned(
+            // Distinct from the home strip's 'home-pawn-<n>' key, and the same
+            // 'pawn-<id>' the offline view uses, so "this pawn is on the
+            // board" and "this pawn is waiting at home" are separately
+            // checkable rather than one overlapping set of circles.
+            key: ValueKey('pawn-${p.id}'),
             left: c.dx - cell * 0.28 + (i * 3.0),
             top: c.dy - cell * 0.28 - (i * 3.0),
-            child: Container(
-              width: cell * 0.56,
-              height: cell * 0.56,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [color.withValues(alpha: 0.95), color],
-                  stops: const [0.4, 1],
+            child: Pulse(
+              active:
+                  p.id == s.currentPlayer.id && s.phase != SnakesPhase.gameOver,
+              child: Container(
+                width: cell * 0.56,
+                height: cell * 0.56,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [color.withValues(alpha: 0.95), color],
+                    stops: const [0.4, 1],
+                  ),
+                  border: Border.all(color: Colors.white, width: 1.5),
                 ),
-                border: Border.all(color: Colors.white, width: 1.5),
-              ),
-              child: Center(
-                child: Text(
-                  '${p.tokenIndex + 1}',
-                  style: TextStyle(
-                    fontSize: cell * 0.28,
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
+                child: Center(
+                  child: Text(
+                    '${p.tokenIndex + 1}',
+                    style: TextStyle(
+                      fontSize: cell * 0.28,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
               ),
