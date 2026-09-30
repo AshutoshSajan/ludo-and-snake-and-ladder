@@ -89,7 +89,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final code = _codeCtrl.text.trim();
     if (!createRoom && code.length != 4) {
       _showSnack(
-          _spectate ? 'Enter a room code to watch' : 'Room codes are 4 letters');
+        _spectate ? 'Enter a room code to watch' : 'Room codes are 4 letters',
+      );
       return;
     }
     final client = OnlineClient(
@@ -99,7 +100,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       gameType: _gameType,
     )..addListener(() => setState(() {}));
     setState(() => _client = client);
-    client.connect(code: createRoom ? null : code, spectate: !createRoom && _spectate);
+    client.connect(
+      code: createRoom ? null : code,
+      spectate: !createRoom && _spectate,
+    );
   }
 
   void _showSnack(String text) {
@@ -113,8 +117,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     if (mounted) setState(() => _client = null);
   }
 
-  /// Leave button inside the snakes game view: drop the socket and return
-  /// to the connect/lobby form.
+  /// The walk-out path from inside either game view: the intent has already
+  /// gone to the server by now, so this only drops the socket and returns to
+  /// the connect/lobby form.
   void _disconnectAndClose() {
     _disconnect();
   }
@@ -131,7 +136,11 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               icon: const Icon(Icons.close),
               tooltip: 'Leave and disconnect',
               onPressed: () async {
-                await _disconnect();
+                // Say something on the way out rather than just hanging up:
+                // the room hears that the seat is given up, and the people
+                // still in the lobby are told who went instead of waiting on
+                // a chair that nobody is coming back to.
+                await client.sendLeave();
                 if (!context.mounted) return;
                 Navigator.of(context).pop();
               },
@@ -154,13 +163,14 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 padding: const EdgeInsets.all(16),
                 child: switch (client) {
                   null => _connectForm(),
-                  OnlineClient c when c.gameType == 'snakes' &&
-                          c.snakesState != null =>
+                  OnlineClient c
+                      when c.gameType == 'snakes' && c.snakesState != null =>
                     OnlineSnakesView(client: c, onLeave: _disconnectAndClose),
                   OnlineClient c when c.state != null => LudoGameView(
-                      onlineClient: c,
-                      onlineSeatId: c.seatId,
-                    ),
+                    onlineClient: c,
+                    onlineSeatId: c.seatId,
+                    onOnlineLeave: _disconnectAndClose,
+                  ),
                   OnlineClient _ => _lobby(client),
                 },
               ),
@@ -252,12 +262,15 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               _spectate ? Icons.visibility : Icons.visibility_outlined,
               size: 18,
             ),
-            label: Text(_spectate
-                ? 'Spectating — tap again to cancel'
-                : 'Just want to watch? Spectate a room'),
+            label: Text(
+              _spectate
+                  ? 'Spectating — tap again to cancel'
+                  : 'Just want to watch? Spectate a room',
+            ),
             style: TextButton.styleFrom(
-              foregroundColor:
-                  _spectate ? AppColors.gold : AppColors.ivory.withAlpha(150),
+              foregroundColor: _spectate
+                  ? AppColors.gold
+                  : AppColors.ivory.withAlpha(150),
             ),
             onPressed: () {
               setState(() => _spectate = !_spectate);
@@ -303,14 +316,17 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         client.status == OnlineStatus.reconnecting) {
       final back = client.status == OnlineStatus.reconnecting;
       return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 12),
-          Text(
-            back ? 'Connection lost — reconnecting…' : 'Connecting…',
-            style: const TextStyle(color: AppColors.ivory, fontSize: 14),
-          ),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 12),
+            Text(
+              back ? 'Connection lost — reconnecting…' : 'Connecting…',
+              style: const TextStyle(color: AppColors.ivory, fontSize: 14),
+            ),
+          ],
+        ),
       );
     }
     if (client.status == OnlineStatus.error) {
@@ -334,9 +350,25 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         ],
       );
     }
-    final seats = client.lobbySeats;
+    final roster = client.lobbySeats;
+    // The seats still in the room, and the ones someone vacated by walking
+    // out. Kept apart on purpose: a name nobody is waiting for any more must
+    // not hold up the host's Start button or pad the "waiting for players"
+    // count, but it still explains why the room suddenly has an empty chair.
+    final seats = [
+      for (final s in roster)
+        if (s.inGame) s,
+    ];
+    final gone = [
+      for (final s in roster)
+        if (!s.inGame) s,
+    ];
     final iAmHost = seats.isNotEmpty && client.myColor == seats.first.color;
     final spectating = client.isSpectator;
+    final muted = TextStyle(
+      color: AppColors.ivory.withAlpha(150),
+      fontSize: 12,
+    );
     return ListView(
       shrinkWrap: true,
       children: [
@@ -405,12 +437,36 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               seat.name,
               style: const TextStyle(color: AppColors.ivory),
             ),
+            subtitle: switch ((seat.status, seat.live)) {
+              (SeatStatus.auto, _) => Text(
+                seat.color == client.myColor
+                    ? 'Autoplay — the table will play your turns'
+                    : 'Autoplay — the table will play for them',
+                style: muted,
+              ),
+              (_, false) => Text(
+                seat.color == client.myColor
+                    ? 'Your connection to this room has dropped'
+                    : 'Connection lost — waiting for them',
+                style: muted,
+              ),
+              _ => null,
+            },
             trailing: seat.color == client.myColor
                 ? const Chip(
                     label: Text('You'),
                     visualDensity: VisualDensity.compact,
                   )
                 : null,
+          ),
+        for (final seat in gone)
+          ListTile(
+            dense: true,
+            leading: CircleAvatar(
+              backgroundColor: _colorOf(seat.color).withAlpha(80),
+              child: const Icon(Icons.person_off, size: 18),
+            ),
+            title: Text('${seat.name} left the room', style: muted),
           ),
         if (seats.length < 4 && !spectating)
           ListTile(
@@ -440,8 +496,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               client.started
                   ? 'Game starting…'
                   : iAmHost
-                      ? 'Start game'
-                      : 'Waiting for the host to start',
+                  ? 'Start game'
+                  : 'Waiting for the host to start',
             ),
             onPressed: client.started || !iAmHost || seats.length < 2
                 ? null
