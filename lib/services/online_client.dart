@@ -253,7 +253,12 @@ class OnlineClient extends ChangeNotifier {
   /// Throws [LeaderboardServerException] when the server answers with a
   /// non-200 status, and the underlying error when it never answers at all.
   ///
-  /// One retry: a hosted instance that has been asleep answers the first
+  /// Patient by default: a free-tier host that has been asleep refuses the
+  /// first few requests while it wakes, which looks exactly like a dead
+  /// server. Five attempts with a short gap cover a cold start; a server that
+  /// is genuinely gone still surfaces within about half a minute.
+  ///
+  /// One retry in the original: a hosted instance that has been asleep answers the first
   /// request while it is still booting — the socket is up but its database
   /// pool is not, or a free tier box answers nothing at all. One second later
   /// the same request usually succeeds, and a player who saw "could not
@@ -263,8 +268,8 @@ class OnlineClient extends ChangeNotifier {
     String serverUrl, {
     String? game,
     http.Client? httpClient,
-    Duration timeout = const Duration(seconds: 5),
-    int attempts = 2,
+    Duration timeout = const Duration(seconds: 10),
+    int attempts = 5,
     Duration retryDelay = const Duration(milliseconds: 900),
   }) async {
     final ws = Uri.parse(serverUrl);
@@ -404,6 +409,10 @@ class OnlineClient extends ChangeNotifier {
     _userClosed = false;
     _reconnectAttempts = 0;
     _routeHint = null;
+    // A new attempt gets a new warm-up window; the old one is spent.
+    _coldStartAttempts = 0;
+    waitingForColdStart = false;
+    _coldStartTimer?.cancel();
     // Canonicalize up front: the server stores rooms under the uppercase
     // code, and we hash-route by `?code=` — a lowercase-typed code must not
     // be pinned to a different replica than the room's uppercase one.
@@ -461,11 +470,49 @@ class OnlineClient extends ChangeNotifier {
         if (_spectating) 'spectate': true,
       });
     } catch (e) {
+      // The socket was refused or reset. On a sleeping free-tier host this is
+      // not a failure, it is a cold start: the platform is waking the process
+      // and the proxy answers with an error until it is listening. Give it a
+      // warm-up window rather than reporting "Could not reach server" to
+      // someone who simply pressed Play a moment early.
+      final attempt = _coldStartAttempts + 1;
+      if (_userClosed) return;
+      if (attempt <= maxColdStartAttempts) {
+        _coldStartAttempts = attempt;
+        waitingForColdStart = true;
+        // Back off gently: the host usually answers within a few seconds,
+        // and a tight loop would just burn the window.
+        final delay = coldStartBaseDelay * attempt;
+        notifyListeners();
+        _coldStartTimer?.cancel();
+        _coldStartTimer = Timer(delay, _openAndHello);
+        return;
+      }
+      waitingForColdStart = false;
       status = OnlineStatus.error;
-      errorText = 'Could not reach server: $e';
+      errorText =
+          'Could not reach the game server.\n'
+          'It may still be starting up — free hosting can take up to a '
+          'minute after being idle. Try again in a moment.';
       notifyListeners();
     }
   }
+
+  /// True while we are waiting out a sleeping host to wake. The UI shows a
+  /// loader rather than an error, because nothing has actually gone wrong yet.
+  bool waitingForColdStart = false;
+
+  Timer? _coldStartTimer;
+  int _coldStartAttempts = 0;
+
+  /// How many times to re-probe before giving up. With the delay below this is
+  /// 400ms * (1+2+...+10) = 22s of wake-up, comfortably past a free-tier cold
+  /// start.
+  static const maxColdStartAttempts = 10;
+
+  /// First re-probe delay; each subsequent attempt doubles it. Not final so
+  /// tests can shrink it rather than spend 22 seconds proving it gives up.
+  static Duration coldStartBaseDelay = const Duration(milliseconds: 400);
 
   void _onClosed() {
     if (_userClosed) {
@@ -654,6 +701,8 @@ class OnlineClient extends ChangeNotifier {
   Future<void> disconnect() async {
     _userClosed = true;
     _reconnectTimer?.cancel();
+    _coldStartTimer?.cancel();
+    waitingForColdStart = false;
     _reconnectTimer = null;
     // Reflect the leave immediately so the UI doesn't flash a spinner
     // while the socket cleanup below settles.
@@ -669,6 +718,7 @@ class OnlineClient extends ChangeNotifier {
   void dispose() {
     _userClosed = true;
     _reconnectTimer?.cancel();
+    _coldStartTimer?.cancel();
     _reconnectTimer = null;
     _sub?.cancel();
     _channel?.sink.close();
