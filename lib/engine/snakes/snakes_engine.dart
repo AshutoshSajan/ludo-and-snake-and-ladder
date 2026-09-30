@@ -137,11 +137,32 @@ SnakesState createSnakesState(List<SnakesPlayer> players) {
 /// Roll with an explicit value. In Snakes & Ladders there is exactly one
 /// possible move, so the roll leads to an `awaitingMove` phase with a
 /// single forced move (the UI animates it before resolving).
+///
+/// The one exception is a pawn that has not entered the board yet. Classic
+/// rules require a 1 to come in, landing on square 1 (which on this board is
+/// the foot of the ladder to 38 — so entering is immediately dramatic, and
+/// that is the real game, not a bug). Any other roll cannot move a pawn that
+/// is still off the board, so the turn is simply spent.
+///
+/// Without this, `pendingMove`'s `square + roll` let a pawn off the board move
+/// to whatever was rolled, so a 5 put a starting pawn on square 5 and the
+/// board opened with players scattered instead of waiting at the start.
 void rollDice(SnakesState s, int value) {
   assert(value >= 1 && value <= 6);
   if (s.phase != SnakesPhase.awaitingRoll) return;
   s.lastRoll = value;
   s.lastEvent = 'roll';
+  if (s.currentPlayer.square == 0 && value != 1) {
+    // Cannot enter on this roll. No move, so no `awaitingMove` phase for the UI
+    // to animate — the player is still where they were.
+    s.lastEvent = 'skip';
+    _endTurn(s);
+    // _endTurn clears lastRoll, but the die is the only evidence the player
+    // rolled at all. Restored so the wasted roll stays visible instead of the
+    // die blanking with nothing to explain why the pawn did not move.
+    s.lastRoll = value;
+    return;
+  }
   s.phase = SnakesPhase.awaitingMove;
 }
 

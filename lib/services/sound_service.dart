@@ -40,6 +40,11 @@ class SoundService {
   Future<void> win() => _play('win');
   Future<void> champion() => _play('champion');
 
+  /// The chat notification: a rising two-note chime, deliberately unlike the
+  /// single low blips the game sounds use, so a message is never mistaken for
+  /// a dice roll or a capture.
+  Future<void> message() => _play('message');
+
   void dispose() => _player?.dispose();
 }
 

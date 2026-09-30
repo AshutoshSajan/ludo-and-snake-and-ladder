@@ -284,24 +284,24 @@ class OnlineClient extends ChangeNotifier {
   /// Throws [LeaderboardServerException] when the server answers with a
   /// non-200 status, and the underlying error when it never answers at all.
   ///
-  /// Patient by default: a free-tier host that has been asleep refuses the
-  /// first few requests while it wakes, which looks exactly like a dead
-  /// server. Five attempts with a short gap cover a cold start; a server that
-  /// is genuinely gone still surfaces within about half a minute.
+  /// Patient by default, and patient for the same reason the socket is: a
+  /// free-tier host that has been asleep *refuses* connections while it wakes
+  /// rather than hanging on them, so every attempt here fails instantly and the
+  /// whole budget is spent in seconds. A flat five 900ms gaps totalled about
+  /// 4.5 seconds, which is not a cold start — Render's free box routinely takes
+  /// tens of seconds — so a player who opened the leaderboard on a quiet server
+  /// was told "could not reach" about a service that was merely asleep. The
+  /// delay now doubles, matching the socket's 10-attempt budget.
   ///
-  /// One retry in the original: a hosted instance that has been asleep answers the first
-  /// request while it is still booting — the socket is up but its database
-  /// pool is not, or a free tier box answers nothing at all. One second later
-  /// the same request usually succeeds, and a player who saw "could not
-  /// load" once and taps again is told the truth about a service that was
-  /// fine the whole time. A 4xx is a settled answer and is never retried.
+  /// A 4xx is a settled answer and is never retried; only a refusal or a 5xx
+  /// is worth waiting out.
   static Future<LeaderboardData> fetchLeaderboard(
     String serverUrl, {
     String? game,
     http.Client? httpClient,
     Duration timeout = const Duration(seconds: 10),
-    int attempts = 5,
-    Duration retryDelay = const Duration(milliseconds: 900),
+    int attempts = 10,
+    Duration retryDelay = const Duration(milliseconds: 400),
   }) async {
     final ws = Uri.parse(serverUrl);
     var base = ws.replace(
@@ -318,7 +318,12 @@ class OnlineClient extends ChangeNotifier {
     try {
       Object? pending;
       for (var attempt = 0; attempt < attempts; attempt++) {
-        if (attempt > 0) await Future<void>.delayed(retryDelay);
+        // Doubling backoff: 400ms * (1+2+...+9) is ~18s of waiting, past a
+        // free-tier cold start, while the early attempts stay quick so a server
+        // that is only briefly busy is not made to wait.
+        if (attempt > 0) {
+          await Future<void>.delayed(retryDelay * (1 << (attempt - 1)));
+        }
         try {
           final resp = await client.get(base).timeout(timeout);
           if (resp.statusCode != 200) {
@@ -659,10 +664,17 @@ class OnlineClient extends ChangeNotifier {
       case 'chat':
         final line = (from: msg['from'] as String, text: msg['text'] as String);
         chat.add(line);
-        // Unread only accumulates while the panel is closed. A message that
-        // arrives while the reader is looking at the chat is read by
+        // Unread only accumulates while the chat surface is closed. A message
+        // that arrives while the reader is looking at it is read by
         // definition, and counting it would leave a dot that never clears.
-        if (!chatOpen) unreadChats += 1;
+        if (!chatOpen) {
+          unreadChats += 1;
+          // Audible, because a dot is easy to miss and the point of a message
+          // is that it reaches you. Plays for unread arrivals only: while the
+          // sheet is open you are already reading, and a chime per line would
+          // be noise.
+          onMessageArrived?.call(line);
+        }
         onChat?.call(line);
       case 'roomClosed':
         // The authority dropped an abandoned room (grace period expired).
@@ -707,18 +719,22 @@ class OnlineClient extends ChangeNotifier {
   /// screen can raise a notification and repaint the unread dot.
   void Function(({String from, String text}) message)? onChat;
 
-  /// Whether the chat panel is on screen. The screen owns this because it is
-  /// the thing being hidden or shown; the client only needs it to decide
-  /// whether an arriving line is unread.
+  /// Whether the chat surface is on screen. The sheet sets this while it is
+  /// open; the client only needs it to decide whether an arriving line is
+  /// unread and whether to chime.
   bool chatOpen = false;
 
   /// Chat lines that arrived while [chatOpen] was false. Drives the red dot on
-  /// the chat icon; cleared by [markChatRead] the moment the panel opens.
+  /// the chat icon; cleared by [markChatRead] the moment the sheet opens.
   int unreadChats = 0;
 
-  /// Show the panel. Reading and opening are the same act, so opening clears
-  /// the unread count immediately rather than waiting for the panel to close
-  /// again.
+  /// Called for each line that arrives while the chat is closed, so the view
+  /// can play the notification. Separate from [onChat] on purpose: [onChat]
+  /// fires for every line, and only the unread ones should make a noise.
+  void Function(({String from, String text}) message)? onMessageArrived;
+
+  /// Show the chat. Reading and opening are the same act, so opening clears
+  /// the unread count immediately rather than waiting for the sheet to close.
   void setChatOpen(bool open) {
     chatOpen = open;
     if (open) markChatRead();

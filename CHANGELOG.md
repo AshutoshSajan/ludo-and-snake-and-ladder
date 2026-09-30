@@ -28,6 +28,11 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Drop the lobby title bar in-game, fix the missing message chime, one-line home row
+- Generate random usernames for local seats
+- Require a 1 to enter the Snakes board, and badge the board's chat icon
+- Label the home leaderboard button 'Leaderboard' with a trophy
+- Remove the local leaderboard; add an unread dot for chat
 - Distinguish the two leaderboards on the home screen
 - Name both leaderboard quantities, and fail the Netlify build without a server URL
 - Run the quality gate locally, since CI is over its runner quota

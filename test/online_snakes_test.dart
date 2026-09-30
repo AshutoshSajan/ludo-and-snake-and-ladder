@@ -44,15 +44,19 @@ void main() {
         SnakesPlayer(id: 'p1', name: 'Ana', tokenIndex: 0),
         SnakesPlayer(id: 'p2', name: 'Bo', tokenIndex: 1),
       ]);
+      // A ladder landing has to survive the wire, so land on one — but from ON
+      // the board. A pawn at the start can only enter on a 1, so 0 + 4 is no
+      // longer a legal way to reach the ladder at 4.
+      s.players[0].square = 17;
       rollDice(s, 4);
-      applyMove(s); // 0 + 4 = square 4, a ladder up to 14
+      applyMove(s); // 17 + 4 = square 21, a ladder up to 42
       final restored = SnakesState.fromJson(s.toJson());
 
       expect(restored.players.length, 2);
       expect(restored.players[0].id, 'p1');
       expect(restored.players[0].name, 'Ana');
       expect(restored.players[0].tokenIndex, 0);
-      expect(restored.players[0].square, 14); // ladder applied
+      expect(restored.players[0].square, 42); // ladder applied
       expect(restored.players[1].square, 0);
       expect(restored.currentPlayerIndex, s.currentPlayerIndex);
       expect(restored.phase, s.phase);
@@ -137,6 +141,12 @@ void main() {
         // Only the current player's roll is accepted.
         authority.handleIntent(
             room: room, connectionId: conn, msg: {'type': 'roll'});
+
+        // The roll can be spent: a pawn still off the board can only enter on
+        // a 1, and the server rolls a real die. Then there is no move to make
+        // and the turn has already passed, so the loop goes round again.
+        if (state.phase == SnakesPhase.awaitingRoll) continue;
+
         expect(state.phase, SnakesPhase.awaitingMove);
 
         // Everyone else's roll is rejected.

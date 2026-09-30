@@ -5,6 +5,7 @@ import '../../engine/core/player_profiles.dart';
 import '../../engine/ludo/ludo_board.dart';
 import '../../engine/ludo/ludo_models.dart';
 import '../../providers/app_providers.dart';
+import '../../services/online_client.dart' show DefaultNames;
 import '../../controllers/ludo_session.dart';
 import '../../services/sound_service.dart';
 import '../../ui/ludo/ludo_view.dart';
@@ -68,20 +69,44 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   void initState() {
     super.initState();
     final profiles = ref.read(profilesProvider);
+    final taken = <String>{};
     _seats = [
       _SeatDraft(
         profileId: profiles.isNotEmpty ? profiles.first.id : null,
-        name: profiles.isNotEmpty ? profiles.first.name : 'Player 1',
+        // A saved profile keeps its own name; only a seat with nothing behind
+        // it gets a generated one.
+        name: profiles.isNotEmpty
+            ? profiles.first.name
+            : _freshSeatName(taken),
       ),
-      _SeatDraft(name: 'Bot 2', isAI: true),
+      _SeatDraft(name: _freshSeatName(taken), isAI: true),
     ];
     _normalizeColors();
+  }
+
+  /// A generated name for a new seat, distinct from the seats already at the
+  /// table.
+  ///
+  /// Uniqueness is the point: two seats both called "Swift Otter" on one board
+  /// is the same confusion the online leaderboard had, and here it is worse
+  /// because the name is on the pawn you are trying to follow. 256 word pairs
+  /// is plenty for a ten-seat table, so the retry loop is a safety net rather
+  /// than something that runs in practice.
+  String _freshSeatName(Set<String> taken) {
+    for (var attempt = 0; attempt < 40; attempt++) {
+      final name = DefaultNames.generate();
+      if (taken.add(name)) return name;
+    }
+    return 'Player ${taken.length + 1}';
   }
 
   void _setCount(int count) {
     setState(() {
       while (_seats.length < count) {
-        _seats.add(_SeatDraft(name: 'Bot ${_seats.length + 1}', isAI: true));
+        _seats.add(_SeatDraft(
+          name: _freshSeatName({for (final s in _seats) s.name}),
+          isAI: true,
+        ));
       }
       while (_seats.length > count) {
         _seats.removeLast();

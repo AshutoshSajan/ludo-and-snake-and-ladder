@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/online_client.dart';
+import 'auto_mode_badge.dart';
 import '../theme.dart';
 
 /// Who is actually at this table: which seat the room is playing for, and
@@ -47,54 +48,71 @@ class SeatStatusStrip extends StatelessWidget {
 
   Widget _chip(LobbySeat s) {
     final mine = mySeatId != null && s.seatId == mySeatId;
-    // Autoplay outranks a dropped socket: a seat whose player has gone quiet
-    // is still being played, and that is the useful thing to say.
-    final (
-      IconData icon,
-      String theirs,
-      String mineText,
-      Color tint,
-    ) = switch ((s.status, s.live)) {
-      (SeatStatus.auto, _) => (
-        Icons.auto_mode,
-        'playing for them',
-        'playing for you',
-        AppColors.gold,
+    final dot = Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(
+        color: AppColors.ludo(s.color),
+        shape: BoxShape.circle,
       ),
-      (SeatStatus.left, _) => (
-        Icons.person_off_outlined,
-        'left the game',
-        'left the game',
-        AppColors.danger,
-      ),
-      (_, false) => (
-        Icons.wifi_off,
-        'connection lost',
-        'waiting on your connection',
-        Colors.white70,
-      ),
-      (SeatStatus.connected, true) => (Icons.circle, '', '', Colors.white70),
+    );
+
+    // Autoplay renders on its own: a name plus a spinning loop, explained on
+    // the loop. It used to print "playing for them" beside every auto seat and
+    // repeat the same words in the chip tooltip, which said the thing twice and
+    // spent the name's width on it. The badge owns its tooltip, so this branch
+    // must not wrap the row in another one — the outer tooltip would swallow
+    // the badge's and the old wording would come straight back.
+    if (s.status == SeatStatus.auto) {
+      return Row(
+        key: ValueKey('seat-${s.seatId}'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          dot,
+          const SizedBox(width: 4),
+          Text(
+            mine ? 'You' : s.name,
+            style: const TextStyle(fontSize: 12, color: AppColors.gold),
+          ),
+          const SizedBox(width: 4),
+          AutoModeBadge(seatName: s.name, mine: mine),
+        ],
+      );
+    }
+
+    // Everything else keeps the name-plus-status shape and the chip tooltip.
+    final (IconData icon, String theirs, String mineText, Color tint) =
+        switch (s.status) {
+      SeatStatus.left => (
+          Icons.person_off_outlined,
+          'left the game',
+          'left the game',
+          AppColors.danger,
+        ),
+      SeatStatus.auto => (Icons.sync, '', '', AppColors.gold),
+      _ => s.live
+          ? (Icons.circle, '', '', Colors.white70)
+          : (
+              Icons.wifi_off,
+              'connection lost',
+              'waiting on your connection',
+              Colors.white70,
+            ),
     };
     return Tooltip(
       message: mine
           ? switch (s.status) {
-              SeatStatus.auto => 'The table is playing your turns. Tap the autoplay button to take over.',
               SeatStatus.left => 'You left this game.',
-              SeatStatus.connected when !s.live => 'Your own link to the table has dropped — the others are waiting it out.',
-              SeatStatus.connected => 'You',
+              SeatStatus.connected when !s.live =>
+                'Your own link to the table has dropped — the others are waiting it out.',
+              _ => 'You',
             }
           : '${s.name} — $theirs',
       child: Row(
+        key: ValueKey('seat-${s.seatId}'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              color: AppColors.ludo(s.color),
-              shape: BoxShape.circle,
-            ),
-          ),
+          dot,
           const SizedBox(width: 4),
           Text(
             mine ? 'You · $mineText' : '${s.name} · $theirs',
