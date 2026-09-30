@@ -117,29 +117,35 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
 
   /// Ludo / Snakes & Ladders / All, labelled with each game's finished count
   /// so an empty tab is visibly empty rather than looking broken.
+  ///
+  /// Iconless and scrollable on purpose. Three labelled segments with icons
+  /// do not fit a phone's width, and a SegmentedButton that overflows clips
+  /// its last segment — which made the Snakes tab simply absent rather than
+  /// squashed. Losing the icons buys the room, and the horizontal scroll means
+  /// a longer name or a bigger count can never hide a tab again.
   Widget _tabs(LeaderboardData data) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-      child: SegmentedButton<String?>(
-        segments: [
-          ButtonSegment<String?>(
-            value: 'ludo',
-            label: Text('Ludo ${data.ludoGames}'),
-            icon: const Icon(Icons.casino_outlined, size: 18),
-          ),
-          ButtonSegment<String?>(
-            value: 'snakes',
-            label: Text('Snakes ${data.snakesGames}'),
-            icon: const Icon(Icons.grid_on_outlined, size: 18),
-          ),
-          ButtonSegment<String?>(
-            value: null,
-            label: Text('All ${data.games}'),
-            icon: const Icon(Icons.emoji_events_outlined, size: 18),
-          ),
-        ],
-        selected: {_game},
-        onSelectionChanged: (sel) => _selectGame(sel.first),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SegmentedButton<String?>(
+          segments: [
+            ButtonSegment<String?>(
+              value: 'ludo',
+              label: Text('Ludo ${data.ludoGames}'),
+            ),
+            ButtonSegment<String?>(
+              value: 'snakes',
+              label: Text('Snakes ${data.snakesGames}'),
+            ),
+            ButtonSegment<String?>(
+              value: null,
+              label: Text('All ${data.games}'),
+            ),
+          ],
+          selected: {_game},
+          onSelectionChanged: (sel) => _selectGame(sel.first),
+        ),
       ),
     );
   }

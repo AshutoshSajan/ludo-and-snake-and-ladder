@@ -14,6 +14,7 @@ import '../theme.dart';
 import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
+import '../shared/game_chat_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
 /// snapshots ([OnlineClient.snakesState]) and forwards intents.
@@ -266,6 +267,11 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         actions: [
           const SoundToggleButton(),
           IconButton(
+            icon: const Icon(Icons.forum_outlined),
+            tooltip: 'Table chat',
+            onPressed: () => GameChatSheet.show(context, widget.client),
+          ),
+          IconButton(
             icon: Icon(
               widget.client.iAmAuto
                   ? Icons.auto_mode
@@ -346,11 +352,19 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  DiceWidget(
-                    value: s.lastRoll,
-                    rolling: _rolling,
-                    enabled: canRoll,
-                    onTap: widget.client.sendRoll,
+                  // Takes the corner colour of whoever is on turn, and
+                  // breathes while it is your turn, so the die says whose move
+                  // it is. It was gold for every seat and never pulsed.
+                  Pulse(
+                    active: _isMyTurn(s),
+                    child: DiceWidget(
+                      value: s.lastRoll,
+                      rolling: _rolling,
+                      enabled: canRoll,
+                      onTap: widget.client.sendRoll,
+                      accent: AppColors
+                          .snakesColors[s.currentPlayer.tokenIndex.clamp(0, 9)],
+                    ),
                   ),
                   const SizedBox(width: 20),
                   FilledButton(
