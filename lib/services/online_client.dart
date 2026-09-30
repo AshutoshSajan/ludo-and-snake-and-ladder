@@ -284,24 +284,24 @@ class OnlineClient extends ChangeNotifier {
   /// Throws [LeaderboardServerException] when the server answers with a
   /// non-200 status, and the underlying error when it never answers at all.
   ///
-  /// Patient by default: a free-tier host that has been asleep refuses the
-  /// first few requests while it wakes, which looks exactly like a dead
-  /// server. Five attempts with a short gap cover a cold start; a server that
-  /// is genuinely gone still surfaces within about half a minute.
+  /// Patient by default, and patient for the same reason the socket is: a
+  /// free-tier host that has been asleep *refuses* connections while it wakes
+  /// rather than hanging on them, so every attempt here fails instantly and the
+  /// whole budget is spent in seconds. A flat five 900ms gaps totalled about
+  /// 4.5 seconds, which is not a cold start — Render's free box routinely takes
+  /// tens of seconds — so a player who opened the leaderboard on a quiet server
+  /// was told "could not reach" about a service that was merely asleep. The
+  /// delay now doubles, matching the socket's 10-attempt budget.
   ///
-  /// One retry in the original: a hosted instance that has been asleep answers the first
-  /// request while it is still booting — the socket is up but its database
-  /// pool is not, or a free tier box answers nothing at all. One second later
-  /// the same request usually succeeds, and a player who saw "could not
-  /// load" once and taps again is told the truth about a service that was
-  /// fine the whole time. A 4xx is a settled answer and is never retried.
+  /// A 4xx is a settled answer and is never retried; only a refusal or a 5xx
+  /// is worth waiting out.
   static Future<LeaderboardData> fetchLeaderboard(
     String serverUrl, {
     String? game,
     http.Client? httpClient,
     Duration timeout = const Duration(seconds: 10),
-    int attempts = 5,
-    Duration retryDelay = const Duration(milliseconds: 900),
+    int attempts = 10,
+    Duration retryDelay = const Duration(milliseconds: 400),
   }) async {
     final ws = Uri.parse(serverUrl);
     var base = ws.replace(
@@ -318,7 +318,12 @@ class OnlineClient extends ChangeNotifier {
     try {
       Object? pending;
       for (var attempt = 0; attempt < attempts; attempt++) {
-        if (attempt > 0) await Future<void>.delayed(retryDelay);
+        // Doubling backoff: 400ms * (1+2+...+9) is ~18s of waiting, past a
+        // free-tier cold start, while the early attempts stay quick so a server
+        // that is only briefly busy is not made to wait.
+        if (attempt > 0) {
+          await Future<void>.delayed(retryDelay * (1 << (attempt - 1)));
+        }
         try {
           final resp = await client.get(base).timeout(timeout);
           if (resp.statusCode != 200) {

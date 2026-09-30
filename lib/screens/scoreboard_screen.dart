@@ -177,8 +177,13 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
         ? 'The server at $_serverUrl answered but could not load the scores '
               '(HTTP ${failure.statusCode}).\nIt is running — the problem is '
               'inside it, so read the server log.'
+        // Do not tell someone on a hosted app to start a local server. This is
+        // overwhelmingly a free-tier box still waking, which is a wait we have
+        // already spent ~18s on; saying so is the difference between "this is
+        // broken" and "try again in a moment".
         : 'Could not reach the server at $_serverUrl.\n'
-              'Is `dart run bin/server.dart` running?';
+              'It may be a free-tier host waking up — that takes up to half a '
+              'minute. Tap refresh to try again.';
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
