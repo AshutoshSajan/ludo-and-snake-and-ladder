@@ -28,6 +28,11 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Explain the leaderboard's wait instead of showing a bare spinner
+- Name the wrong-server case, and answer preflights that ask for headers
+- Replace the autoplay text with a spinning loop beside the name
+- Make the message notification a pitch no other sound uses
+- Wait out a Render cold start on the leaderboard, and stop blaming your laptop
 - Drop the lobby title bar in-game, fix the missing message chime, one-line home row
 - Generate random usernames for local seats
 - Require a 1 to enter the Snakes board, and badge the board's chat icon
