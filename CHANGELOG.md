@@ -7,6 +7,39 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(deploy): split the web client onto Vercel, and survive a cold start
+
+Lets the web client be hosted on Vercel while the authoritative game
+server stays on Render, and makes the first connect of a session wait
+for a sleeping host instead of reporting a failure.
+
+The split itself needs no code: `defaultServerUrl()` already prefers a
+build-time `--dart-define=GAME_SERVER_URL`, so once the client is on its
+own domain the dart-define wins and `sameOriginServerUrl` is never used
+for online play. The two hosts need not share a name, and the
+leaderboard's HTTP origin is derived from that same URL, so it follows
+automatically. `vercel.json` carries the build command, the output
+directory, and the same no-cache policy the server now applies, so a
+Vercel deploy is not stale-cached either.
+
+Cold starts are the part that actually needed fixing. Render's free
+plan sleeps after ~15 idle minutes, and until the process is listening
+the proxy refuses connections — so pressing "Play" after a pause
+reported "Could not reach server" to someone who had done nothing
+wrong. A refused socket is now re-probed with backoff for up to ~22s
+while the UI says "Starting the game server…" and explains why, and only
+then reports failure, pointing at cold start rather than at the player.
+The leaderboard fetch got the same patience (5 attempts, 10s each) for
+the same reason.
+
+Tests: a refused socket is retried rather than reported, and a server
+that is genuinely unreachable still gives up with a useful message. The
+backoff is not final so the give-up path is provable in a second
+instead of in the 22s a real user would wait.
+
+Documented in the README, including the practical catch that Vercel has
+no Flutter runtime and the build therefore has to happen in GitHub
+Actions (or a custom builder image).
 - Feat(online): a reusable player identity, in-game chat, and a dice that signals
 
 Three things the online tables were missing, plus one that had gone
