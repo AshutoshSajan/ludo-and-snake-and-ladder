@@ -6,7 +6,6 @@ import '../ui/ludo/ludo_board_painter.dart';
 import '../ui/snakes/snakes_board_painter.dart';
 import '../ui/theme.dart';
 import 'home_widgets.dart';
-import 'leaderboard_screen.dart';
 import 'online_lobby_screen.dart';
 import 'scoreboard_screen.dart';
 import 'settings_screen.dart';
@@ -59,21 +58,19 @@ class HomeScreen extends ConsumerWidget {
                     onTap: () => _openSetup(context, GameKind.snakes),
                   ),
                   const SizedBox(height: 16),
+                  // The settings gear sits beside the leaderboard button. Both
+                  // were in a Row with the local leaderboard, which is gone —
+                  // the online board is the only one now, so it takes the
+                  // width and the gear keeps the corner.
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          icon: const Icon(Icons.emoji_events),
-                          // "Leaderboards" and "Online Leaderboard" sat next to
-                          // each other with nothing to say which was which, and
-                          // both plausibly read as the online one. These are
-                          // per-device stats that the online board cannot show
-                          // (the server never sees a local game), so the split
-                          // is real and the labels should say so.
-                          label: const Text('On this device'),
+                          icon: const Icon(Icons.cloud_outlined),
+                          label: const Text('Online — all players'),
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => const LeaderboardScreen(),
+                              builder: (_) => const ScoreboardScreen(),
                             ),
                           ),
                         ),
@@ -98,18 +95,6 @@ class HomeScreen extends ConsumerWidget {
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => const OnlineLobbyScreen(),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.cloud_outlined, size: 18),
-                      label: const Text('Online — all players'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const ScoreboardScreen(),
                         ),
                       ),
                     ),

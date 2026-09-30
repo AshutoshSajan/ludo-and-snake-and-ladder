@@ -572,6 +572,15 @@ class OnlineClient extends ChangeNotifier {
     });
   }
 
+  /// Feeds one raw server frame through the normal inbound path.
+  ///
+  /// Exists so tests can drive the client without standing up a WebSocket.
+  /// The unread-dot rules are the kind of thing that silently regresses — they
+  /// involve two pieces of state that have to agree — and a test that needs a
+  /// live socket for them will simply not get written.
+  @visibleForTesting
+  void debugHandleMessage(dynamic data) => _onMessage(data);
+
   void _onMessage(dynamic data) {
     final Map<String, dynamic> msg;
     try {
@@ -648,8 +657,13 @@ class OnlineClient extends ChangeNotifier {
         started = true;
         status = OnlineStatus.playing;
       case 'chat':
-        chat.add((from: msg['from'] as String, text: msg['text'] as String));
-        onChat?.call();
+        final line = (from: msg['from'] as String, text: msg['text'] as String);
+        chat.add(line);
+        // Unread only accumulates while the panel is closed. A message that
+        // arrives while the reader is looking at the chat is read by
+        // definition, and counting it would leave a dot that never clears.
+        if (!chatOpen) unreadChats += 1;
+        onChat?.call(line);
       case 'roomClosed':
         // The authority dropped an abandoned room (grace period expired).
         errorText = 'The room has closed.';
@@ -688,7 +702,29 @@ class OnlineClient extends ChangeNotifier {
   void Function()? onRoll;
   void Function(LudoState? oldState, LudoState newState)? onState;
   void Function(SnakesState? oldState, SnakesState newState)? onSnakesState;
-  void Function()? onChat;
+
+  /// Fired for each incoming chat line, with its sender and text, so the
+  /// screen can raise a notification and repaint the unread dot.
+  void Function(({String from, String text}) message)? onChat;
+
+  /// Whether the chat panel is on screen. The screen owns this because it is
+  /// the thing being hidden or shown; the client only needs it to decide
+  /// whether an arriving line is unread.
+  bool chatOpen = false;
+
+  /// Chat lines that arrived while [chatOpen] was false. Drives the red dot on
+  /// the chat icon; cleared by [markChatRead] the moment the panel opens.
+  int unreadChats = 0;
+
+  /// Show the panel. Reading and opening are the same act, so opening clears
+  /// the unread count immediately rather than waiting for the panel to close
+  /// again.
+  void setChatOpen(bool open) {
+    chatOpen = open;
+    if (open) markChatRead();
+  }
+
+  void markChatRead() => unreadChats = 0;
 
   /// Seat-status changes (autoplay badges, corners emptied by a walk-out) and
   /// the walk-out announcement itself, which the screen turns into a toast.
