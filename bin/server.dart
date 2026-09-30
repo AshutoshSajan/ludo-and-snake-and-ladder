@@ -482,10 +482,22 @@ Map<String, String> _corsHeaders(shelf.Request req) => {
 /// looked like a dead server. Must sit inside [corsMiddleware] so the 500 it
 /// produces still gets the headers, and it names the failing route because
 /// the deployed log otherwise shows a 500 with nothing to trace.
+///
+/// A WebSocket upgrade is not a failure and must pass through untouched (see
+/// the `on shelf.HijackException` clause below).
 shelf.Middleware get jsonErrorMiddleware =>
     (inner) => (req) async {
       try {
         return await inner(req);
+      } on shelf.HijackException {
+        // Not a failure: this is how /ws tells shelf_io the socket is now a
+        // WebSocket. Shelf's own guidance is that middleware capturing
+        // exceptions must let it through — swallowing it here answered a
+        // request whose stream no longer existed, so every single connection
+        // logged a bogus "500 on GET /ws" and shelf_io then complained it had
+        // been handed a response for a hijacked request. The upgrade itself
+        // always worked; only the log lied.
+        rethrow;
       } catch (error) {
         stdout.writeln('!! 500 on ${req.method} /${req.url.path}: $error');
         // The detail stays in the log: a store failure can quote the Turso

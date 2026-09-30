@@ -66,6 +66,24 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 LeaderboardStore is now an abstract interface with two backends: the local SQLite file (renamed SqliteLeaderboardStore, unchanged behavior) and a new TursoLeaderboardStore that speaks Turso SQL-over-HTTP (POST /v2/pipeline, Bearer auth) via package:http — no native driver. Selected from TURSO_DATABASE_URL + TURSO_AUTH_TOKEN in bin/server.dart, falling back to the SQLite file. Store methods are async; GameAuthority fire-and-forgets idempotent writes and lets a failed write retry on the next room action. Wire format, row decoding (integers as strings), error surfacing and env selection are covered by 10 new tests.
 ### Fixed
+- Fix(server): let a WebSocket upgrade through the JSON error middleware
+
+/ws tells shelf_io a connection is now a WebSocket by throwing
+HijackException, which is control flow rather than a failure. The
+jsonErrorMiddleware added to make a dead Turso store readable as JSON
+caught it anyway and answered 500, so every single connection logged
+a bogus "!! 500 on GET /ws" and shelf_io then complained it had been
+handed a response for a request it had already hijacked.
+
+The upgrade itself always worked and the client was never affected --
+only the log lied, which is its own kind of misleading: a server whose
+log fills with 500s on /ws looks broken in a way that sends you
+debugging the WebSocket transport instead of reading the health route.
+
+Shelf's own guidance is that middleware capturing exceptions must
+rethrow this one, so it now passes straight through. Verified against a
+live server: 3 connections, 0 spurious 500s (was 4 connections,
+4 spurious 500s).
 - Fix(online): stop the table playing itself once a room has nobody in it
 
 A seat handed over to the table keeps playing after that player's tab closes —
