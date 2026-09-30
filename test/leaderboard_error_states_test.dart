@@ -198,5 +198,38 @@ void main() {
       expect(budget, greaterThanOrEqualTo(15000),
           reason: 'the wait must cover a free-tier wake-up');
     });
+    group('a 200 that is not the API', () {
+    // Verified against the real deployment: with GAME_SERVER_URL missing from
+    // a build, the client asks its own origin, the SPA rule answers /leaderboard
+    // with index.html, and 200 text/html arrives where JSON was expected.
+    test('an HTML page is named as the wrong server, not retried', () async {
+      var calls = 0;
+      final client = MockClient((_) async {
+        calls++;
+        return http.Response('<!DOCTYPE html><html>...</html>', 200,
+            headers: {'content-type': 'text/html'});
+      });
+      await expectLater(
+        OnlineClient.fetchLeaderboard('ws://webapp.example/ws',
+            httpClient: client, retryDelay: const Duration(milliseconds: 1)),
+        throwsA(isA<LeaderboardServerException>()
+            .having((e) => e.body, 'body', contains('HTML page'))),
+      );
+      // A wrong server is not a flaky one. Retrying it would spend the whole
+      // ~18s cold-start budget and then fail with a FormatException naming
+      // nothing at all.
+      expect(calls, 1, reason: 'a deterministic wrong-server answer must not be '
+          'retried ten times');
+    });
+
+    test('a 200 with a JSON body still parses', () async {
+      final client = MockClient((_) async => http.Response(
+          '{"ok":true,"games":1,"players":[]}', 200,
+          headers: {'content-type': 'application/json'}));
+      final data = await OnlineClient.fetchLeaderboard('ws://api.example/ws',
+          httpClient: client);
+      expect(data.games, 1);
+    });
   });
+});
 }

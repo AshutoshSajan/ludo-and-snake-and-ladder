@@ -472,6 +472,12 @@ shelf.Middleware get corsMiddleware =>
 Map<String, String> _corsHeaders(shelf.Request req) => {
   'access-control-allow-origin': req.headers['origin'] ?? '*',
   'access-control-allow-methods': 'GET, OPTIONS',
+  // Echoed back rather than a fixed list: a preflight that asks for a header
+  // the server does not echo is rejected by the browser, and today only a
+  // header-less GET is ever made. Answering what was asked keeps a future
+  // request (or a dev proxy adding one) from failing as a CORS error.
+  'access-control-allow-headers': ?req.headers['access-control-request-headers'],
+  'access-control-max-age': '600',
   'vary': 'Origin',
 };
 
