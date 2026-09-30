@@ -88,7 +88,7 @@ class HomeScreen extends ConsumerWidget {
                   Center(
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.wifi, size: 18),
-                      label: const Text('Online Ludo'),
+                      label: const Text('Play Online'),
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => const OnlineLobbyScreen(),
