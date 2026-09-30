@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/online_client.dart';
 import '../ui/theme.dart';
+import '../ui/shared/player_avatar.dart';
 import 'online_lobby_screen.dart';
 
 /// The online scoreboard: career stats from the authoritative server's
@@ -249,15 +250,25 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          rows[i].name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.ivory,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
+                        Row(
+                          children: [
+                            // Derived from the seat id the leaderboard groups
+                            // by, so the face always belongs to this player.
+                            PlayerAvatar(seed: rows[i].seatId, size: 22),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                rows[i].name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: AppColors.ivory,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                         Text(
                           '${rows[i].wins} wins · ${rows[i].games} games · '
@@ -298,6 +309,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               style: const TextStyle(color: AppColors.ivoryDark, fontSize: 14),
             ),
           ),
+          PlayerAvatar(seed: r.seatId, size: 22),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
               r.name,

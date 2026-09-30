@@ -106,7 +106,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     for (final unit in id.codeUnits) {
       salt = (salt * 31 + unit) & 0x7fffffff;
     }
-    return DefaultNames.generate(salt: salt);
+    return DefaultNames.unique(playerId: id);
   }
 
   /// Remembers the name so it is offered next time. The id is never changed

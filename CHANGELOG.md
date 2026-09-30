@@ -376,6 +376,30 @@ play it.
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Give every player a unique name and an avatar
+
+Two players on the leaderboard could be indistinguishable: the default name
+pool was 16x16, so 256 names for unlimited players, and a chosen name was
+stored verbatim.
+
+DefaultNames.unique() appends a short tag derived from the player id, so a
+name identifies exactly one player and stays stable across games and
+sessions. The server also disambiguates on join: if two people in one room
+pick the same name, the later one is tagged from the seat id, which is what
+the leaderboard already groups by. Nobody is rejected and no identity is
+rewritten.
+
+PlayerAvatar renders a deterministic identicon from the same id - nothing to
+upload, nothing to store, no new dependency, and it cannot drift from the
+player because it is derived from the player's identity. Shown on every
+online leaderboard row and podium card. Custom uploaded photos are not
+implemented yet; the identicon is the default they would override.
+
+LeaderboardRow now carries the seatId the server already sent, so a row's
+avatar is tied to the player rather than to a display name two players may
+share.
+
+245/245 tests pass; dart analyze lib bin test clean.
 - Ci: render each changelog entry once
 
 A commit and its cherry-pick are two commits with a byte-identical message, so the same change printed twice: the changelog-job change landed on staging via #68 and #70 cherry-picked it into dev, which after the staging back-merge left dev with the entry at two places in the file.
