@@ -69,7 +69,7 @@ void main() {
               LeaderboardRow(name: 'Ana', wins: 4, games: 7, avgRank: 1.4),
             ]),
       );
-      expect(find.text('7 games recorded here'), findsOneWidget);
+      expect(find.text('7 games · 1 player'), findsOneWidget);
       expect(find.text('Ana'), findsOneWidget);
     });
   });
@@ -117,9 +117,9 @@ void main() {
       );
       expect(find.text('All · 12 games'), findsOneWidget);
       expect(find.text('All 12'), findsNothing);
-      // The summary counts games too, so the two numbers agree instead of
-      // inviting the reading that 12 games means 12 players.
-      expect(find.text('12 games recorded here'), findsOneWidget);
+      // The summary names both quantities, so the tab's game count cannot be
+      // misread as a row count.
+      expect(find.text('12 games · 1 player'), findsOneWidget);
     });
 
     testWidgets('a server that reports no split gets no tabs', (tester) async {
@@ -134,7 +134,7 @@ void main() {
       );
       expect(find.text('Ludo · 0 games'), findsNothing);
       expect(find.text('All · 5 games'), findsNothing);
-      expect(find.textContaining('5 games recorded here'), findsOneWidget);
+      expect(find.text('5 games · 1 player'), findsOneWidget);
     });
   });
 
