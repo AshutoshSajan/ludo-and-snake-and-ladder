@@ -66,8 +66,13 @@ class HomeScreen extends ConsumerWidget {
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          icon: const Icon(Icons.cloud_outlined),
-                          label: const Text('Online — all players'),
+                          // Trophy, and just "Leaderboard". The label used to
+                          // carry "Online" to tell it apart from the local
+                          // board; with that one removed there is nothing left
+                          // to disambiguate, so the qualifier was only making
+                          // the button longer than it needed to be.
+                          icon: const Icon(Icons.emoji_events),
+                          label: const Text('Leaderboard'),
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (_) => const ScoreboardScreen(),
