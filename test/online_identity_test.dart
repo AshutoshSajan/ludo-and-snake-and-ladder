@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:game_club/services/online_client.dart';
 import 'package:game_club/services/storage_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -54,5 +55,33 @@ void main() {
       id,
       reason: 'renaming must not orphan the recorded career',
     );
+  });
+
+  group('default names', () {
+    test('are generated, and well formed', () {
+      final name = DefaultNames.generate();
+      expect(name, isNotEmpty);
+      expect(name.split(' '), hasLength(2));
+      expect(name, matches(RegExp(r'^[A-Z][a-z]+ [A-Z][a-z]+$')));
+    });
+
+    test('the same salt always gives the same name', () {
+      // This is the property that matters: a name that changed on every visit would
+      // scatter one player's career across the leaderboard.
+      final a = DefaultNames.generate(salt: 12345);
+      final b = DefaultNames.generate(salt: 12345);
+      expect(a, b);
+    });
+
+    test('different salts give different names', () {
+      final names = {
+        for (var i = 0; i < 40; i++) DefaultNames.generate(salt: i * 977),
+      };
+      expect(
+        names.length,
+        greaterThan(20),
+        reason: 'the generator must not collapse onto a few names',
+      );
+    });
   });
 }

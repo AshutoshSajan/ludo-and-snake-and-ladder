@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
+import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
 import 'package:http/http.dart' as http;
@@ -2417,6 +2418,54 @@ void main() {
         expect(answered, isNull, reason: 'no response for a hijacked request');
       },
     );
+  });
+
+  group('web client cache policy', () {
+    // Flutter's web files are not content-hashed, so a cached main.dart.js kept
+    // running the previous deploy. That made "fixed on the server" and "fixed
+    // in your browser" two different things, and cost a debugging session more
+    // than once.
+    test('the app shell revalidates, bulk assets are held', () {
+      // The shell must never be served from a stale cache. '/' is in this list
+      // deliberately: the static handler answers it with index.html, but the
+      // *request* path has no file name, and keying off the name alone gave the
+      // home page a year-long immutable cache.
+      for (final shell in [
+        '/',
+        '/index.html',
+        '/main.dart.js',
+        '/flutter_bootstrap.js',
+        '/flutter_service_worker.js',
+      ]) {
+        expect(
+          webCacheHeaders(shell)['cache-control'],
+          contains('no-cache'),
+          reason: '$shell must revalidate, or a deploy stays invisible',
+        );
+      }
+      // Fonts and canvaskit are versioned by name and are most of the payload,
+      // so they can be held for a year.
+      for (final asset in [
+        '/assets/fonts/MaterialIcons-Regular.otf',
+        '/canvaskit/canvaskit.js',
+        '/icons/Icon-192.png',
+      ]) {
+        expect(
+          webCacheHeaders(asset)['cache-control'],
+          contains('max-age=31536000'),
+          reason: '$asset is content-addressed and safe to hold',
+        );
+      }
+    });
+
+    test('an unknown file is treated as a cacheable asset, not shell', () {
+      // Wrong in the safe direction: a file Flutter adds later is far more
+      // likely to be an asset than the app shell.
+      expect(
+        webCacheHeaders('/something-new.js')['cache-control'],
+        contains('max-age'),
+      );
+    });
   });
 }
 
