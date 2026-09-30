@@ -140,6 +140,26 @@ class DefaultNames {
     return '${_adjectives[rnd.nextInt(_adjectives.length)]} '
         '${_animals[rnd.nextInt(_animals.length)]}';
   }
+
+  /// A default name that is *uniquely* this player's.
+  ///
+  /// The word pair alone is not enough: 16x16 is 256 names, so a handful of
+  /// players would collide almost immediately, and two "Swift Otter" rows on
+  /// the leaderboard are indistinguishable. The suffix is derived from the id,
+  /// so the name stays friendly, stable, and distinct — and because it comes
+  /// from the same value the leaderboard groups by, it cannot drift from the
+  /// identity it represents.
+  static String unique({required String playerId}) {
+    var hash = 0;
+    for (final unit in playerId.codeUnits) {
+      hash = (hash * 31 + unit) & 0x7fffffff;
+    }
+    final base = generate(salt: hash);
+    // Four base-32 characters from the hash: short enough to read aloud, wide
+    // enough that collisions are vanishingly rare.
+    final tag = (hash % 0x10000).toRadixString(32).toUpperCase().padLeft(4, '0');
+    return '$base $tag';
+  }
 }
 
 class LeaderboardRow {
@@ -148,6 +168,7 @@ class LeaderboardRow {
     required this.wins,
     required this.games,
     required this.avgRank,
+    this.seatId = '',
   });
 
   factory LeaderboardRow.fromJson(Map<String, dynamic> j) => LeaderboardRow(
@@ -155,12 +176,22 @@ class LeaderboardRow {
     wins: j['wins'] as int? ?? 0,
     games: j['games'] as int? ?? 0,
     avgRank: (j['avgRank'] as num?)?.toDouble() ?? 0,
+    // The id the server groups by. Carried so the row's avatar is derived from
+    // the same value rather than from the display name, which two players may
+    // share.
+    seatId: j['seatId'] as String? ?? '',
   );
 
   final String name;
   final int wins; // first-place finishes
   final int games;
   final double avgRank; // lower is better; 1.0 = always first
+
+  /// The id the server grouped by — the player's stable identity. Used to
+  /// derive this row's avatar, so the face is tied to the player rather than
+  /// to a display name two players may share. Empty on an older server that
+  /// does not send it.
+  final String seatId;
 }
 
 /// The parsed GET /leaderboard response.

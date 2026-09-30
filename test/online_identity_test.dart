@@ -1,6 +1,8 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/services/online_client.dart';
 import 'package:game_club/services/storage_service.dart';
+import 'package:game_club/ui/shared/player_avatar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// The online identity: created once, reused every time, editable.
@@ -82,6 +84,49 @@ void main() {
         greaterThan(20),
         reason: 'the generator must not collapse onto a few names',
       );
+    });
+  });
+
+  group('unique default names', () {
+    test('are distinct for distinct ids — the pool alone is too small', () {
+      // 16x16 word pairs is 256 names, so bare collisions are near-certain.
+      // The suffix is what makes a name actually identify a player.
+      final names = {
+        for (var i = 0; i < 300; i++)
+          DefaultNames.unique(playerId: 'uhmr${i.toString().padLeft(8, '0')}0000000000000000'),
+      };
+      expect(names.length, 300, reason: 'two players shared a display name');
+    });
+
+    test('are stable for the same id, so one player keeps one name', () {
+      final a = DefaultNames.unique(playerId: 'uhmrFixedSeed0000000000000');
+      final b = DefaultNames.unique(playerId: 'uhmrFixedSeed0000000000000');
+      expect(a, b);
+    });
+
+    test('keep a readable word pair and a short tag', () {
+      final n = DefaultNames.unique(playerId: 'uhmrProbe00000000000000');
+      final parts = n.split(' ');
+      expect(parts.length, greaterThanOrEqualTo(3));
+      expect(n.length, lessThan(28), reason: 'a name should still fit a seat list');
+    });
+  });
+
+  group('PlayerAvatar', () {
+    testWidgets('renders for any id, including an empty one', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Row(children: [
+          PlayerAvatar(seed: 'a'),
+          PlayerAvatar(seed: 'b'),
+          PlayerAvatar(seed: ''),
+        ]),
+      ));
+      expect(find.byType(PlayerAvatar), findsNWidgets(3));
+    });
+
+    test('hash is stable, so a player always gets the same face', () {
+      expect(PlayerAvatar.stableHash('uhmr1'), PlayerAvatar.stableHash('uhmr1'));
+      expect(PlayerAvatar.stableHash('uhmr1'), isNot(PlayerAvatar.stableHash('uhmr2')));
     });
   });
 }
