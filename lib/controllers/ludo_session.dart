@@ -168,10 +168,39 @@ class LudoSession extends ChangeNotifier {
   }
 
   /// Toggle autoplay: human seats roll and pick moves automatically.
-  void toggleAutoPlay() {
-    autoPlay = !autoPlay;
+  ///
+  /// Online, the request goes to the server and the flag is not kept locally
+  /// at all: the table drives the seat from then on, so it keeps driving it
+  /// when this tab closes, and a player who rejoins finds the switch exactly
+  /// where they left it. Two clients must not both decide who plays a seat.
+  void toggleAutoPlay({bool? on}) {
+    final target = on ?? !autoPlayOn;
+    if (isOnline) {
+      online!.sendAutoplay(target);
+      notifyListeners();
+      return;
+    }
+    autoPlay = target;
     notifyListeners();
     scheduleNext();
+  }
+
+  /// Autoplay as the player should see it. Online this is the server's answer
+  /// — a local flag could disagree with the seat the moment someone reconnects.
+  bool get autoPlayOn => isOnline ? (online?.iAmAuto ?? false) : autoPlay;
+
+  /// Walk out of an online game: tell the table, take our pieces with us, and
+  /// stop listening. The remaining players get the announcement; we get out.
+  Future<void> leaveOnline() async {
+    final client = online;
+    if (client == null) return;
+    _timer?.cancel();
+    for (final t in _stepTimers) {
+      t.cancel();
+    }
+    _stepTimers.clear();
+    activeAnim = null;
+    await client.sendLeave();
   }
 
   // ------------------------------------------------------------ undo & hint
