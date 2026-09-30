@@ -93,8 +93,17 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                           children: [
                             Text(
+                              // Both numbers, because a tab labelled with a
+                              // count invites the reader to compare it against
+                              // the rows underneath — and the two are different
+                              // quantities. "Ludo · 1 game" above two players
+                              // reads as a broken ranking unless the header
+                              // says plainly that one is games and the other is
+                              // players.
                               '${data.games} '
-                              '${data.games == 1 ? 'game' : 'games'} recorded here',
+                              '${data.games == 1 ? 'game' : 'games'} · '
+                              '${data.rows.length} '
+                              '${data.rows.length == 1 ? 'player' : 'players'}',
                               textAlign: TextAlign.center,
                               style: const TextStyle(
                                 color: AppColors.ivoryDark,
@@ -129,7 +138,9 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     // players listed underneath. A bare number beside a game name reads as a
     // row count, and the two genuinely differ — 12 games can belong to 9
     // players — so "All 12" above 9 rows looked like broken ranking rather than
-    // a label that never claimed to be a row count.
+    // a label that never claimed to be a row count. The header above the list
+    // spells out both quantities so the comparison resolves instead of
+    // looking like a mismatch.
     String label(String g, int n) => '$g · $n ${n == 1 ? 'game' : 'games'}';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
