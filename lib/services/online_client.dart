@@ -295,6 +295,24 @@ class OnlineClient extends ChangeNotifier {
   ///
   /// A 4xx is a settled answer and is never retried; only a refusal or a 5xx
   /// is worth waiting out.
+  /// Whether a body plausibly holds the leaderboard JSON.
+  ///
+  /// Checked before decoding rather than by catching the decode failure, so
+  /// the "wrong server" case can be told apart from a truncated or corrupt
+  /// response.
+  static bool _looksLikeJson(String body) =>
+      body.trimLeft().startsWith('{') || body.trimLeft().startsWith('[');
+
+  /// A short, safe description of what actually arrived, for the error body.
+  static String _describeBody(String body) {
+    final head = body.trimLeft();
+    if (head.startsWith('<')) {
+      return 'an HTML page — the server URL probably points at the web app '
+          'instead of the game server';
+    }
+    return 'a ${body.length}-byte body that is not JSON';
+  }
+
   static Future<LeaderboardData> fetchLeaderboard(
     String serverUrl, {
     String? game,
@@ -334,6 +352,18 @@ class OnlineClient extends ChangeNotifier {
             if (resp.statusCode < 500) throw failure;
             pending = failure;
             continue;
+          }
+          if (resp.statusCode == 200 && !_looksLikeJson(resp.body)) {
+            // A 200 that is not JSON is not a flaky answer, it is the wrong
+            // server — and retrying it burns the whole cold-start budget before
+            // failing with a bare FormatException that names nothing. The usual
+            // cause: GAME_SERVER_URL was not baked into the build, so the
+            // client asks its own origin, the SPA rule answers with
+            // index.html, and a web page arrives where the API should be.
+            throw LeaderboardServerException(
+              resp.statusCode,
+              'expected JSON, got ${_describeBody(resp.body)}',
+            );
           }
           return LeaderboardData.fromJson(
             jsonDecode(resp.body) as Map<String, dynamic>,

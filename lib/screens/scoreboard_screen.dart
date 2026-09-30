@@ -72,7 +72,31 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
         future: _future,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
+            // A free-tier host sleeps, and the request now waits ~18s for it to
+            // wake. That wait used to be a bare spinner with no explanation,
+            // which is indistinguishable from a hang — and from the error that
+            // follows if it does eventually give up. The socket path already
+            // says "Starting the game server…"; this uses the same words so
+            // one habit covers both.
+            return const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text(
+                    'Starting the leaderboard server…',
+                    style: TextStyle(color: AppColors.ivoryDark, fontSize: 13),
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    'A free-tier host sleeps — the first load can take a moment.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                ],
+              ),
+            );
           }
           if (snap.hasError) return _error(snap.error!);
           final data = snap.data!;
