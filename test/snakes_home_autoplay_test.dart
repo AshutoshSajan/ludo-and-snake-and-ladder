@@ -12,6 +12,8 @@
 ///    full move short — walk, slide and dice tumble all overlap.
 library;
 
+import 'dart:math' show Random;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,11 +53,26 @@ class _SilentSound extends SoundService {
   Future<void> win() async {}
 }
 
+
+/// A die fixed to 1.
+///
+/// A pawn off the board can only enter on a 1, so any test about the walk out
+/// of home has to control the die. Leaving it to `Random()` made these tests
+/// pass or fail on the roll, which is not what they are about.
+class _OnesDie implements Random {
+  @override
+  int nextInt(int max) => 0; // rollDice does nextInt(6) + 1
+  @override
+  bool nextBool() => true;
+  @override
+  double nextDouble() => 0;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   _mockPlatformChannels();
 
-  Future<void> pumpGame(WidgetTester tester, int seats) async {
+  Future<void> pumpGame(WidgetTester tester, int seats, {Random? rng}) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       ProviderScope(
@@ -63,6 +80,7 @@ void main() {
         child: MaterialApp(
           home: SnakesGameView(
             seats: [for (var i = 0; i < seats; i++) SeatSetup(name: 'P$i')],
+            rng: rng,
           ),
         ),
       ),
@@ -176,7 +194,7 @@ void main() {
     testWidgets('the pawn starts on its chip and then enters the board', (
       tester,
     ) async {
-      await pumpGame(tester, 2);
+      await pumpGame(tester, 2, rng: _OnesDie());
       final b = tester.getRect(board());
       final chip0 = tester.getRect(homePawn(0));
       expect(chipColor(tester, 0), AppColors.snakesColors[0]);
@@ -249,7 +267,7 @@ void main() {
     testWidgets('switching it off mid-move still lands the pawn', (
       tester,
     ) async {
-      await pumpGame(tester, 2);
+      await pumpGame(tester, 2, rng: _OnesDie());
       await tester.tap(find.byIcon(Icons.auto_mode_outlined));
       await tester.pump(const Duration(milliseconds: 1150)); // auto beat
       await tester.pump();

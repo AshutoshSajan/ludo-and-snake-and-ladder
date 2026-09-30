@@ -57,12 +57,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
 
-  /// Whether the chat panel is expanded. Mirrors [OnlineClient.chatOpen],
-  /// which is what the client consults to decide whether an arriving line is
-  /// unread — the two must agree, or the dot would claim messages the reader is
-  /// already looking at.
-  bool _chatOpen = false;
-
   /// Game the host picks when creating a room; joiners inherit the room's.
   String _gameType = 'ludo';
 
@@ -154,13 +148,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       name: name,
       gameType: _gameType,
     )..addListener(() => setState(() {}));
-    // Announce a line that lands while the panel is closed. The unread dot is
-    // already covered by the client's own listener; this is the notification
-    // itself, so a message is not something you only notice on the icon.
-    client.onChat = (message) {
-      if (!mounted || _chatOpen) return;
-      _showSnack('${message.from}: ${message.text}');
-    };
     setState(() => _client = client);
     client.connect(
       code: createRoom ? null : code,
@@ -176,15 +163,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   Future<void> _disconnect() async {
     await _client?.disconnect();
-    // Reset the panel with the client. Leaving _chatOpen true would make the
-    // next connection's first message count as already-read, so it would never
-    // raise a notification.
-    if (mounted) {
-      setState(() {
-        _client = null;
-        _chatOpen = false;
-      });
-    }
+    if (mounted) setState(() => _client = null);
   }
 
   /// The walk-out path from inside either game view: the intent has already
@@ -201,30 +180,11 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       appBar: AppBar(
         title: const Text('Play Online'),
         actions: [
-          if (client != null)
-            // The chat icon carries the unread dot, so a line that arrives
-            // while the player is reading the seats (or has the panel closed)
-            // is still announced. Opening the panel is what marks it read.
-            IconButton(
-              icon: Badge(
-                isLabelVisible: client.unreadChats > 0,
-                backgroundColor: Colors.redAccent,
-                smallSize: 9,
-                child: Icon(
-                  client.chatOpen
-                      ? Icons.chat_bubble
-                      : Icons.chat_bubble_outline,
-                ),
-              ),
-              tooltip: client.unreadChats > 0
-                  ? 'Chat (${client.unreadChats} new)'
-                  : 'Chat',
-              onPressed: () => setState(() {
-                final open = !client.chatOpen;
-                client.setChatOpen(open);
-                _chatOpen = open;
-              }),
-            ),
+          // No message icon here. Chat lives on the game board's app bar, next
+          // to the sound and autoplay controls, because that is where a player
+          // is once a room exists. A second chat icon in the lobby put the same
+          // control in two places and left the lobby bar carrying a glyph that
+          // did nothing until the game had already replaced the screen.
           if (client != null && client.state == null)
             IconButton(
               icon: const Icon(Icons.close),
@@ -637,21 +597,22 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 : client.sendStart,
           ),
         const SizedBox(height: 16),
-        // Light-weight table talk, behind the chat icon so the lobby is not
-        // half chat log. Opening the panel clears the unread dot.
-        if (_chatOpen)
-          for (final line in client.chat.reversed.take(6))
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Text(
-                '${line.from}: ${line.text}',
-                style: TextStyle(
-                  color: AppColors.ivory.withAlpha(200),
-                  fontSize: 13,
-                ),
+        // Table talk, inline in the lobby only. Once the game starts this
+        // screen is replaced by the board, which has its own chat control in
+        // the app bar; the two are separate surfaces, not two views of one
+        // panel, so the lobby keeps its inline list and never opens the sheet.
+        for (final line in client.chat.reversed.take(6))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Text(
+              '${line.from}: ${line.text}',
+              style: TextStyle(
+                color: AppColors.ivory.withAlpha(200),
+                fontSize: 13,
               ),
             ),
-        if (_chatOpen && !spectating)
+          ),
+        if (!spectating)
           Row(
             children: [
               Expanded(

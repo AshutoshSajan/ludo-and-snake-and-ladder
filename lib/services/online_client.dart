@@ -659,10 +659,17 @@ class OnlineClient extends ChangeNotifier {
       case 'chat':
         final line = (from: msg['from'] as String, text: msg['text'] as String);
         chat.add(line);
-        // Unread only accumulates while the panel is closed. A message that
-        // arrives while the reader is looking at the chat is read by
+        // Unread only accumulates while the chat surface is closed. A message
+        // that arrives while the reader is looking at it is read by
         // definition, and counting it would leave a dot that never clears.
-        if (!chatOpen) unreadChats += 1;
+        if (!chatOpen) {
+          unreadChats += 1;
+          // Audible, because a dot is easy to miss and the point of a message
+          // is that it reaches you. Plays for unread arrivals only: while the
+          // sheet is open you are already reading, and a chime per line would
+          // be noise.
+          onMessageArrived?.call(line);
+        }
         onChat?.call(line);
       case 'roomClosed':
         // The authority dropped an abandoned room (grace period expired).
@@ -707,18 +714,22 @@ class OnlineClient extends ChangeNotifier {
   /// screen can raise a notification and repaint the unread dot.
   void Function(({String from, String text}) message)? onChat;
 
-  /// Whether the chat panel is on screen. The screen owns this because it is
-  /// the thing being hidden or shown; the client only needs it to decide
-  /// whether an arriving line is unread.
+  /// Whether the chat surface is on screen. The sheet sets this while it is
+  /// open; the client only needs it to decide whether an arriving line is
+  /// unread and whether to chime.
   bool chatOpen = false;
 
   /// Chat lines that arrived while [chatOpen] was false. Drives the red dot on
-  /// the chat icon; cleared by [markChatRead] the moment the panel opens.
+  /// the chat icon; cleared by [markChatRead] the moment the sheet opens.
   int unreadChats = 0;
 
-  /// Show the panel. Reading and opening are the same act, so opening clears
-  /// the unread count immediately rather than waiting for the panel to close
-  /// again.
+  /// Called for each line that arrives while the chat is closed, so the view
+  /// can play the notification. Separate from [onChat] on purpose: [onChat]
+  /// fires for every line, and only the unread ones should make a noise.
+  void Function(({String from, String text}) message)? onMessageArrived;
+
+  /// Show the chat. Reading and opening are the same act, so opening clears
+  /// the unread count immediately rather than waiting for the sheet to close.
   void setChatOpen(bool open) {
     chatOpen = open;
     if (open) markChatRead();

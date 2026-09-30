@@ -266,9 +266,17 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         title: const Text('Snakes & Ladders'),
         actions: [
           const SoundToggleButton(),
+          // The red dot is the unread count; it clears when the sheet opens.
           IconButton(
-            icon: const Icon(Icons.forum_outlined),
-            tooltip: 'Table chat',
+            icon: Badge(
+              isLabelVisible: widget.client.unreadChats > 0,
+              backgroundColor: Colors.redAccent,
+              smallSize: 9,
+              child: const Icon(Icons.forum_outlined),
+            ),
+            tooltip: widget.client.unreadChats > 0
+                ? 'Table chat (${widget.client.unreadChats} new)'
+                : 'Table chat',
             onPressed: () => GameChatSheet.show(context, widget.client),
           ),
           IconButton(

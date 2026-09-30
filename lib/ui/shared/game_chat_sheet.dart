@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
 import '../theme.dart';
 
@@ -8,7 +10,7 @@ import '../theme.dart';
 /// Chat used to exist only in the lobby — the one screen where you are not
 /// mid-game — so a table could not talk to itself while playing. This opens
 /// from a board's app bar instead, and shows recent history plus an input.
-class GameChatSheet extends StatefulWidget {
+class GameChatSheet extends ConsumerStatefulWidget {
   const GameChatSheet({super.key, required this.client});
 
   final OnlineClient client;
@@ -27,20 +29,32 @@ class GameChatSheet extends StatefulWidget {
   }
 
   @override
-  State<GameChatSheet> createState() => _GameChatSheetState();
+  ConsumerState<GameChatSheet> createState() => _GameChatSheetState();
 }
 
-class _GameChatSheetState extends State<GameChatSheet> {
+class _GameChatSheetState extends ConsumerState<GameChatSheet> {
   final _input = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     widget.client.addListener(_onClient);
+    // Opening the sheet is the read act, so mark it as such immediately —
+    // otherwise a message arriving while it is open would still count as
+    // unread and the dot on the app bar icon would never clear.
+    widget.client.setChatOpen(true);
+    // Wired here rather than at the app bar icon so every path that opens the
+    // sheet gets the sound, including a future one.
+    widget.client.onMessageArrived =
+        (_) => ref.read(soundServiceProvider).message();
   }
 
   @override
   void dispose() {
+    widget.client.setChatOpen(false);
+    // Leave no dangling callback: the client outlives this sheet, and a stale
+    // hook would keep playing audio through a disposed State.
+    widget.client.onMessageArrived = null;
     widget.client.removeListener(_onClient);
     _input.dispose();
     super.dispose();

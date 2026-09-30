@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show Random;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -19,9 +20,14 @@ import '../shared/pulse.dart';
 
 /// Full Snakes & Ladders game screen (2..10 players, human or bot seats).
 class SnakesGameView extends ConsumerStatefulWidget {
-  const SnakesGameView({super.key, required this.seats});
+  const SnakesGameView({super.key, required this.seats, this.rng});
 
   final List<SeatSetup> seats;
+
+  /// Die source. Injectable for tests, which need to control the roll: a pawn
+  /// off the board can only enter on a 1, so a test about the walk out of home
+  /// cannot leave the die to chance. Matches [LudoSession].
+  final Random? rng;
 
   @override
   ConsumerState<SnakesGameView> createState() => _SnakesGameViewState();
@@ -46,6 +52,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
       profiles: ref.read(profilesProvider.notifier),
       sound: ref.read(soundServiceProvider),
       onGameOver: _onGameOver,
+      rng: widget.rng,
     );
     session.addListener(_onSessionChanged);
   }
