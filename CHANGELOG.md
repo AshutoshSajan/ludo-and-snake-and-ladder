@@ -7,6 +7,50 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(online): a reusable player identity, in-game chat, and a dice that signals
+
+Three things the online tables were missing, plus one that had gone
+missing on a screen where it had shipped.
+
+A reusable player identity. The connect form asked for a name every
+time, and the seat id was generated per session:
+
+  final String _seatId = 'u${DateTime.now()...}';
+
+The server keys every recorded result by seat id, so that made each
+session a *different player* to the server: no career carried across
+games, and a new leaderboard row every time. Saving the name alone would
+not have fixed it — you would have been the same name under a fresh id
+each session, filling the board with duplicate rows of you.
+
+The id is now created once and persisted, the name is remembered and
+prefilled, and the name stays freely editable. The id is shown
+read-only rather than hidden, because it is what wins attach to, and
+it is deliberately not editable: changing it would orphan the career
+already recorded under it. There is a test for exactly that.
+
+In-game chat. Chat was reachable only from the lobby — the one screen
+where you are not mid-game — so a running table could not talk to
+itself. Both online boards now open a chat sheet over the board, with
+history and an input that lifts above the keyboard.
+
+The server was never the problem: chat is handled ahead of the "no game
+yet" guard and already worked in every phase. Two tests pin that, so
+moving the chat case behind the guard later cannot quietly break
+in-game chat while the lobby keeps working.
+
+A dice that signals. Snakes' die was hardcoded gold for every seat and
+never pulsed; it now takes the current player's corner colour and
+breathes on your turn. Ludo already wore the corner colour, so it only
+gained the pulse — driven by `isCurrent` rather than "is my turn",
+because Ludo shows a die per corner and an AI or remote seat's corner
+needs the cue too.
+
+Also fixes the per-game leaderboard tabs, which were present but
+invisible: three labelled segments with icons do not fit a phone, and a
+SegmentedButton that overflows clips its *last* segment, so "Snakes"
+was cut off rather than squashed. Now iconless and horizontally
+scrollable, so a longer label cannot hide a tab again.
 - Feat(leaderboard): per-game boards for Ludo and Snakes
 
 The online leaderboard had no game dimension at all. Every finished game
