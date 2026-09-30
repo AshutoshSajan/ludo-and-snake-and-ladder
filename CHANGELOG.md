@@ -28,6 +28,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Name both leaderboard quantities, and fail the Netlify build without a server URL
 - Run the quality gate locally, since CI is over its runner quota
 - Host the web client on Netlify instead of Vercel
 - Give every player a unique name and an avatar
