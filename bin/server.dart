@@ -578,12 +578,27 @@ Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
       headers: {'content-type': 'application/json'},
     );
   }
+  // ?game=snakes (or ludo) narrows the board to one game; omitting it keeps
+  // the combined board. The per-game counts are always reported so a client
+  // can label the tabs ("Ludo 12 · Snakes 4") without a request per tab.
+  final requested = req.url.queryParameters['game'];
+  final game = switch (requested) {
+    'ludo' => 'ludo',
+    'snakes' => 'snakes',
+    _ => null,
+  };
   return shelf.Response.ok(
     jsonEncode({
       'ok': true,
-      'games': await leaderboardStore.totalGames(),
+      'games': await leaderboardStore.totalGames(game: game),
+      'game': game ?? 'all',
+      'gamesByGame': {
+        'ludo': await leaderboardStore.totalGames(game: 'ludo'),
+        'snakes': await leaderboardStore.totalGames(game: 'snakes'),
+      },
       'players': [
-        for (final e in await leaderboardStore.topPlayers()) e.toJson(),
+        for (final e in await leaderboardStore.topPlayers(game: game))
+          e.toJson(),
       ],
     }),
     headers: {'content-type': 'application/json'},

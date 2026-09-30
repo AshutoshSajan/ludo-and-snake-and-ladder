@@ -37,9 +37,9 @@ class TursoLeaderboardStore implements LeaderboardStore {
     required Uri url,
     required this.authToken,
     http.Client? client,
-  })  : _baseUrl = _normalizeBaseUrl(url),
-        _client = client ?? http.Client(),
-        _ownsClient = client == null;
+  }) : _baseUrl = _normalizeBaseUrl(url),
+       _client = client ?? http.Client(),
+       _ownsClient = client == null;
 
   /// Reads `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN`. Returns null when
   /// either is missing so callers can fall back to a local store.
@@ -53,7 +53,10 @@ class TursoLeaderboardStore implements LeaderboardStore {
       return null;
     }
     return TursoLeaderboardStore(
-        url: Uri.parse(url), authToken: token, client: client);
+      url: Uri.parse(url),
+      authToken: token,
+      client: client,
+    );
   }
 
   /// `turso://` and `libsql://` URLs are https URLs in disguise.
@@ -88,10 +91,12 @@ class TursoLeaderboardStore implements LeaderboardStore {
         '(seat_id TEXT PRIMARY KEY, name TEXT NOT NULL)',
   ];
 
-  static const _insertSql = 'INSERT OR IGNORE INTO results '
-      '(game_id, seat_id, name, color, rank, played_at) '
-      'VALUES (?, ?, ?, ?, ?, ?)';
-  static const _upsertPlayerSql = 'INSERT INTO players (seat_id, name) '
+  static const _insertSql =
+      'INSERT OR IGNORE INTO results '
+      '(game_id, seat_id, name, color, rank, played_at, game) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?)';
+  static const _upsertPlayerSql =
+      'INSERT INTO players (seat_id, name) '
       'VALUES (?, ?) '
       'ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name';
   static const _topPlayersSql = '''
@@ -106,8 +111,33 @@ class TursoLeaderboardStore implements LeaderboardStore {
       ORDER BY wins DESC, avg_rank ASC, games DESC
       LIMIT ?
 ''';
+  static const _topPlayersForGameSql = '''
+      SELECT r.seat_id AS seat_id,
+             p.name AS name,
+             SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END) AS wins,
+             COUNT(*) AS games,
+             AVG(r.rank) AS avg_rank
+      FROM results r
+      JOIN players p ON p.seat_id = r.seat_id
+      WHERE r.game = ?
+      GROUP BY r.seat_id
+      ORDER BY wins DESC, avg_rank ASC, games DESC
+      LIMIT ?
+  ''';
   static const _totalGamesSql =
       'SELECT COUNT(DISTINCT game_id) AS n FROM results';
+  static const _totalGamesForGameSql =
+      'SELECT COUNT(DISTINCT game_id) AS n FROM results WHERE game = ?';
+
+  /// Adds `game` to a database created before per-game boards existed. SQLite
+  /// has no `ADD COLUMN IF NOT EXISTS`, so the column list is checked first and
+  /// the ALTER is a no-op when the column is already present. Rows already
+  /// stored keep the empty default: their game is unknown, and claiming Ludo
+  /// would invent history, so they count only on the combined board.
+  static const _hasGameColumnSql =
+      'SELECT COUNT(*) AS n FROM pragma_table_info(?) WHERE name = ?';
+  static const _addGameColumnSql =
+      "ALTER TABLE results ADD COLUMN game TEXT NOT NULL DEFAULT ''";
 
   static const _timeout = Duration(seconds: 10);
 
@@ -132,7 +162,15 @@ class TursoLeaderboardStore implements LeaderboardStore {
     final now = DateTime.now().millisecondsSinceEpoch;
     final requests = <Map<String, dynamic>>[
       for (final r in results) ...[
-        _execute(_insertSql, [gameId, r.seatId, r.name, r.color, r.rank, now]),
+        _execute(_insertSql, [
+          gameId,
+          r.seatId,
+          r.name,
+          r.color,
+          r.rank,
+          now,
+          r.game,
+        ]),
         _execute(_upsertPlayerSql, [r.seatId, r.name]),
       ],
       _close(),
@@ -141,10 +179,18 @@ class TursoLeaderboardStore implements LeaderboardStore {
   }
 
   @override
-  Future<List<LeaderboardEntry>> topPlayers({int limit = 10}) async {
+  Future<List<LeaderboardEntry>> topPlayers({
+    int limit = 10,
+    String? game,
+  }) async {
     await _ensureSchema();
-    final results =
-        await _runPipeline([_execute(_topPlayersSql, [limit]), _close()]);
+    final results = await _runPipeline([
+      if (game == null)
+        _execute(_topPlayersSql, [limit])
+      else
+        _execute(_topPlayersForGameSql, [game, limit]),
+      _close(),
+    ]);
     final table = _ResultTable(_executeResult(results, 0));
     return [
       for (final row in table.rows)
@@ -159,9 +205,15 @@ class TursoLeaderboardStore implements LeaderboardStore {
   }
 
   @override
-  Future<int> totalGames() async {
+  Future<int> totalGames({String? game}) async {
     await _ensureSchema();
-    final results = await _runPipeline([_execute(_totalGamesSql), _close()]);
+    final results = await _runPipeline([
+      if (game == null)
+        _execute(_totalGamesSql)
+      else
+        _execute(_totalGamesForGameSql, [game]),
+      _close(),
+    ]);
     final table = _ResultTable(_executeResult(results, 0));
     return table.cell(table.rows.single, 'n') as int;
   }
@@ -178,17 +230,36 @@ class TursoLeaderboardStore implements LeaderboardStore {
   Future<void> _createSchema() async {
     try {
       await _runPipeline([..._schemaSql.map(_execute), _close()]);
+      await _addGameColumnIfMissing();
     } catch (_) {
       _schemaReady = null; // let the next call retry
       rethrow;
     }
   }
 
+  /// Brings a database created before per-game boards up to date. The CREATE
+  /// TABLE statements above are all `IF NOT EXISTS`, so on an existing
+  /// deployment they change nothing and the `game` column would be missing —
+  /// which is how the deployed store ended up unable to record or filter by
+  /// game at all. Checked and altered separately because SQLite has no
+  /// `ADD COLUMN IF NOT EXISTS`.
+  Future<void> _addGameColumnIfMissing() async {
+    final results = await _runPipeline([
+      _execute(_hasGameColumnSql, ['results', 'game']),
+      _close(),
+    ]);
+    final table = _ResultTable(_executeResult(results, 0));
+    final present = (table.cell(table.rows.single, 'n') as int) > 0;
+    if (present) return;
+    await _runPipeline([_execute(_addGameColumnSql), _close()]);
+  }
+
   /// Sends one pipeline (one HTTP request, one fresh server-side stream)
   /// and returns its results, throwing [TursoLeaderboardException] on any
   /// transport, HTTP, or statement failure.
   Future<List<dynamic>> _runPipeline(
-      List<Map<String, dynamic>> requests) async {
+    List<Map<String, dynamic>> requests,
+  ) async {
     final http.Response response;
     try {
       response = await _client
@@ -203,29 +274,36 @@ class TursoLeaderboardStore implements LeaderboardStore {
           .timeout(_timeout);
     } on TimeoutException {
       throw TursoLeaderboardException(
-          'Turso request timed out after ${_timeout.inSeconds}s');
+        'Turso request timed out after ${_timeout.inSeconds}s',
+      );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw TursoLeaderboardException('Turso pipeline failed '
-          '(HTTP ${response.statusCode}): ${_snippet(response.body)}');
+      throw TursoLeaderboardException(
+        'Turso pipeline failed '
+        '(HTTP ${response.statusCode}): ${_snippet(response.body)}',
+      );
     }
     final Object? decoded;
     try {
       decoded = jsonDecode(response.body);
     } on FormatException catch (e) {
       throw TursoLeaderboardException(
-          'Turso returned invalid JSON: ${e.message}');
+        'Turso returned invalid JSON: ${e.message}',
+      );
     }
     final results = (decoded as Map?)?['results'];
     if (results is! List) {
-      throw TursoLeaderboardException('Turso response has no results array: '
-          '${_snippet(response.body)}');
+      throw TursoLeaderboardException(
+        'Turso response has no results array: '
+        '${_snippet(response.body)}',
+      );
     }
     for (var i = 0; i < results.length; i++) {
       final entry = results[i];
       if (entry is Map && entry['type'] == 'error') {
         throw TursoLeaderboardException(
-            'Turso pipeline step $i failed: ${_errorMessage(entry)}');
+          'Turso pipeline step $i failed: ${_errorMessage(entry)}',
+        );
       }
     }
     return results;
@@ -236,12 +314,14 @@ class TursoLeaderboardStore implements LeaderboardStore {
     final entry = results[index] as Map?;
     if (entry == null || entry['type'] != 'ok') {
       throw TursoLeaderboardException(
-          'Turso pipeline step $index failed: ${_errorMessage(entry)}');
+        'Turso pipeline step $index failed: ${_errorMessage(entry)}',
+      );
     }
     final result = (entry['response'] as Map?)?['result'] as Map?;
     if (result == null) {
       throw TursoLeaderboardException(
-          'Turso pipeline step $index has no result');
+        'Turso pipeline step $index has no result',
+      );
     }
     return Map<String, dynamic>.from(result);
   }
@@ -261,39 +341,39 @@ class TursoLeaderboardStore implements LeaderboardStore {
   }
 
   static Map<String, dynamic> _execute(String sql, [List<Object?>? args]) => {
-        'type': 'execute',
-        'stmt': {
-          'sql': sql,
-          if (args != null)
-            'args': [for (final arg in args) _encodeArg(arg)],
-        },
-      };
+    'type': 'execute',
+    'stmt': {
+      'sql': sql,
+      if (args != null) 'args': [for (final arg in args) _encodeArg(arg)],
+    },
+  };
 
   static Map<String, dynamic> _close() => const {'type': 'close'};
 
   /// Encodes a Dart value as a pipeline argument. Integers are serialized
   /// as strings per the API docs (JSON numbers cannot hold all 64-bit ints).
   static Map<String, dynamic> _encodeArg(Object? value) => switch (value) {
-        null => const {'type': 'null', 'value': null},
-        int i => {'type': 'integer', 'value': '$i'},
-        double d => {'type': 'float', 'value': d},
-        String s => {'type': 'text', 'value': s},
-        _ => throw ArgumentError(
-            'unsupported Turso arg type: ${value.runtimeType}'),
-      };
+    null => const {'type': 'null', 'value': null},
+    int i => {'type': 'integer', 'value': '$i'},
+    double d => {'type': 'float', 'value': d},
+    String s => {'type': 'text', 'value': s},
+    _ => throw ArgumentError(
+      'unsupported Turso arg type: ${value.runtimeType}',
+    ),
+  };
 }
 
 /// A decoded `execute` result: column names plus rows of plain Dart values.
 class _ResultTable {
   _ResultTable(Map<String, dynamic> result)
-      : columns = [
-          for (final col in result['cols'] as List<dynamic>? ?? const [])
-            (col is Map ? col['name'] : col) as String? ?? '',
-        ],
-        rows = [
-          for (final row in result['rows'] as List<dynamic>? ?? const [])
-            [for (final cell in row as List<dynamic>) _decodeValue(cell)],
-        ];
+    : columns = [
+        for (final col in result['cols'] as List<dynamic>? ?? const [])
+          (col is Map ? col['name'] : col) as String? ?? '',
+      ],
+      rows = [
+        for (final row in result['rows'] as List<dynamic>? ?? const [])
+          [for (final cell in row as List<dynamic>) _decodeValue(cell)],
+      ];
 
   final List<String> columns;
   final List<List<Object?>> rows;
