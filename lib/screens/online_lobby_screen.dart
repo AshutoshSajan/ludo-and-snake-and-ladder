@@ -129,7 +129,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final client = _client;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Online Ludo'),
+        title: const Text('Play Online'),
         actions: [
           if (client != null && client.state == null)
             IconButton(
@@ -189,10 +189,15 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       children: [
         const Icon(Icons.wifi, size: 48, color: AppColors.gold),
         const SizedBox(height: 8),
-        const Center(
+        Center(
           child: Text(
-            'Play Ludo online against friends',
-            style: TextStyle(color: AppColors.ivory, fontSize: 16),
+            // Names the game the Ludo/Snakes toggle below has selected, so the
+            // pitch matches what this room will actually be. It used to say
+            // "Ludo" unconditionally, which made the whole screen read as
+            // Ludo-only to anyone looking for online Snakes.
+            'Play ${_gameType == 'snakes' ? 'Snakes & Ladders' : 'Ludo'} '
+            'online against friends',
+            style: const TextStyle(color: AppColors.ivory, fontSize: 16),
           ),
         ),
         const SizedBox(height: 24),
