@@ -30,11 +30,35 @@ latest_tag_version() {
   git tag --list 'v[0-9]*' --sort=-v:refname | head -1 | sed 's/^v//'
 }
 
+# Semver from the commits since the last tag, not a constant.
+#
+# This used to be `$major.$((minor + 1)).0` unconditionally, which meant patch
+# could never advance, major could never advance, and a release containing only
+# bug fixes still moved the minor. `breaking` is honoured because a major bump
+# is a statement users rely on.
+bump_level() {
+  local since=$1 subjects
+  subjects=$(git log --format='%s%n%b' "$since..HEAD" 2>/dev/null || true)
+  if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$subjects"       || grep -qiE '^BREAKING CHANGE' <<<"$subjects"; then
+    echo major
+  elif grep -qE '^feat(\([^)]*\))?!?:' <<<"$subjects"; then
+    echo minor
+  else
+    # fix, perf, refactor, or a subject that predates the convention: a change
+    # users receive, so they need a version that differs from the last one.
+    echo patch
+  fi
+}
+
 bump() {
-  local v=$1 major minor patch
+  local v=$1 level=$2 major minor patch
   IFS=. read -r major minor patch <<<"$v"
   : "${major:=0}" "${minor:=0}" "${patch:=0}"
-  echo "$major.$((minor + 1)).0"
+  case "$level" in
+    major) echo "$((major + 1)).0.0" ;;
+    minor) echo "$major.$((minor + 1)).0" ;;
+    patch) echo "$major.$minor.$((patch + 1))" ;;
+  esac
 }
 
 case "${1:-}" in
@@ -44,8 +68,10 @@ case "${1:-}" in
   --bump)
     latest=$(latest_tag_version)
     [ -n "$latest" ] || die "no v* tags found; pass --set <version> explicitly"
-    echo "declared $(current), latest tag v$latest" >&2
-    bump "$latest"
+    tag_ref="v$latest"
+    level=$(bump_level "$tag_ref")
+    echo "latest tag v$latest, bumping $level" >&2
+    bump "$latest" "$level"
     ;;
   --set)
     v=${2:-}

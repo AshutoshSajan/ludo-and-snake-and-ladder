@@ -218,7 +218,7 @@ void main() {
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
       expect(workflow, contains("tags: ['v*']"),
           reason: 'release tags must trigger the workflow');
-      expect(workflow, contains('needs: release-prep'),
+      expect(workflow, contains('needs: [release-prep, verify-release]'),
           reason: 'publishing must wait on a job that runs on tags');
       // Scoped to publish-firefox, not the whole file. `test` is legitimately
       // dependable from anything else that runs on a pull request; only the
@@ -233,7 +233,7 @@ void main() {
       expect(fox, isNot(contains('needs: test')),
           reason: 'publishing must not wait on the PR-only test job');
       // The commented-out Chrome job had the same defect; keep it consistent.
-      expect(workflow, contains('# needs: release-prep'));
+      expect(workflow, contains('# needs: [release-prep, verify-release]'));
     });
 
     test('the pre-push hook gates pushes and does not rewrite them', () {
@@ -372,6 +372,44 @@ void main() {
       // replaced asset execute.
       expect(body, contains('GIT_CLIFF_SHA256'));
       expect(body, contains('sha256sum -c -'));
+    });
+
+    test('a release tag cannot publish untested code', () {
+      // `test` is pull-request-only, so the tag path had no test gate at all:
+      // it verified the changelog and the version, built, and uploaded. A tag
+      // must not ship code nothing has run.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      expect(workflow, matches(RegExp(r'^  verify-release:', multiLine: true)),
+          reason: 'the tag path needs its own test gate');
+      // The body is sliced out line-by-line rather than by regex. A lookahead
+      // would need [\s\S]*? plus an end anchor, and Dart's RegExp is
+      // ECMAScript-based: it has no \Z, which there matches a literal "Z" and
+      // silently finds nothing.
+      final body = workflow
+          .split('\n')
+          .skipWhile((l) => l != '  verify-release:')
+          .skip(1)
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:$').hasMatch(l))
+          .join('\n');
+      expect(body, isNotEmpty, reason: 'the job body must be found');
+      expect(body, contains("startsWith(github.ref, 'refs/tags/v')"),
+          reason: 'it gates tags, not every push');
+      expect(body, contains('flutter test'));
+      expect(body, contains('flutter analyze --fatal-infos'));
+      // Publishing must wait for it, or the gate is decorative.
+      expect(workflow, contains('needs: [release-prep, verify-release]'));
+    });
+
+    test('the bot retries its push instead of failing on a race', () {
+      // If the branch moved during the run the push is rejected. Going red for
+      // a race nobody caused is noise that trains people to ignore CI - and it
+      // happened twice locally while this branch was being built.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      expect(workflow, contains('for attempt in 1 2 3'));
+      expect(workflow, contains('pull --rebase'));
+      // Never --force: that could discard someone else's commit.
+      expect(workflow, isNot(contains('push --force')));
+      expect(workflow, isNot(contains('push -f ')));
     });
   });
 }

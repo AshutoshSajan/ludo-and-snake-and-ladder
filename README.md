@@ -138,9 +138,10 @@ gh pr create --base dev                     # PR to the parent, never main
 release web build) and on **every merge to `dev`/`staging`/`main`**.
 
 > **Which event runs what.** `pull_request` runs the `test` job and nothing
-> else — analyze, the full suite, and a release web build. `push` runs the
-> `release-prep` job: it regenerates `CHANGELOG.md`, bumps the version, and on
-> a `v*` tag publishes to addons.mozilla.org. The two never overlap.
+> else — analyze, the full suite, and a release web build. `push` runs
+> `release-prep`: regenerate `CHANGELOG.md` and bump the version. A `v*` tag
+> then runs `verify-release` (the same gate, because `test` cannot run there)
+> and `publish-firefox`, in that order.
 >
 > Tests used to run only for PRs targeting `main`, because runner minutes are
 > metered and this repo had exhausted them. That was a quota decision dressed up
@@ -343,7 +344,7 @@ tool/ci.sh --web        # also build web release     (~90s)
 tool/changelog.sh       # rewrite CHANGELOG.md
 tool/changelog.sh --check   # fail if out of date, change nothing
 tool/version.sh         # print the version
-tool/version.sh --bump  # print the next version, write nothing
+tool/version.sh --bump  # next version, from the commits since the last tag
 tool/version.sh --set 1.2.0   # write it to pubspec + both manifests
 ```
 
@@ -368,6 +369,11 @@ AMO rejects an upload whose version does not increase, so that drift surfaces
 during a release with credentials in hand rather than before it. It also sorts
 tags with `-v:refname`, because lexical order puts v1.9.0 above v1.10.0 and
 bumping from the wrong "latest" moves the version backwards.
+
+`--bump` reads the commits since the last tag: `feat!` or `BREAKING CHANGE`
+moves the major, `feat` the minor, anything else the patch. It used to add one
+to the minor unconditionally, which meant patch and major could never advance
+and a bug-fix-only release still moved the minor.
 
 **Bypassing, and what it costs.** `git push --no-verify` skips all of it, and so
 does `SKIP_LOCAL_CI=1 git push` for just the slow half. Be deliberate about it:
