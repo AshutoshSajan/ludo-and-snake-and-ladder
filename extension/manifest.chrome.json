@@ -11,7 +11,7 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Open Game Club",
+    "default_title": "Game Club",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

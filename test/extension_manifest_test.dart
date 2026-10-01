@@ -69,38 +69,57 @@ void main() {
   });
 
   test('the popup hosts the game itself, and still offers a tab', () {
-    // Asked for directly: play from the popup without leaving the page. Done
-    // with an iframe over the launcher rather than by replacing the popup
-    // document, so the menu is one click away and so the popup can be closed
-    // back into a launcher at all.
+    // Asked for directly: play from the popup without leaving the page. An
+    // iframe rather than replacing the popup document, so the page can keep
+    // the one control it still needs.
     final html = File('extension/popup.html').readAsStringSync();
     final js = File('extension/popup.js').readAsStringSync();
     expect(html, contains('<iframe id="game"'),
         reason: 'the game must be able to run inside the popup');
     expect(html, contains('src="index.html"'));
-    expect(js, contains("classList.add('playing')"),
-        reason: 'playing has to show the frame and hide the launcher');
     // A popup closes when you click outside it. The tab escape hatch stays for
     // exactly that reason and must not be quietly removed.
     expect(html, contains('id="tab"'));
     expect(js, contains('chrome.tabs.create'));
   });
 
+  test('the popup goes straight to the main screen, with no menu in front', () {
+    // The launcher - a die, an "Open Game Club" button, a "Play online"
+    // button - duplicated the app's own home screen and asked the same question
+    // twice. It was removed on request, and it is easy to reintroduce by
+    // accident because the old markup looks reasonable.
+    // Comments are stripped first: popup.html explains in prose which buttons
+    // it used to have, and that history is worth keeping. Checking the raw
+    // file would flag its own explanation as a regression.
+    final html = File('extension/popup.html')
+        .readAsStringSync()
+        .replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
+    final js = File('extension/popup.js')
+        .readAsStringSync()
+        .replaceAll(RegExp(r'//.*'), '');
+    for (final gone in ['id="launcher"', 'id="play"', 'id="online"',
+        'id="back"', 'Open Game Club']) {
+      expect(html, isNot(contains(gone)),
+          reason: 'the popup must open on the main screen, not a menu: $gone');
+    }
+    expect(js, isNot(contains('classList.add')),
+        reason: 'there is no longer a menu to dismiss');
+    // The one surviving control, so the popup is not stripped bare.
+    expect(html, contains('id="tab"'));
+  });
+
   test('the game iframe is never display:none', () {
     // The bug this pins: a display:none iframe has a 0x0 viewport, so Flutter
     // measured itself at zero, rendered nothing, and did not re-layout when
-    // the launcher was dismissed. The click looked like it did nothing. The
-    // launcher is hidden with opacity so the iframe keeps its size and stays
-    // warm.
+    // the launcher was dismissed. The click looked like it did nothing. With
+    // no launcher there is nothing to hide, and the frame is laid out and
+    // visible from the first paint.
     final html = File('extension/popup.html').readAsStringSync();
-    expect(html, isNot(contains('#game {\n        display: none')),
-        reason: 'a hidden iframe renders nothing');
     final rule = RegExp(r'#game\s*\{([^}]*)\}').firstMatch(html)?.group(1) ?? '';
-    expect(rule, isNot(contains('display: none')));
+    expect(rule, isNot(contains('display: none')),
+        reason: 'a hidden iframe renders nothing');
     expect(rule, contains('position: absolute'),
-        reason: 'it must be laid out underneath the launcher, not in flow');
-    expect(html, contains('body.playing #launcher'),
-        reason: 'the launcher is hidden, not the frame');
+        reason: 'it must fill the popup rather than sit in flow');
   });
 
   test('the popup is sized to the browser maximum', () {

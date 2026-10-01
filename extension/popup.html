@@ -1,17 +1,17 @@
 <!DOCTYPE html>
 <!--
-  The toolbar popup: a launcher, not the game.
+  The toolbar popup: the game itself, nothing in front of it.
 
-  A browser popup is capped at 800x600 and is meant to be dismissed the moment
-  you finish with it. Ludo's board and a 10-seat Snakes grid both need more
-  room than that, and squeezing them in would produce a board too small to
-  read and a window that closes when the player clicks the wrong thing. So this
-  stays a launcher and the game opens in a tab, which is the pattern every
-  extension with real content uses.
+  This used to be a launcher - a die, an "Open Game Club" button, a "Play
+  online" button - and the launcher was the whole problem. The app's own home
+  screen already offers local play, online play, and the leaderboards, so the
+  launcher was asking the same question a second time, in plainer HTML, before
+  handing over to the same UI. The popup now goes straight to the real main
+  screen and gets out of the way.
 
-  Plain HTML rather than a second Flutter build: a popup that has to boot
-  CanvasKit to draw one button takes seconds, and this opens instantly. The
-  colours are copied from lib/ui/theme.dart so it matches the app.
+  Plain HTML and a single iframe rather than a second Flutter build: there is
+  no UI here to render, so there is nothing for CanvasKit to draw. The colours
+  are copied from lib/ui/theme.dart so the surround still matches the app.
 -->
 <html lang="en">
   <head>
@@ -37,13 +37,11 @@
           circle at 50% -20%, var(--felt-light) 0%, var(--felt) 70%
         );
       }
-      /* The launcher sits centred in the popup; the game fills it. */
-      /* The iframe is NEVER display:none.
-         A hidden iframe has a 0x0 viewport, so Flutter measures itself at
-         zero, renders nothing, and does not re-layout when it is revealed -
-         the click appears to do nothing. Keeping it laid out at full size
-         under the launcher means the game is already rendered and warm when
-         the menu is dismissed. */
+      /* The game fills the popup outright. There is no launcher, so there is
+         nothing to reveal, which sidesteps the trap the launcher created: a
+         display:none iframe has a 0x0 viewport, so Flutter measures itself at
+         zero and renders nothing. Laid out and visible from the first paint
+         means the game boots straight into a correctly sized frame. */
       #game {
         position: absolute;
         inset: 0;
@@ -51,28 +49,10 @@
         height: 100%;
         border: 0;
         background: #123524;
-        z-index: 0;
       }
-      #launcher {
-        position: absolute;
-        inset: 0;
-        z-index: 1;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        background: radial-gradient(
-          circle at 50% -20%, #1b4a33 0%, #123524 70%
-        );
-        transition: opacity .12s ease;
-      }
-      /* Hidden by opacity rather than display, so the iframe underneath keeps
-         its size and stays warm. */
-      body.playing #launcher {
-        opacity: 0;
-        pointer-events: none;
-      }
-      body:not(.playing) #over { display: none; }
+      /* The one thing that stays: the popup is capped at 800x600 and a 10-seat
+         Snakes grid needs more room than that, so a way out to a real tab is
+         still a click away. */
       #over {
         position: absolute;
         top: 6px;
@@ -92,59 +72,14 @@
         cursor: pointer;
       }
       #over button:hover { background: rgba(27, 74, 51, .95); }
-      .die {
-        width: 34px; height: 34px; flex: none;
-        border-radius: 7px;
-        border: 2px solid var(--gold);
-        background: var(--ivory);
-        /* four pips, in the same arrangement as the app's icon */
-        background-image:
-          radial-gradient(circle 2.4px at 9px 9px, #b3372f 2.4px, transparent 2.5px),
-          radial-gradient(circle 2.4px at 21px 9px, #2f5fb3 2.4px, transparent 2.5px),
-          radial-gradient(circle 2.4px at 9px 21px, #2f5fb3 2.4px, transparent 2.5px),
-          radial-gradient(circle 2.4px at 21px 21px, #b3372f 2.4px, transparent 2.5px);
-      }
-      h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: .2px; }
-      .sub { font-size: 11px; color: rgba(245,239,224,.62); margin-top: 1px; }
-      .body { padding: 0 0 12px; }
-      .btn {
-        display: block; width: 100%; padding: 11px 14px; margin-top: 10px;
-        font-size: 13.5px; font-weight: 700; font-family: inherit;
-        color: #1d1405; background: var(--gold);
-        border: 0; border-radius: 10px; cursor: pointer;
-      }
-      .btn:hover { filter: brightness(1.07); }
-      .btn:active { transform: translateY(1px); }
-      .btn.secondary {
-        background: transparent; color: var(--ivory);
-        border: 1px solid rgba(245,239,224,.28); font-weight: 600;
-      }
-      .note {
-        margin: 12px 0 0; font-size: 10.5px; line-height: 1.45;
-        color: rgba(245,239,224,.5); text-align: center;
-      }
     </style>
   </head>
   <body>
-    <div id="launcher">
-    <div class="head">
-      <div class="die" aria-hidden="true"></div>
-      <div>
-        <h1>Game Club</h1>
-        <div class="sub">Ludo &middot; Snakes &amp; Ladders</div>
-      </div>
-    </div>
-    <div class="body">
-      <button class="btn" id="play">Open Game Club</button>
-      <button class="btn secondary" id="online">Play online</button>
-      <p class="note">Local play works offline. Online needs the game server awake.</p>
-    </div>
-    </div>
-    <!-- The game itself, loaded in place so nothing opens a new page. -->
+    <!-- The game, filling the popup from the first paint. -->
     <iframe id="game" title="Game Club" src="index.html"></iframe>
-    <!-- Over the game: a way back, and a way out to a real tab. -->
+    <!-- The one control that remains: out to a real tab, for when 800x600 is
+         not enough room. -->
     <div id="over">
-      <button id="back" title="Back to the menu">&#x2190;</button>
       <button id="tab" title="Open in a tab">&#x1F5D5; Tab</button>
     </div>
     <script src="popup.js"></script>
