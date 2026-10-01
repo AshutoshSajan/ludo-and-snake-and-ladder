@@ -1,10 +1,24 @@
 # Game Club 🎲
 
-A production-ready, cross-platform **Game Club** app built with Flutter —
-containing **Ludo (2–4 players)** and **Snakes & Ladders (2–10 players)**.
-Local-first: hot-seat multiplayer with friends on one device plus AI bots —
-**plus online multiplayer for both games** (Ludo and Snakes & Ladders) via a
-self-hosted authoritative Dart server.
+A cross-platform **Game Club** for **Ludo** and **Snakes & Ladders** — hot-seat
+on one device against friends or bots, and online against other people through
+a self-hosted authoritative Dart server.
+
+| | Ludo | Snakes & Ladders |
+|---|---|---|
+| Players | 2–4 | 2–10 |
+| Board | 52 cells, 4 tokens each | 100 squares, 9 ladders, 10 snakes |
+| Start | roll a **6** to leave base | roll a **1** to enter |
+| Bots | easy / medium / hard | auto-play |
+| Online | ✅ rooms, chat, autoplay | ✅ rooms, chat, autoplay |
+
+Runs on **web, Linux, macOS, Windows, Android and iOS**, and ships as a
+**browser extension** for Chrome and Firefox.
+
+> **Contents** — [Games](#games--rules) · [Architecture](#architecture) ·
+> [Getting started](#getting-started) · [Local checks](#local-checks-the-free-stand-in-for-ci) ·
+> [Deploy](#deploy) · [Browser extension](#browser-extension) ·
+> [Contributing](#branches-prs--ci)
 
 ## Games & rules
 
@@ -47,10 +61,10 @@ lib/
 │   └── theme.dart     # "tabletop club" design tokens
 └── screens/           # home, setup (user selection), leaderboard
 
-assets/sounds/         # 8 procedurally synthesized WAV effects
+assets/sounds/         # 12 procedurally synthesized WAV effects
 tools/gen_sounds.dart  # regenerates them: dart run tools/gen_sounds.dart
 tools/gen_app_icons.py # favicon + Android/iOS/macOS/Windows launcher icons
-test/                  # 26 engine rule tests + 2 widget smoke tests
+test/                  # 307 tests: engine rules, online server, UI, deploy config
 ```
 
 ### Design highlights
@@ -77,7 +91,7 @@ flutter run                 # pick a device (Chrome or Linux desktop)
 ### Run tests & analyze
 
 ```bash
-flutter test               # 28 tests: full Ludo + Snakes rule coverage
+flutter test               # 307 tests: engine rules, online server, UI, deploy config
 flutter analyze
 ```
 
@@ -121,20 +135,28 @@ gh pr create --base dev                     # PR to the parent, never main
 ### CI & changelog
 
 `.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
-release web build — PRs must be green to merge) and on **every merge to
-`dev`/`staging`/`main`** (same checks, so the app build is verified on
-every tier).
+release web build) and on **every merge to `dev`/`staging`/`main`**.
 
-`CHANGELOG.md` is **maintained by [git-cliff](https://git-cliff.org)** from the
-commit history using `cliff.toml` (Keep a Changelog format):
+> **CI is currently over its GitHub-hosted runner quota**, so every job reports
+> `steps=0` and nothing verifies a push. The checks run locally instead via the
+> pre-push hook — see [Local checks](#local-checks-the-free-stand-in-for-ci).
+> The workflow is kept intact and should be restored when quota returns; a
+> [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners)
+> does not consume hosted minutes.
 
-- Regenerate locally after commits: `git-cliff -o CHANGELOG.md`
-- The CI changelog job runs on integration pushes (`dev`, `staging`, `main`)
-  and **opens a PR into `staging`** with the regenerated file (it never
-  pushes to `main`).
-- Write commit subjects as `feat: …`, `fix: …`, `docs: …`, `chore: …` etc.
-  (Conventional Commits) so entries land in the right *Added / Fixed / …*
-  group; anything else falls into the history-matching rules in `cliff.toml`.
+`CHANGELOG.md` is **generated** by [git-cliff](https://git-cliff.org) from the
+commit history using `cliff.toml` (Keep a Changelog format) — never hand-edit
+it.
+
+```bash
+tool/changelog.sh           # rewrite it
+tool/changelog.sh --check   # fail if out of date, change nothing
+```
+
+The pre-push hook runs `--check` on `staging`/`main` pushes, so the file cannot
+drift from history at the moment it matters. Write commit subjects as
+`feat: …`, `fix: …`, `docs: …`, `chore: …` (Conventional Commits) so entries
+land in the right *Added / Fixed / …* group.
 
 ### Code review (Greptile)
 
@@ -200,29 +222,61 @@ set (iOS rejects alpha), the rounded macOS set and the multi-size Windows
 `.ico`. `web/manifest.json` carries the app's felt-green theme colour and
 name, so an installed PWA matches the icon.
 
-### Chrome extension
+### Browser extension
 
-The game also ships as an **offline Chrome extension** (Manifest V3).
+The game also ships as a **browser extension** (Manifest V3), for **both
+Chrome and Firefox**.
 
 Build & load:
 
 ```bash
-flutter build web --release      # once, or when the game changed
-./tools/build_extension.sh       # -> build/extension/
-./tools/build_extension.sh --zip # also -> build/game-club-extension.zip (Web Store)
+flutter build web --release            # once, or when the game changed
+
+./tools/build_extension.sh             # Chrome    -> build/extension-chrome/
+./tools/build_extension.sh --firefox   # Firefox   -> build/extension-firefox/
+
+./tools/build_extension.sh --firefox --zip   # -> build/game-club-firefox.xpi
+./tools/build_extension.sh --zip             # -> build/game-club-chrome.zip
 ```
 
-Then in Chrome: `chrome://extensions` → enable **Developer mode** →
-**Load unpacked** → select `build/extension/`. A die icon appears in the
-toolbar; clicking it opens the game in a new tab. It works fully offline.
+**Chrome:** `chrome://extensions` → **Developer mode** → **Load unpacked** →
+select `build/extension-chrome/`.
 
-How it works: the extension bundles the whole Flutter web payload. MV3's
-CSP forbids remote scripts, so `tools/build_extension.sh` pins the
-bootstrap to the **local** `canvaskit/` engine copy
-(`useLocalCanvasKit:true`) and verifies no remote `.js/.wasm` references
-remain. Icons are generated by `tools/gen_extension_icons.py` (no
-third-party deps). Clicking the toolbar icon (`extension/background.js`)
-opens `index.html` in a tab.
+**Firefox:** `about:debugging#/runtime/this-firefox` → **Load Temporary
+Add-on** → pick `build/extension-firefox/manifest.json`.
+
+A die icon appears in the toolbar; clicking it opens the game in a new tab.
+Local play works fully offline.
+
+**Why two manifests.** MV3 split the background model and the browsers did not
+follow each other. Chrome runs the toolbar handler as a **service worker**;
+Firefox has no service workers and requires an **event page**
+(`background.scripts`). A manifest carrying `service_worker` is rejected by
+Firefox, and one carrying `scripts` is ignored by Chrome — so the target
+selects the manifest, not the build. The build script asserts the right one
+was packaged, because a wrong manifest installs and then does nothing when
+clicked, which is a poor way to find out.
+
+The Firefox manifest also declares `host_permissions` and a `connect-src` for
+the game server. Offline play needs neither, but online play is a cross-origin
+fetch from a `moz-extension://` page, and without those the request is blocked
+in a way that looks like a dead server.
+
+**Publishing.** Firefox: upload the `.xpi` (or `.zip`) at
+[addons.mozilla.org](https://addons.mozilla.org/developers/addon/submit/distribution);
+Mozilla signs it there and rejects an unsigned upload, so the artifact in
+`build/` is upload-ready but not signed. Chrome: the Web Store takes the
+`.zip`.
+
+How it works: the extension bundles the whole Flutter web payload. MV3's CSP
+forbids remote scripts, so `tools/build_extension.sh` pins the bootstrap to the
+**local** `canvaskit/` engine copy (`useLocalCanvasKit:true`) and verifies no
+remote `.js/.wasm` references remain. Flutter's service worker is stripped —
+there is no service-worker context in an extension page, so shipping one only
+buys a failed registration. Icons are generated by
+`tools/gen_extension_icons.py` (no third-party deps). Clicking the toolbar icon
+(`extension/background.js`) opens `index.html` in a tab.
+
 
 ## Local checks (the free stand-in for CI)
 
@@ -277,57 +331,20 @@ restores enforcement for a private repo at zero cost — free CI tiers elsewhere
 (Cirrus, CircleCI) generally require a public repository, and this one is
 private.
 
-## Split deploy: web client on Netlify, game server on Render
+## Deploy
 
-The single-service Render deploy above is the simplest thing that works. You can
-also host **only the web client on Netlify** and leave the authoritative game
-server on Render — the server needs a long-lived process and a WebSocket
-upgrade, neither of which a static CDN provides.
+The backend is one Dart server. It can serve the whole app on its own, or the
+web client can be hosted separately.
 
-`netlify.toml` configures the whole build; there is nothing to click except one
-environment variable. Point the site at this repo and Netlify reads the rest.
+| Setup | Frontend | Backend | When |
+|---|---|---|---|
+| **Single service** (simplest) | same Render service | same | no second host to manage |
+| **Split** | Netlify | Render | cleaner URL; client can be cached at the edge |
 
-**Set `GAME_SERVER_URL`** in **Site settings → Environment variables**:
+### Single service (Render)
 
-```
-wss://ludo-1zpb.onrender.com/ws
-```
 
-That is the one required setting, and it is how the client learns where the game
-server is — baked in at build time via `--dart-define`, which
-`defaultServerUrl()` prefers over same-origin. Without it the build still
-succeeds and the client falls back to its own origin, where there is no game
-server; the lobby's server field would then need the URL typed in by hand.
-
-Everything else is in the file: `build/web` as the publish directory, an SPA
-rewrite, and the same cache policy `lib/server/web_cache.dart` applies, so the
-Netlify origin and the Render fallback agree exactly.
-
-Once the client has its own domain, `sameOriginServerUrl` is never used for
-online play (the dart-define wins), so the two hosts need not share a name. The
-leaderboard's HTTP origin is derived from that same URL, so it follows
-automatically. CORS is already handled server-side: `corsMiddleware` echoes the
-request origin, and browsers do not apply CORS to WebSockets at all.
-
-**Cold starts.** Render's free plan sleeps after ~15 idle minutes, and the
-proxy refuses connections until the process is listening again. That is a wait,
-not a failure, so the client now re-probes for up to ~22s and shows
-*"Starting the game server…"* with an explanation, rather than reporting an
-error to someone who merely pressed Play a moment early. The leaderboard fetch
-is patient for the same reason (5 attempts, 10s each).
-
-**Practical catch — Netlify's stock image has no Flutter**, so `netlify.toml`
-installs the SDK itself. Note it deliberately does *not* use the cirruslabs
-Flutter images: those froze at 3.44.0 / Dart 3.12 and cannot resolve this
-project, which requires Dart ^3.13.2. It pulls the official 3.47.2 tarball and
-unpacks it inside the repo so Netlify's build cache keeps it between builds.
-A test asserts that version matches the `Dockerfile`, so the two cannot drift.
-
-If you would rather not add a second host at all, the single-service Render
-deploy already serves the web client from the same origin and needs no extra
-moving parts.
-
-## Deploy on Render
+#### Full Render walkthrough
 
 The repo ships a one-click blueprint (`render.yaml`) that deploys the **full
 multiplayer app as a single service**: the Docker image contains the compiled
@@ -406,3 +423,52 @@ connection cold-starts the instance.
       automatically, so a crashed replica leaves no stale routes.
       `GET /health` is the JSON health check; with a web build shipped,
       `GET /` serves the game UI instead.
+
+### Split: web client on Netlify, game server on Render
+
+Host **only the web client on Netlify** and leave the authoritative game
+server on Render — the server needs a long-lived process and a WebSocket
+upgrade, neither of which a static CDN provides.
+
+`netlify.toml` configures the whole build; there is nothing to click except one
+environment variable. Point the site at this repo and Netlify reads the rest.
+
+**Set `GAME_SERVER_URL`** in **Site settings → Environment variables**:
+
+```
+wss://ludo-1zpb.onrender.com/ws
+```
+
+That is the one required setting, and it is how the client learns where the game
+server is — baked in at build time via `--dart-define`, which
+`defaultServerUrl()` prefers over same-origin. Without it the build still
+succeeds and the client falls back to its own origin, where there is no game
+server; the lobby's server field would then need the URL typed in by hand.
+
+Everything else is in the file: `build/web` as the publish directory, an SPA
+rewrite, and the same cache policy `lib/server/web_cache.dart` applies, so the
+Netlify origin and the Render fallback agree exactly.
+
+Once the client has its own domain, `sameOriginServerUrl` is never used for
+online play (the dart-define wins), so the two hosts need not share a name. The
+leaderboard's HTTP origin is derived from that same URL, so it follows
+automatically. CORS is already handled server-side: `corsMiddleware` echoes the
+request origin, and browsers do not apply CORS to WebSockets at all.
+
+**Cold starts.** Render's free plan sleeps after ~15 idle minutes, and the
+proxy refuses connections until the process is listening again. That is a wait,
+not a failure, so the client now re-probes for up to ~22s and shows
+*"Starting the game server…"* with an explanation, rather than reporting an
+error to someone who merely pressed Play a moment early. The leaderboard fetch
+is patient for the same reason (5 attempts, 10s each).
+
+**Practical catch — Netlify's stock image has no Flutter**, so `netlify.toml`
+installs the SDK itself. Note it deliberately does *not* use the cirruslabs
+Flutter images: those froze at 3.44.0 / Dart 3.12 and cannot resolve this
+project, which requires Dart ^3.13.2. It pulls the official 3.47.2 tarball and
+unpacks it inside the repo so Netlify's build cache keeps it between builds.
+A test asserts that version matches the `Dockerfile`, so the two cannot drift.
+
+If you would rather not add a second host at all, the single-service Render
+deploy already serves the web client from the same origin and needs no extra
+moving parts.
