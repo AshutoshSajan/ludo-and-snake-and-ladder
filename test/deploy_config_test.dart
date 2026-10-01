@@ -341,5 +341,27 @@ void main() {
       expect(script, isNot(contains('--tags | sort')),
           reason: 'lexical tag sorting breaks at v1.10.0');
     });
+
+    test('the git-cliff install step names a path that exists', () {
+      // This step failed on its first real run with "Not found in archive".
+      // The tarball's top directory is git-cliff-<version>; the asset filename
+      // carries a platform triplet, and naming that instead fails with an
+      // error that points at neither the cause nor the fix.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final m = RegExp(r'- name: Install git-cliff\n(.*?)\n      - name:',
+              multiLine: true, dotAll: true)
+          .firstMatch(workflow)
+          ?.group(1);
+      expect(m, isNotNull, reason: 'the install step must exist');
+      final body = m!;
+      // The member must be <version>/git-cliff, never <triplet>/git-cliff.
+      expect(body, contains(r'"git-cliff-${GIT_CLIFF_VERSION}/git-cliff"'));
+      expect(body, isNot(contains('unknown-linux-gnu/git-cliff"')),
+          reason: 'the triplet is the asset name, not the archive layout');
+      // A pinned version and a checksum: @latest would let a renamed or
+      // replaced asset execute.
+      expect(body, contains('GIT_CLIFF_SHA256'));
+      expect(body, contains('sha256sum -c -'));
+    });
   });
 }
