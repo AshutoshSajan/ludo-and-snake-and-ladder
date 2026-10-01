@@ -68,20 +68,27 @@ void main() {
         reason: 'inline script is refused under the MV3 CSP');
   });
 
-  test('the popup is a small launcher, and the game opens in a window', () {
+  test('the popup is a small launcher, and the game opens in a new tab', () {
     // Restored by request: playing inside the popup was capped at 800x600 and
     // the click-outside rule lost games mid-move. The launcher is back and the
-    // game opens in a window of its own.
+    // game opens in a normal browser tab.
+    // Comments stripped first: popup.js discusses chrome.windows.create in
+    // prose (to say it is NOT what opens the game), and the raw file would
+    // flag that explanation as a violation of itself.
     final html = File('extension/popup.html').readAsStringSync();
-    final js = File('extension/popup.js').readAsStringSync();
+    final js = File('extension/popup.js')
+        .readAsStringSync()
+        .replaceAll(RegExp(r'//.*'), '');
     expect(html, contains('id="play"'),
         reason: 'the launcher needs its open-the-game control');
     expect(html, isNot(contains('<iframe')),
         reason: 'the game must not run inside the capped popup');
     // A small popup, not a game board: the width is what keeps it a launcher.
     expect(html, contains('width: 300px'));
-    expect(js, contains('chrome.windows.create'),
-        reason: 'the game opens in a window of its own');
+    expect(js, contains('chrome.tabs.create'),
+        reason: 'the game opens in a new tab');
+    expect(js, isNot(contains('chrome.windows.create')),
+        reason: 'a tab was asked for, not a dedicated window');
   });
 
   test('the launcher needs no permission the manifests do not declare', () {
@@ -89,9 +96,14 @@ void main() {
     // chrome.tabs.query({url}). Filtering tabs by URL requires the "tabs"
     // permission, neither manifest declares it, and so that query returned
     // nothing: the reuse path never ran and every click opened another tab.
-    // windows.getAll needs no permission, which is why it is used instead.
-    // Comments stripped first: popup.js explains in prose why it does NOT
-    // use chrome.tabs.query, and checking the raw file would flag that
+    // chrome.tabs.create needs no permission, which is why it is used.
+    //
+    // The two halves of this are deliberately coupled: if someone adds reuse
+    // via tabs.query, this fails until they also declare the permission - and
+    // declaring it shows users a "read your browsing history" warning, which is
+    // a decision that should be made on purpose.
+    // Comments stripped first: popup.js explains in prose why it does NOT use
+    // chrome.tabs.query, and asserting on the raw file would flag that
     // explanation as a violation of itself.
     final js = File('extension/popup.js')
         .readAsStringSync()

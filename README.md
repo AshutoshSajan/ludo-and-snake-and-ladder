@@ -276,19 +276,18 @@ select `build/extension-chrome/`.
 Add-on** → pick `build/extension-firefox/manifest.json`.
 
 Clicking the die in the toolbar opens a small **launcher popup**, and the game
-opens in a **window of its own** at 1100x820. The popup is 300px wide on
-purpose: a browser popup is capped at 800x600 and closes the moment you click
-outside it, so playing inside one gives a board too small to read in a window
-that vanishes mid-move. An interim version did exactly that; this is the
-launcher restored.
+opens in a **new tab**. The popup is 300px wide on purpose: a browser popup is
+capped at 800x600 and closes the moment you click outside it, so playing inside
+one gives a board too small to read in a window that vanishes mid-move.
+Interim versions played inside the popup and in a dedicated window; this is the
+launcher with the game in a tab.
 
-The window is a real browser window - no tab strip, no address bar - which is
-also what makes an existing one findable, so clicking twice focuses the game you
-already have instead of stacking up windows. It deliberately does **not** look
-the game up with `chrome.tabs.query({url})`: filtering tabs by URL needs the
-`tabs` permission, neither manifest declares it, and the original launcher's
-reuse path silently never ran because of it. `windows.getAll` needs no
-permission. Local play works fully offline.
+Each click opens a fresh tab. Focusing an already-open game tab is deliberately
+**not** attempted: finding a tab by URL needs the `tabs` permission, Chrome
+presents that to users as "read your browsing history", and that is not a fair
+trade for saving one tab. The original launcher did query by URL without
+declaring the permission, so its reuse silently never worked. `chrome.tabs.create`
+needs no permission at all. Local play works fully offline.
 
 **Why two manifests.** MV3 split the background model and the browsers did not
 follow each other. Chrome runs the toolbar handler as a **service worker**;

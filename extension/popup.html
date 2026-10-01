@@ -6,10 +6,12 @@
   outside it. Ludo's board and a 10-seat Snakes grid both need more room than
   that, and playing inside one gives a board too small to read in a window that
   disappears mid-move. So this stays a small launcher and the game opens in a
-  window of its own.
+  normal browser tab.
 
-  This is the original launcher, restored. An in-between version played the game
-  in an iframe inside the popup, which hit exactly the two problems above.
+  This is the original launcher, restored - with the game opening in a tab
+  rather than the dedicated window an earlier pass used. An in-between version
+  played the game in an iframe inside the popup, which hit exactly the two
+  problems above.
 
   Plain HTML rather than a second Flutter build: a popup that has to boot
   CanvasKit to draw one button takes seconds, and this opens instantly. The
@@ -81,7 +83,7 @@
     </div>
     <div class="body">
       <button class="btn" id="play">Open Game Club</button>
-      <p class="note">Opens in its own window. Local play works offline.</p>
+      <p class="note">Opens in a new tab. Local play works offline.</p>
     </div>
     <script src="popup.js"></script>
   </body>
