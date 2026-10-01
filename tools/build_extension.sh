@@ -28,9 +28,23 @@ for arg in "$@"; do
 done
 
 [ -f build/web/index.html ] || {
-  echo 'build/web missing — run: flutter build web --release' >&2
+  echo 'build/web missing - run: flutter build web --release' >&2
   exit 1
 }
+
+# A stale build/web is packaged silently, and the symptom is always the same
+# confusing one: a feature that was written weeks ago is mysteriously absent
+# from the installed add-on. Refuse rather than ship it.
+if [ -n "$(find lib -newer build/web/index.html -type f -name '*.dart' -print -quit 2>/dev/null)" ]; then
+  echo "ERROR: build/web is older than lib/. Rebuild first:" >&2
+  echo "  flutter build web --release" >&2
+  echo "Packaging the old bundle would hide every change since it was made." >&2
+  exit 1
+fi
+
+# Stamp which source this came from, so "is my build current?" is answerable
+# without guessing from the file dates.
+echo "packaging commit $(git rev-parse --short HEAD 2>/dev/null || echo unknown) ($(date +%H:%M))" 
 
 out="build/extension-$target"
 # 1. fresh skeleton (icons first; the manifest is copied last so the web
