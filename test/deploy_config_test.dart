@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -55,6 +56,28 @@ void main() {
       expect(toml.indexOf('GAME_SERVER_URL:-'),
           lessThan(toml.lastIndexOf('flutter build web --release')),
           reason: 'the guard must precede the build command');
+    });
+
+    test('the packaged extensions may contact the hosted game server', () {
+      const gameServer = 'https://ludo-1zpb.onrender.com';
+      for (final m in const [
+        'extension/manifest.chrome.json',
+        'extension/manifest.firefox.json',
+      ]) {
+        final manifest = jsonDecode(File(m).readAsStringSync()) as Map;
+        final csp = ((manifest['content_security_policy'] ?? {}) as Map)['extension_pages'] as String? ?? '';
+        // The packaged add-ons broke on online play because their default
+        // server URL resolved to ws://<extension-id>:8080/ws, and
+        // OnlineLobbyScreen now routes extension pages to the hosted game
+        // server instead. That URL is useless unless the add-on is allowed to
+        // reach it, so pin the half that makes the packaged build different
+        // from the web one: connect-src must name the hosted game server.
+        expect(csp, contains(gameServer), reason: '$m must allow the hosted game server');
+        // extension_pages is where Chrome and Firefox both enforce
+        // connect-src for add-on pages; a policy naming only the page source
+        // would silently forbid the socket.
+        expect(csp, contains('connect-src'), reason: '$m must name connect-src');
+      }
     });
 
     test('rejects a server URL that could never work', () {

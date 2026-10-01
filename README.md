@@ -298,10 +298,23 @@ selects the manifest, not the build. The build script asserts the right one
 was packaged, because a wrong manifest installs and then does nothing when
 clicked, which is a poor way to find out.
 
-The Firefox manifest also declares `host_permissions` and a `connect-src` for
-the game server. Offline play needs neither, but online play is a cross-origin
-fetch from a `moz-extension://` page, and without those the request is blocked
-in a way that looks like a dead server.
+Both manifests declare a `connect-src` naming the hosted game server. Offline
+play needs no network at all, but online play is a cross-origin socket from an
+add-on page, and without that directive the browser blocks it in a way that
+looks like a dead server.
+
+**Online play points at the hosted server, not the page.** A packaged add-on
+serves the game from `chrome-extension://<id>/` or `moz-extension://<uuid>/`,
+which is same-origin with nothing playable — and, worse, its "host" is the
+extension id, so the client's same-origin fallback once produced
+`ws://<extension-id>:8080/ws`, a URL that can never dial. Online play in the
+packaged add-ons failed while the Netlify build worked, for exactly that
+reason: same client, different default URL. `sameOriginServerUrl` now sends
+every non-`http(s)` scheme to the hosted game server, and the value is a
+constant in `lib/screens/online_lobby_screen.dart` rather than a build-time
+`--dart-define`, because one packaged build is installed everywhere and cannot
+carry a per-deployment setting. `GAME_SERVER_URL` still overrides it wherever
+it is set.
 
 **Publishing.** Firefox: upload the `.xpi` (or `.zip`) at
 [addons.mozilla.org](https://addons.mozilla.org/developers/addon/submit/distribution);
