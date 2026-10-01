@@ -1,29 +1,53 @@
-// Toolbar popup: the game, filling the popup from the moment it opens.
+// Toolbar popup: opens the game in its own window, then closes itself.
 //
-// There is no launcher. The app's own home screen already offers local play,
-// online play and the leaderboards, so a die, an "Open Game Club" button and a
-// "Play online" button were asking the same question twice before handing over
-// to that same UI. The popup now boots straight into the real main screen.
+// The popup is a launcher, not the game. A browser popup is capped at 800x600
+// and closes when you click outside it, so running a board game inside one
+// means a board too small to read in a window that vanishes mid-move.
 //
-// The game runs in an iframe sized to the full popup, so it is correctly
-// measured on the first frame rather than being revealed later. A display:none
-// iframe has a 0x0 viewport, which is why an earlier version of this that hid
-// the frame behind the launcher rendered a blank popup.
+// The window is a real browser window (`type: 'popup'`: no tab strip, no
+// address bar) sized for the board, which is also what makes an existing one
+// findable and reusable instead of stacking up a window per click.
 //
-// Note the popup closes when you click outside it. That is the browser's rule
-// for popups, not something this page can override, and it is why "Open in a
-// tab" is still one click away - a 10-seat Snakes grid does not fit in 800x600.
+// Why not chrome.tabs.query to find the game's tab, which is what the original
+// launcher did: filtering tabs by URL requires the "tabs" permission, and
+// neither manifest declares it. That query returned nothing, so the reuse path
+// never ran and every click opened another tab. windows.getAll does not need
+// the permission.
+//
+// The permission-free `windows.getAll` still cannot promise `tab.url` is
+// populated, so the lookup is written to treat a missing URL as "no match"
+// rather than throw - worst case it opens a window that could have been
+// focused, which is the old behaviour and not a failure.
 
-const frame = document.getElementById('game');
+const GAME = 'index.html';
 
-function openInTab() {
-  chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
-  window.close();
+function openGame() {
+  const url = chrome.runtime.getURL(GAME);
+
+  const open = () => {
+    chrome.windows.create({
+      url,
+      type: 'popup',
+      width: 1100,
+      height: 820,
+    });
+  };
+
+  chrome.windows.getAll({ populate: true, windowTypes: ['popup'] }, (wins) => {
+    if (chrome.runtime.lastError) {
+      open();
+      window.close();
+      return;
+    }
+    const existing = (wins || []).find((w) =>
+      (w.tabs || []).some((t) => typeof t.url === 'string' && t.url === url));
+    if (existing) {
+      chrome.windows.update(existing.id, { focused: true });
+    } else {
+      open();
+    }
+    window.close();
+  });
 }
 
-document.getElementById('tab').addEventListener('click', openInTab);
-
-// Take keyboard input immediately; an iframe that never receives focus swallows
-// every key press, which for a game that responds to the arrow keys and Enter
-// means the board looks frozen.
-frame.focus();
+document.getElementById('play').addEventListener('click', openGame);

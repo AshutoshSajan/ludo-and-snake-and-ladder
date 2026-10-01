@@ -1,17 +1,19 @@
 <!DOCTYPE html>
 <!--
-  The toolbar popup: the game itself, nothing in front of it.
+  The toolbar popup: a launcher, not the game.
 
-  This used to be a launcher - a die, an "Open Game Club" button, a "Play
-  online" button - and the launcher was the whole problem. The app's own home
-  screen already offers local play, online play, and the leaderboards, so the
-  launcher was asking the same question a second time, in plainer HTML, before
-  handing over to the same UI. The popup now goes straight to the real main
-  screen and gets out of the way.
+  A browser popup is capped at 800x600 and is dismissed the moment you click
+  outside it. Ludo's board and a 10-seat Snakes grid both need more room than
+  that, and playing inside one gives a board too small to read in a window that
+  disappears mid-move. So this stays a small launcher and the game opens in a
+  window of its own.
 
-  Plain HTML and a single iframe rather than a second Flutter build: there is
-  no UI here to render, so there is nothing for CanvasKit to draw. The colours
-  are copied from lib/ui/theme.dart so the surround still matches the app.
+  This is the original launcher, restored. An in-between version played the game
+  in an iframe inside the popup, which hit exactly the two problems above.
+
+  Plain HTML rather than a second Flutter build: a popup that has to boot
+  CanvasKit to draw one button takes seconds, and this opens instantly. The
+  colours are copied from lib/ui/theme.dart so it matches the app.
 -->
 <html lang="en">
   <head>
@@ -25,68 +27,61 @@
         --gold: #d9a441;
       }
       * { box-sizing: border-box; }
-      html, body {
-        width: 800px;
-        height: 600px;
+      body {
+        width: 300px;
         margin: 0;
-        overflow: hidden;
         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         color: var(--ivory);
         background: radial-gradient(
           circle at 50% -20%, var(--felt-light) 0%, var(--felt) 70%
         );
       }
-      /* Stated explicitly rather than left to the initial containing block.
-         #game and #over are position:absolute; without a positioned ancestor
-         they resolve against the viewport, which happens to be the same size as
-         body here - so it works, but only by coincidence. An earlier edit
-         intended to add this line silently matched nothing, and the CSS stayed
-         correct by accident for several commits. */
-      body { position: relative; }
-      /* The game fills the popup outright. There is no launcher, so there is
-         nothing to reveal, which sidesteps the trap the launcher created: a
-         display:none iframe has a 0x0 viewport, so Flutter measures itself at
-         zero and renders nothing. Laid out and visible from the first paint
-         means the game boots straight into a correctly sized frame. */
-      #game {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        border: 0;
-        background: #123524;
-      }
-      /* The one thing that stays: the popup is capped at 800x600 and a 10-seat
-         Snakes grid needs more room than that, so a way out to a real tab is
-         still a click away. */
-      #over {
-        position: absolute;
-        top: 6px;
-        right: 6px;
-        z-index: 2;
+      .head {
         display: flex;
-        gap: 6px;
+        align-items: center;
+        gap: 10px;
+        padding: 16px 16px 10px;
       }
-      #over button {
-        font-family: inherit;
-        font-size: 11px;
-        color: var(--ivory);
-        background: rgba(18, 53, 36, .82);
-        border: 1px solid rgba(245, 239, 224, .3);
+      .die {
+        width: 30px; height: 30px; flex: none;
         border-radius: 7px;
-        padding: 4px 8px;
-        cursor: pointer;
+        border: 2px solid var(--gold);
+        background: var(--ivory);
+        /* four pips, in the same arrangement as the app's icon */
+        background-image:
+          radial-gradient(circle 2.4px at 9px 9px, #b3372f 2.4px, transparent 2.5px),
+          radial-gradient(circle 2.4px at 21px 9px, #2f5fb3 2.4px, transparent 2.5px),
+          radial-gradient(circle 2.4px at 9px 21px, #2f5fb3 2.4px, transparent 2.5px),
+          radial-gradient(circle 2.4px at 21px 21px, #b3372f 2.4px, transparent 2.5px);
       }
-      #over button:hover { background: rgba(27, 74, 51, .95); }
+      h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: .2px; }
+      .sub { font-size: 11px; color: rgba(245,239,224,.62); margin-top: 1px; }
+      .body { padding: 4px 16px 16px; }
+      .btn {
+        display: block; width: 100%; padding: 11px 14px; margin-top: 10px;
+        font-size: 13.5px; font-weight: 700; font-family: inherit;
+        color: #1d1405; background: var(--gold);
+        border: 0; border-radius: 10px; cursor: pointer;
+      }
+      .btn:hover { filter: brightness(1.07); }
+      .btn:active { transform: translateY(1px); }
+      .note {
+        margin: 12px 0 0; font-size: 10.5px; line-height: 1.45;
+        color: rgba(245,239,224,.5); text-align: center;
+      }
     </style>
   </head>
   <body>
-    <!-- The game, filling the popup from the first paint. -->
-    <iframe id="game" title="Game Club" src="index.html"></iframe>
-    <!-- The one control that remains: out to a real tab, for when 800x600 is
-         not enough room. -->
-    <div id="over">
-      <button id="tab" title="Open in a tab">&#x1F5D5; Tab</button>
+    <div class="head">
+      <div class="die" aria-hidden="true"></div>
+      <div>
+        <h1>Game Club</h1>
+        <div class="sub">Ludo &middot; Snakes &amp; Ladders</div>
+      </div>
+    </div>
+    <div class="body">
+      <button class="btn" id="play">Open Game Club</button>
+      <p class="note">Opens in its own window. Local play works offline.</p>
     </div>
     <script src="popup.js"></script>
   </body>

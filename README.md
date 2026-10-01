@@ -275,18 +275,20 @@ select `build/extension-chrome/`.
 **Firefox:** `about:debugging#/runtime/this-firefox` → **Load Temporary
 Add-on** → pick `build/extension-firefox/manifest.json`.
 
-Clicking the die in the toolbar opens the game **inside the popup**, straight to
-the main screen — no launcher, no intermediate menu. The app's own home screen
-already offers local play, online play and the leaderboards, so a separate menu
-in the popup would have asked the same question twice before handing over to
-that same UI. The game runs in a sized iframe, which is what lets Flutter render
-into the popup at all: a `display:none` frame has a 0x0 viewport, and CanvasKit
-draws nothing into it.
+Clicking the die in the toolbar opens a small **launcher popup**, and the game
+opens in a **window of its own** at 1100x820. The popup is 300px wide on
+purpose: a browser popup is capped at 800x600 and closes the moment you click
+outside it, so playing inside one gives a board too small to read in a window
+that vanishes mid-move. An interim version did exactly that; this is the
+launcher restored.
 
-The one caveat is the browser's, not the app's: **clicking outside the popup
-closes it.** A 10-seat Snakes grid also does not fit the 800x600 popup maximum,
-so a small **Tab** button sits in the corner to open the same game in a real
-window. Local play works fully offline.
+The window is a real browser window - no tab strip, no address bar - which is
+also what makes an existing one findable, so clicking twice focuses the game you
+already have instead of stacking up windows. It deliberately does **not** look
+the game up with `chrome.tabs.query({url})`: filtering tabs by URL needs the
+`tabs` permission, neither manifest declares it, and the original launcher's
+reuse path silently never ran because of it. `windows.getAll` needs no
+permission. Local play works fully offline.
 
 **Why two manifests.** MV3 split the background model and the browsers did not
 follow each other. Chrome runs the toolbar handler as a **service worker**;
