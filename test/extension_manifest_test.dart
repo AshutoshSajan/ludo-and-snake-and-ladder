@@ -86,6 +86,23 @@ void main() {
     expect(js, contains('chrome.tabs.create'));
   });
 
+  test('the game iframe is never display:none', () {
+    // The bug this pins: a display:none iframe has a 0x0 viewport, so Flutter
+    // measured itself at zero, rendered nothing, and did not re-layout when
+    // the launcher was dismissed. The click looked like it did nothing. The
+    // launcher is hidden with opacity so the iframe keeps its size and stays
+    // warm.
+    final html = File('extension/popup.html').readAsStringSync();
+    expect(html, isNot(contains('#game {\n        display: none')),
+        reason: 'a hidden iframe renders nothing');
+    final rule = RegExp(r'#game\s*\{([^}]*)\}').firstMatch(html)?.group(1) ?? '';
+    expect(rule, isNot(contains('display: none')));
+    expect(rule, contains('position: absolute'),
+        reason: 'it must be laid out underneath the launcher, not in flow');
+    expect(html, contains('body.playing #launcher'),
+        reason: 'the launcher is hidden, not the frame');
+  });
+
   test('the popup is sized to the browser maximum', () {
     // A popup is capped at 800x600. Anything smaller shrinks a board that was
     // already tight.

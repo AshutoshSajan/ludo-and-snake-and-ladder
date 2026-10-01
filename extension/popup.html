@@ -38,40 +38,60 @@
         );
       }
       /* The launcher sits centred in the popup; the game fills it. */
-      #launcher {
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        max-width: 320px;
-        margin: 0 auto;
-        padding: 0 16px;
-      }
-      #over { display: none; }
-      body.playing #over {
-        display: flex; position: absolute; top: 6px; right: 6px; gap: 6px;
-      }
-      #over button {
-        font-family: inherit; font-size: 11px; color: var(--ivory);
-        background: rgba(18, 53, 36, .82); border: 1px solid rgba(245,239,224,.3);
-        border-radius: 7px; padding: 4px 8px; cursor: pointer;
-      }
-      #over button:hover { background: rgba(27, 74, 51, .95); }
+      /* The iframe is NEVER display:none.
+         A hidden iframe has a 0x0 viewport, so Flutter measures itself at
+         zero, renders nothing, and does not re-layout when it is revealed -
+         the click appears to do nothing. Keeping it laid out at full size
+         under the launcher means the game is already rendered and warm when
+         the menu is dismissed. */
       #game {
-        display: none;
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
         border: 0;
         background: #123524;
+        z-index: 0;
       }
-      body.playing #launcher { display: none; }
-      body.playing #game { display: block; }
-      .head {
+      #launcher {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
         display: flex;
+        flex-direction: column;
+        justify-content: center;
         align-items: center;
-        gap: 10px;
-        padding: 0 0 12px;
+        background: radial-gradient(
+          circle at 50% -20%, #1b4a33 0%, #123524 70%
+        );
+        transition: opacity .12s ease;
       }
+      /* Hidden by opacity rather than display, so the iframe underneath keeps
+         its size and stays warm. */
+      body.playing #launcher {
+        opacity: 0;
+        pointer-events: none;
+      }
+      body:not(.playing) #over { display: none; }
+      #over {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        z-index: 2;
+        display: flex;
+        gap: 6px;
+      }
+      #over button {
+        font-family: inherit;
+        font-size: 11px;
+        color: var(--ivory);
+        background: rgba(18, 53, 36, .82);
+        border: 1px solid rgba(245, 239, 224, .3);
+        border-radius: 7px;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      #over button:hover { background: rgba(27, 74, 51, .95); }
       .die {
         width: 34px; height: 34px; flex: none;
         border-radius: 7px;
