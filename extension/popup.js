@@ -1,32 +1,33 @@
-// Toolbar popup: opens the game in a tab, then closes itself.
+// Toolbar popup: launches the game *inside* the popup.
 //
-// The popup is a launcher, not the game. A browser popup is capped at 800x600
-// and both boards need more room than that, so running the game inside one
-// would give a board too small to read and a window that vanishes the moment
-// you misclick.
+// The game is loaded in an iframe over the launcher, so nothing opens a new
+// page and the tab count never changes. A browser popup is capped at 800x600,
+// so the board is smaller here than in a tab - popup.html says so, and "Open
+// in a tab" is still one click away for when the space is not enough.
 //
-// The same tab is reused every time, so repeatedly launching does not stack up
-// duplicates. tabs.create has no `reuse` option, so an existing Game Club tab
-// is focused instead of opening a second one.
+// Note the popup closes when you click outside it. That is the browser's rule
+// for popups, not something this page can override, and it is the main reason
+// the tab is still offered rather than removed.
 
-const GAME = 'index.html';
+const body = document.body;
+const frame = document.getElementById('game');
+const launcher = document.getElementById('launcher');
 
-function openGame() {
-  const base = chrome.runtime.getURL(GAME);
-  chrome.tabs.query({ url: base + '*' }, (tabs) => {
-    const existing = (tabs || [])[0];
-    if (existing) {
-      chrome.tabs.update(existing.id, { active: true });
-      chrome.windows.update(existing.windowId, { focused: true });
-    } else {
-      chrome.tabs.create({ url: base });
-    }
-    window.close();
-  });
+function play() {
+  body.classList.add('playing');
+  // Focus the frame so the game takes keyboard input immediately; an iframe
+  // that never receives focus swallows every key press.
+  frame.focus();
 }
 
-document.getElementById('play').addEventListener('click', openGame);
-// The app has no router, so both buttons land on the same page. Kept separate
-// because "jump straight to online" is what most people want once installed,
-// and it is honest about being the same screen rather than faking a route.
-document.getElementById('online').addEventListener('click', openGame);
+function openInTab() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+  window.close();
+}
+
+document.getElementById('play').addEventListener('click', play);
+document.getElementById('online').addEventListener('click', play);
+document.getElementById('tab').addEventListener('click', openInTab);
+document.getElementById('back').addEventListener('click', () => {
+  body.classList.remove('playing');
+});

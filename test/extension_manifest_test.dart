@@ -68,13 +68,30 @@ void main() {
         reason: 'inline script is refused under the MV3 CSP');
   });
 
-  test('the popup launches into a tab rather than into itself', () {
-    // A popup is capped at 800x600 and both boards need more room, so the
-    // popup is a launcher. Running the game inside it would be a board too
-    // small to read and a window that closes when you misclick.
+  test('the popup hosts the game itself, and still offers a tab', () {
+    // Asked for directly: play from the popup without leaving the page. Done
+    // with an iframe over the launcher rather than by replacing the popup
+    // document, so the menu is one click away and so the popup can be closed
+    // back into a launcher at all.
+    final html = File('extension/popup.html').readAsStringSync();
     final js = File('extension/popup.js').readAsStringSync();
+    expect(html, contains('<iframe id="game"'),
+        reason: 'the game must be able to run inside the popup');
+    expect(html, contains('src="index.html"'));
+    expect(js, contains("classList.add('playing')"),
+        reason: 'playing has to show the frame and hide the launcher');
+    // A popup closes when you click outside it. The tab escape hatch stays for
+    // exactly that reason and must not be quietly removed.
+    expect(html, contains('id="tab"'));
     expect(js, contains('chrome.tabs.create'));
-    expect(js, contains('window.close()'));
+  });
+
+  test('the popup is sized to the browser maximum', () {
+    // A popup is capped at 800x600. Anything smaller shrinks a board that was
+    // already tight.
+    final html = File('extension/popup.html').readAsStringSync();
+    expect(html, contains('width: 800px'));
+    expect(html, contains('height: 600px'));
   });
 
   test('both manifests can reach the game server for online play', () {
