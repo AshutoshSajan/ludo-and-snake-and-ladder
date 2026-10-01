@@ -31,6 +31,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Open the game in a new tab, not a dedicated window
 - Restore the launcher popup; open the game in a window
 - Review fixes: an over-broad assertion, and CSS that worked by accident
 - Split CI by event, and give the version one owner
