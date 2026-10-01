@@ -220,8 +220,18 @@ void main() {
           reason: 'release tags must trigger the workflow');
       expect(workflow, contains('needs: release-prep'),
           reason: 'publishing must wait on a job that runs on tags');
-      expect(workflow, isNot(matches(RegExp(r'^\s*needs: test', multiLine: true))),
-          reason: 'nothing on the tag path may depend on the PR-only test job');
+      // Scoped to publish-firefox, not the whole file. `test` is legitimately
+      // dependable from anything else that runs on a pull request; only the
+      // tag path must never wait on it, because there it is skipped and the
+      // dependency leaves the job pending forever. Asserting over the whole
+      // file would forbid a future PR-path job from needing `test` - a correct
+      // change the test would report as a regression.
+      final fox = RegExp(r'  publish-firefox:[\s\S]*?(?=\n  [a-z-]+:|$)')
+          .firstMatch(workflow)
+          ?.group(0);
+      expect(fox, isNotNull, reason: 'the publish job must exist');
+      expect(fox, isNot(contains('needs: test')),
+          reason: 'publishing must not wait on the PR-only test job');
       // The commented-out Chrome job had the same defect; keep it consistent.
       expect(workflow, contains('# needs: release-prep'));
     });

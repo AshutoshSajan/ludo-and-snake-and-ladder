@@ -37,6 +37,13 @@
           circle at 50% -20%, var(--felt-light) 0%, var(--felt) 70%
         );
       }
+      /* Stated explicitly rather than left to the initial containing block.
+         #game and #over are position:absolute; without a positioned ancestor
+         they resolve against the viewport, which happens to be the same size as
+         body here - so it works, but only by coincidence. An earlier edit
+         intended to add this line silently matched nothing, and the CSS stayed
+         correct by accident for several commits. */
+      body { position: relative; }
       /* The game fills the popup outright. There is no launcher, so there is
          nothing to reveal, which sidesteps the trap the launcher created: a
          display:none iframe has a 0x0 viewport, so Flutter measures itself at
