@@ -10,6 +10,7 @@ import '../../controllers/snakes_session.dart';
 import '../../engine/core/player_profiles.dart';
 import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
+import '../../services/saved_game.dart';
 import '../shared/dice_widget.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
@@ -20,9 +21,17 @@ import '../shared/pulse.dart';
 
 /// Full Snakes & Ladders game screen (2..10 players, human or bot seats).
 class SnakesGameView extends ConsumerStatefulWidget {
-  const SnakesGameView({super.key, required this.seats, this.rng});
+  const SnakesGameView({
+    super.key,
+    required this.seats,
+    this.rng,
+    this.savedGame,
+  });
 
   final List<SeatSetup> seats;
+
+  /// A game to pick up rather than a new one; replaces [seats].
+  final SavedGame? savedGame;
 
   /// Die source. Injectable for tests, which need to control the roll: a pawn
   /// off the board can only enter on a 1, so a test about the walk out of home
@@ -47,18 +56,55 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   @override
   void initState() {
     super.initState();
-    session = SnakesSession(
-      seats: widget.seats,
-      profiles: ref.read(profilesProvider.notifier),
-      sound: ref.read(soundServiceProvider),
-      onGameOver: _onGameOver,
-      rng: widget.rng,
-    );
+    if (widget.savedGame != null) {
+      session = SnakesSession.resume(
+        stateJson: widget.savedGame!.state,
+        seatNames: widget.savedGame!.seatNames,
+        profiles: ref.read(profilesProvider.notifier),
+        sound: ref.read(soundServiceProvider),
+        onGameOver: _onGameOver,
+      );
+      // Started only now: a timer running from the constructor would time out
+      // the turn the player inherited without ever seeing it begin.
+      session.scheduleNext();
+    } else {
+      session = SnakesSession(
+        seats: widget.seats,
+        profiles: ref.read(profilesProvider.notifier),
+        sound: ref.read(soundServiceProvider),
+        onGameOver: _onGameOver,
+        rng: widget.rng,
+      );
+    }
     session.addListener(_onSessionChanged);
+  }
+
+  /// Trailing-debounced, then flushed on dispose — see LudoGameView for why.
+  static const _saveDebounce = Duration(milliseconds: 800);
+  Timer? _saveTimer;
+
+  void _scheduleSave() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(_saveDebounce, _saveNow);
+  }
+
+  Future<void> _saveNow() async {
+    if (session.state.phase == SnakesPhase.gameOver) {
+      await SavedGameStore().clear(GameKind.snakes);
+      return;
+    }
+    await SavedGameStore().save(SavedGame(
+      game: GameKind.snakes,
+      state: session.state.toJson(),
+      seatNames: [for (final p in session.state.players) p.name],
+      savedAt: DateTime.now(),
+    ));
   }
 
   @override
   void dispose() {
+    _saveTimer?.cancel();
+    unawaited(_saveNow());
     _animTimer?.cancel();
     session.removeListener(_onSessionChanged);
     session.dispose();
@@ -66,6 +112,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   }
 
   void _onSessionChanged() {
+    _scheduleSave();
     final anim = session.activeAnim;
     _animTimer?.cancel();
     _animStep = 0;
