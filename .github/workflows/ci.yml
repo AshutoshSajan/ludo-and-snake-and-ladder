@@ -232,15 +232,31 @@ jobs:
       - name: Package the add-on
         run: ./tools/build_extension.sh --firefox --zip
 
-      - name: Publish to addons.mozilla.org
+      - name: Submit to addons.mozilla.org
         env:
           AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
           AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
-          npx --yes web-ext publish \
+          # `sign`, not `publish`: web-ext has no `publish` subcommand. The
+          # commands are build, sign, run, lint, docs, dump-config. Passing
+          # `publish` fails on argument parsing before it ever reaches AMO, so
+          # the job could not have worked however long it was left running.
+          #
+          # AMO does the signing; there is no unsigned upload route. `listed`
+          # publishes to the public channel, `unlisted` self-signs only.
+          #
+          # --approval-timeout 0 disables the wait for AMO's automatic
+          # approval. Without it `sign` blocks for the default 5 minutes on
+          # every submission, which on a runner is five minutes of doing
+          # nothing and then a timeout - the job hangs rather than finishing.
+          # New add-ons are held for human review regardless, so waiting buys
+          # nothing; the upload itself has already been accepted by then.
+          npx --yes web-ext@10.7.0 sign \
             --source-dir build/extension-firefox \
             --channel listed \
-            --api-key "$AMO_JWT_ISSUER:$AMO_JWT_SECRET"
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET" \
+            --approval-timeout 0
 
   # publish-chrome:
   #   COMMENTED OUT ON PURPOSE. The Chrome Web Store path needs a paid developer

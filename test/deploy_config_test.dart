@@ -268,5 +268,29 @@ void main() {
             reason: '$f is not executable — git will ignore it silently');
       }
     });
+
+    test('the AMO upload uses `sign`, with the approval wait disabled', () {
+      // `web-ext publish` is not a subcommand - the commands are build, sign,
+      // run, lint, docs, dump-config - and web-ext runs with yargs strict, so
+      // an unknown command fails on argument parsing before reaching AMO. The
+      // job could never have worked, and the error names no obvious cause.
+      //
+      // --approval-timeout 0 is the fix for the hang: `sign` otherwise blocks
+      // for the default 5 minutes on every submission waiting for AMO's
+      // automatic approval, which is a runner doing nothing and then timing
+      // out. New add-ons are held for human review regardless, so the wait
+      // never produces a publishable result.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final step = RegExp(r'npx --yes web-ext@[\d.]+ sign(?:[^\n]*\\\n)*[^\n]*')
+          .firstMatch(workflow)
+          ?.group(0);
+      expect(step, isNotNull, reason: 'the upload step must invoke web-ext sign');
+      expect(step, isNot(contains('web-ext publish')));
+      expect(step, contains('--approval-timeout 0'));
+      // The JWT flow needs issuer and secret as separate flags, not the
+      // "issuer:secret" single argument.
+      expect(step, contains('--api-key'));
+      expect(step, contains('--api-secret'));
+    });
   });
 }
