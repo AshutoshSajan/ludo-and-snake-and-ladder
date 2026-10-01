@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Game Club — Ludo & Snakes n Ladders",
+  "name": "Game Club \u2014 Ludo & Snakes n Ladders",
   "short_name": "Game Club",
-  "description": "Play Ludo and Snakes & Ladders offline — 2-10 players, smart bots, pass-and-play.",
+  "description": "Play Ludo and Snakes & Ladders offline \u2014 2-10 players, smart bots, pass-and-play.",
   "version": "1.0.0",
   "icons": {
     "16": "icons/icon16.png",
@@ -26,5 +26,11 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://ludo-1zpb.onrender.com"
   },
-  "offline_enabled": true
+  "offline_enabled": true,
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "game-club@ludo-snails.example",
+      "strict_min_version": "115.0"
+    }
+  }
 }

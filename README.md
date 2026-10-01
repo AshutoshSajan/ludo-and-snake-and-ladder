@@ -137,12 +137,40 @@ gh pr create --base dev                     # PR to the parent, never main
 `.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
 release web build) and on **every merge to `dev`/`staging`/`main`**.
 
-> **CI is currently over its GitHub-hosted runner quota**, so every job reports
-> `steps=0` and nothing verifies a push. The checks run locally instead via the
-> pre-push hook — see [Local checks](#local-checks-the-free-stand-in-for-ci).
-> The workflow is kept intact and should be restored when quota returns; a
-> [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners)
-> does not consume hosted minutes.
+> **Tests run only on PRs that target `main`.** Runner minutes are metered and
+> this repo exhausted them, so a full Flutter build on every PR — several a day,
+> most of them work that is not going to ship — spent the quota early. The
+> release PR into `main` is the one that must be green.
+>
+> What that gives up, stated plainly: a broken PR into `dev` or `staging` is not
+> caught by CI. The [pre-push hook](#local-checks-the-free-stand-in-for-ci) runs
+> the same commands locally instead — but that is not a substitute, since it can
+> be skipped with `--no-verify` and does not run for a merge made from the
+> GitHub UI. A [self-hosted
+> runner](https://docs.github.com/en/actions/hosting-your-own-runners) does not
+> consume hosted minutes and would restore real coverage.
+
+### Publishing the add-ons
+
+Both store jobs are in the workflow, triggered on a `v*` tag so a release is a
+deliberate act. The **Chrome job is commented out** — the Web Store needs a paid
+developer account that is not set up, and a publish job failing on every tag is
+worse than no job. The steps are kept so enabling it is a review, not a rewrite.
+
+Credentials go in repository secrets and are **not** in the repo:
+`AMO_JWT_ISSUER` and `AMO_JWT_SECRET` for Firefox, plus
+`CHROME_CLIENT_ID`, `CHROME_CLIENT_SECRET` and `CHROME_REFRESH_TOKEN` when
+Chrome is enabled.
+
+Before uploading, check the package the way AMO will:
+
+```bash
+npx web-ext lint --source-dir build/extension-firefox --self-hosted
+```
+
+That is what caught the missing `gecko.id`, which AMO rejects a listed add-on
+without. It now reports 0 errors; the remaining warnings are all inside the
+compiled Dart bundle.
 
 `CHANGELOG.md` is **generated** by [git-cliff](https://git-cliff.org) from the
 commit history using `cliff.toml` (Keep a Changelog format) — never hand-edit

@@ -115,6 +115,18 @@ void main() {
         contains('https://ludo-1zpb.onrender.com/*'));
   });
 
+  test('the Firefox manifest carries the add-on id AMO demands', () {
+    // Found by running `web-ext lint`, which reports ADDON_ID_REQUIRED:
+    // addons.mozilla.org rejects a listed add-on with no browser_specific_
+    // settings.gecko.id. It is the permanent identity, so it must not change
+    // between uploads or a second add-on is created.
+    final gecko = (load('manifest.firefox.json')['browser_specific_settings']
+        as Map)['gecko'] as Map;
+    expect(gecko['id'], isNotEmpty);
+    expect('${gecko['id']}', contains('@'),
+        reason: 'a gecko id is an email-shaped string or a GUID');
+  });
+
   test('the build script packages the popup and checks it', () {
     final sh = File('tools/build_extension.sh').readAsStringSync();
     expect(sh, contains('extension/popup.html extension/popup.js'),

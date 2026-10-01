@@ -36,6 +36,18 @@ jobs:
           echo "main head is a merge commit — OK"
 
   test:
+    # Only for PRs that target main. This is the entire point of the scoping:
+    # GitHub-hosted runner minutes are a metered resource and this repo
+    # exhausted them, so a full Flutter build on every PR to dev - several a
+    # day - spent the quota on work that is not going to ship yet.
+    #
+    # What this gives up, stated plainly: a broken PR into dev or staging is
+    # not caught by CI. It is caught by the pre-push hook instead, which runs
+    # the same commands locally on every push. Local coverage is not a
+    # substitute - it can be skipped with --no-verify, and it does not run for
+    # a maintainer merging from the GitHub UI - so the release PR into main
+    # remains the one that must be green.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -128,3 +140,75 @@ jobs:
           fi
           git push origin --delete "$branch"
           echo "deleted $branch (merged into $base)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Store publishing
+  #
+  # Both jobs live here so the Chrome path is not lost while it is switched
+  # off. Uncommenting the Chrome job is a one-step change; rediscovering the
+  # whole thing is not.
+  #
+  # Both need credentials in repository secrets, which are NOT in the repo:
+  #   AMO_JWT_ISSUER, AMO_JWT_SECRET      (addons.mozilla.org API credentials)
+  #   CHROME_CLIENT_ID, CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN
+  #
+  # They run on a tag so a release is a deliberate act rather than something
+  # that happens whenever main moves.
+  # ---------------------------------------------------------------------------
+
+  publish-firefox:
+    # Builds the signed-package-ready .xpi and hands it to addons.mozilla.org,
+    # which does the signing. AMO rejects an unsigned upload, so this is the
+    # only route; there is no local equivalent worth automating.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    needs: test
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the web bundle
+        # The extension bundles the whole Flutter payload; there is no dart-define
+        # for the server here, so an add-on build needs no configuration.
+        run: |
+          flutter pub get
+          flutter build web --release
+
+      - name: Package the add-on
+        run: ./tools/build_extension.sh --firefox --zip
+
+      - name: Publish to addons.mozilla.org
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          npx --yes web-ext publish \
+            --source-dir build/extension-firefox \
+            --channel listed \
+            --api-key "$AMO_JWT_ISSUER:$AMO_JWT_SECRET"
+
+  # publish-chrome:
+  #   COMMENTED OUT ON PURPOSE. The Chrome Web Store path needs a paid developer
+  #   account ($5 one-off, then a 5% cut), which is not set up, and a publish
+  #   job that fails on every tag is worse than no job. The build and upload
+  #   steps are kept so enabling it is a review, not a rewrite.
+  #
+  #   To enable: uncomment, and add the three CHROME_* secrets.
+  #
+  # if: startsWith(github.ref, 'refs/tags/v')
+  # runs-on: ubuntu-24.04
+  # needs: test
+  # permissions:
+  #   contents: read
+  # steps:
+  #   - uses: actions/checkout@v7
+  #   - run: flutter pub get
+  #   - run: flutter build web --release
+  #   - run: ./tools/build_extension.sh --chrome --zip
+  #   - uses: actions/upload-artifact@v4
+  #     with:
+  #       name: game-club-chrome
+  #       path: build/game-club-chrome.zip
+  #   # Uploading to the Web Store needs the Chrome Web Store API via a
+  #   # publisher service account; the credential names are in the README.
