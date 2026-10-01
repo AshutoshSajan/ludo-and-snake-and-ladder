@@ -30,6 +30,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Review fixes: an over-broad assertion, and CSS that worked by accident
 - Split CI by event, and give the version one owner
 - Make the release path reachable, and give the changelog one writer
 - Popup goes straight to the main screen, no launcher in front of it
