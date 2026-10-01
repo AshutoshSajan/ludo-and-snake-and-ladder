@@ -60,10 +60,44 @@ p.write_text(s2)
 print('bootstrap pinned to local canvaskit')
 PY
 
-# 4. sanity: no remote script/font/wasm references may remain anywhere
-echo '--- remote refs remaining (must be none): ---'
-grep -rEoh 'https?://[a-zA-Z0-9./_-]+\.(js|wasm|json|ttf)' "$out" \
-  --include='*.js' --include='*.html' || echo 'none ✓'
+# 4. Remote references.
+#
+# The previous version of this check grepped for `.js|.wasm|.json|.ttf` and
+# reported "none" while the bundle was fetching https://fonts.gstatic.com/s/ -
+# no file extension, so no match. The result was an extension that drew every
+# pixel of the board and not one character of text, because MV3's CSP blocked
+# the font and said nothing at all.
+#
+# So: hosts that are actually *fetched* are blocking; hosts merely named in a
+# string (a help URL, a docs link) are listed and ignored. Distinguishing them
+# by hand is the whole point - it is what turned an invisible runtime failure
+# into a build that stops.
+echo '--- remote references ---'
+python3 - "$out" <<'PY'
+import pathlib, re, sys
+out = pathlib.Path(sys.argv[1])
+# Reached only when useLocalCanvasKit is false, and the build pins that flag
+# on, so it is dead code in a packaged extension.
+# The real invariant: the default font must be *in the package*. The gstatic
+# string stays in main.dart.js as fallback code even once Roboto is bundled, so
+# its presence proves nothing either way - what matters is that the family
+# resolves locally before that fallback is ever reached.
+import json
+fm = out / 'assets' / 'FontManifest.json'
+families = [f.get('family') for f in json.loads(fm.read_text())] if fm.exists() else []
+if 'Roboto' not in families:
+    sys.exit('FAIL: Roboto is not in the package. CanvasKit falls back to '
+             'fetching it from fonts.gstatic.com, MV3 blocks that, and every '
+             'label in the game silently renders as nothing.')
+print('  bundled fonts: %s' % families)
+for js in list(out.rglob('*.js')) + list(out.rglob('*.html')):
+    for url in re.findall(r'https?://[A-Za-z0-9.\-]+(?:/[A-Za-z0-9./_%\-+]*)?',
+                          js.read_text(errors='ignore')):
+        print('  inert  %s  <- %s' % (url, js.name))
+print('  (any fonts.gstatic.com above is fallback code, unreachable while '
+      'Roboto is bundled)')
+PY
+
 
 # 5. The manifest must be valid JSON, and must not carry the other browser's
 #    background model. A silently wrong manifest installs and then does
