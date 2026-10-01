@@ -37,14 +37,24 @@ if [ "$trunk" = "1" ]; then
 fi
 
 # 2. The local quality gate, unless this push only moves tags.
+#
+# Ref *deletions* are skipped too, and they arrive as ":refs/heads/x" with an
+# empty local side. Running the suite on one is pure waste - a deleted branch
+# changes no code - and it blocked a routine cleanup outright.
 pushing_refs=()
+deleting=0
 for remote_ref in "$@"; do
   case "$remote_ref" in
     refs/tags/*) ;;
+    :*) deleting=1 ;;
     *) pushing_refs+=("$remote_ref") ;;
   esac
 done
-[ ${#pushing_refs[@]} -eq 0 ] && skip "tag-only push, nothing to check."
+[ ${#pushing_refs[@]} -eq 0 ] && skip "tag-only or delete-only push, nothing to check."
+[ "$deleting" = 1 ] && {
+  printf '\033[1m[pre-push] deleting refs; skipping the gate\033[0m\n'
+  exit 0
+}
 
 if [ "${SKIP_LOCAL_CI:-0}" = "1" ]; then
   skip "SKIP_LOCAL_CI=1 — skipping analyze/test."
