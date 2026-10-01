@@ -7,6 +7,7 @@ import '../../engine/ludo/ludo_models.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart' show DefaultNames;
 import '../../controllers/ludo_session.dart';
+import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../../ui/ludo/ludo_view.dart';
 import '../../ui/snakes/snakes_view.dart';
@@ -82,6 +83,11 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       _SeatDraft(name: _freshSeatName(taken), isAI: true),
     ];
     _normalizeColors();
+    // Resume is offered only if there is a game to resume, so a player who
+    // never left one in progress never sees the button.
+    SavedGameStore().load(widget.game).then((g) {
+      if (mounted && g != null) setState(() => _saved = g);
+    });
   }
 
   /// A generated name for a new seat, distinct from the seats already at the
@@ -153,6 +159,18 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             const SizedBox(height: 8),
             for (var i = 0; i < _seats.length; i++) _seatCard(i, profiles),
             const SizedBox(height: 12),
+            // Offered only when there is something to resume, so a player who
+            // never left a game in progress never sees it.
+            if (_saved != null) ...[
+              OutlinedButton.icon(
+                icon: const Icon(Icons.restore),
+                label: Text(
+                  'Resume $_savedSeats saved · ${_age(_saved!.savedAt)}',
+                ),
+                onPressed: _resume,
+              ),
+              const SizedBox(height: 8),
+            ],
             FilledButton.icon(
               icon: const Icon(Icons.casino),
               label: const Text('Start game'),
@@ -364,6 +382,33 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   }
 
   // ---------------------------------------------------------------- start
+
+  /// Reads the save on open. Started in initState and awaited into state
+  /// rather than blocking the first frame — the setup screen is usable either
+  /// way, and a slow disk should not delay it.
+  SavedGame? _saved;
+
+  int get _savedSeats => _saved?.seatNames.length ?? 0;
+
+  /// How long ago the save was written, in words a player would use.
+  static String _age(DateTime at) {
+    final d = DateTime.now().difference(at);
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
+
+  void _resume() {
+    final saved = _saved;
+    if (saved == null) return;
+    Haptics.light();
+    Navigator.of(context).pushReplacement(MaterialPageRoute(
+      builder: (_) => widget.game == GameKind.ludo
+          ? LudoGameView(savedGame: saved)
+          : SnakesGameView(seats: const [], savedGame: saved),
+    ));
+  }
 
   void _start() {
     for (final s in _seats) {

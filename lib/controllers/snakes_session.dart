@@ -42,6 +42,7 @@ class SnakesSession extends ChangeNotifier {
     required this.sound,
     required this.onGameOver,
     Random? rng,
+    bool skipSchedule = false,
   }) : _rng = rng ?? Random() {
     final players = <SnakesPlayer>[];
     for (var i = 0; i < seats.length; i++) {
@@ -54,7 +55,32 @@ class SnakesSession extends ChangeNotifier {
       ));
     }
     state = createSnakesState(players);
-    scheduleNext();
+    if (!skipSchedule) scheduleNext();
+  }
+
+  /// Rebuilds a session from a saved game.
+  ///
+  /// As with Ludo, the board comes back exactly and the turn timer does not:
+  /// the caller schedules when it is ready, so a resumed game does not
+  /// immediately time out the turn it inherited.
+  factory SnakesSession.resume({
+    required Map<String, dynamic> stateJson,
+    required List<String> seatNames,
+    required ProfilesNotifier profiles,
+    required SoundService sound,
+    required void Function(SnakesState) onGameOver,
+  }) {
+    final session = SnakesSession(
+      seats: [
+        for (final n in seatNames) SeatSetup(name: n),
+      ],
+      profiles: profiles,
+      sound: sound,
+      onGameOver: onGameOver,
+      skipSchedule: true,
+    );
+    session.state = SnakesState.fromJson(stateJson);
+    return session;
   }
 
   late SnakesState state;

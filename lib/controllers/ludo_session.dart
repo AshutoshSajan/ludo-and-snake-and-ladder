@@ -87,6 +87,34 @@ class LudoSession extends ChangeNotifier {
     if (!skipSchedule) scheduleNext();
   }
 
+  /// Rebuilds a session from a saved game instead of starting a new one.
+  ///
+  /// The engine state comes straight back from JSON, so the board, the tokens,
+  /// whose turn it is and the sixes-in-a-row count all resume exactly. What is
+  /// *not* restored is the turn timer: [skipSchedule] stops the constructor
+  /// from starting a fresh one, and the caller schedules when it is ready —
+  /// otherwise a resumed game would immediately time out the turn it inherited.
+  factory LudoSession.resume({
+    required Map<String, dynamic> stateJson,
+    required List<String> seatNames,
+    required ProfilesNotifier profiles,
+    required SoundService sound,
+    required void Function(LudoState) onGameOver,
+  }) {
+    final session = LudoSession(
+      seats: [
+        for (var i = 0; i < seatNames.length; i++)
+          SeatSetup(name: seatNames[i]),
+      ],
+      profiles: profiles,
+      sound: sound,
+      onGameOver: onGameOver,
+      skipSchedule: true,
+    );
+    session.state = LudoState.fromJson(stateJson);
+    return session;
+  }
+
   late LudoState state;
   final ProfilesNotifier profiles;
   final SoundService sound;
