@@ -15,6 +15,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Feat: horizontal scaling — room registry, /stats, sticky LB config
 - Feat: persistent leaderboard via Turso (libSQL HTTP API)
 ### Fixed
+- Fix the three real review findings, and correct the one I got wrong
 - Fix the git-cliff install path, which failed on its first real run
 - Fix the AMO upload: `sign`, not `publish`, and do not wait for approval
 - Fix the leaderboard tab counts and refuse a Netlify build with no game server
