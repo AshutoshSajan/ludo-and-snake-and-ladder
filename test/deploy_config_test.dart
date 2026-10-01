@@ -184,24 +184,51 @@ void main() {
       expect(File('cliff.toml').existsSync(), isTrue);
     });
 
-    test('CI no longer regenerates the changelog — it would race the hook', () {
-      final workflow =
-          File('.github/workflows/ci.yml').readAsStringSync();
-      // Match the job definition and the shell that would run it, not the
-      // word "git-cliff" — the explanatory comment above the removed job
-      // legitimately names it.
-      expect(workflow, isNot(matches(RegExp(r'^\s{2}changelog:', multiLine: true))));
-      expect(workflow, isNot(matches(RegExp(r'run:.*git-cliff'))));
-      // The backstop stays: a hook is bypassable with --no-verify, so these
-      // are the only checks that run on a merge made from the GitHub UI.
-      expect(workflow, contains('guard-main:'));
-      expect(workflow, contains('  test:'));
+    test('the changelog has one writer: CI, on push', () {
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      // The old arrangement had the hook and a CI job both regenerating
+      // CHANGELOG.md, so whichever ran second produced a commit the other had
+      // not verified. The hook no longer touches it; CI owns it.
+      expect(workflow, matches(RegExp(r'^  changelog:', multiLine: true)),
+          reason: 'CI must generate the changelog');
+      expect(workflow, contains("github.event_name == 'push'"),
+          reason: 'generation is a push-time action');
+
+      // Compared against the hook's *code*, not its prose: the header explains
+      // at length why the hook no longer touches the changelog, and that
+      // explanation is worth keeping. Asserting on the raw file would flag the
+      // comment that documents the change as a violation of it.
+      final hook = File('.githooks/pre-push')
+          .readAsStringSync()
+          .replaceAll(RegExp(r'^#.*$', multiLine: true), '');
+      expect(hook, isNot(contains('changelog')),
+          reason: 'the hook must not write or check it; CI is the only writer');
+    });
+
+    test('a tag push triggers the workflow, and publishing can run there', () {
+      // Two separate defects made the release path unreachable while the
+      // workflow still looked correct on screen.
+      //
+      // 1. on.push listed only branches, so `git push origin v1.0.0` ran no
+      //    workflow at all and no publishing job could ever be reached.
+      // 2. publish-firefox had `needs: test`. `test` is scoped to pull
+      //    requests, so on a tag it is skipped, and a job whose dependency was
+      //    skipped never starts - which is what displayed as "waiting for
+      //    approval".
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      expect(workflow, contains("tags: ['v*']"),
+          reason: 'release tags must trigger the workflow');
+      expect(workflow, contains('needs: changelog'),
+          reason: 'publishing must wait on a job that runs on tags');
+      expect(workflow, isNot(matches(RegExp(r'^\s*needs: test', multiLine: true))),
+          reason: 'nothing on the tag path may depend on the PR-only test job');
+      // The commented-out Chrome job had the same defect; keep it consistent.
+      expect(workflow, contains('# needs: changelog'));
     });
 
     test('the pre-push hook gates pushes and does not rewrite them', () {
       final hook = File('.githooks/pre-push').readAsStringSync();
       expect(hook, contains('tool/ci.sh'));
-      expect(hook, contains('tool/changelog.sh --check'));
       // Verifying rather than rewriting is deliberate: amending a commit
       // mid-push rewrites a ref the user already computed.
       expect(hook, isNot(contains('commit --amend')));
@@ -210,21 +237,17 @@ void main() {
       expect(hook, contains('SKIP_LOCAL_CI'));
     });
 
-    test('the hook reads the branch from after the colon, or never fires', () {
-      // Git passes "<local-ref>:<remote-ref>". Matching the whole argument
-      // against refs/heads/staging looks correct and never matches, so the
-      // changelog gate would be installed, silent, and doing nothing.
+    test('the hook skips deletions and tag-only pushes', () {
+      // Deletions arrive as ":refs/heads/x". Running the suite on one changes
+      // no code and blocked a routine branch cleanup outright.
       final hook = File('.githooks/pre-push').readAsStringSync();
-      expect(hook, contains(r'${remote_ref#*:}'),
-          reason: 'the hook must strip the local ref before matching the branch');
-      expect(hook, isNot(contains(r'for remote_ref in "${@-"')),
-          reason: r'"${@-}" is not valid parameter expansion');
+      expect(hook, contains('deleting refs; skipping the gate'));
+      expect(hook, contains('tag-only or delete-only push'));
     });
 
-    test('the hook actually gates a trunk push', () {
+    test('the hook still gates a real branch push', () {
       // Runs the real script with the ref shape git actually passes. Cheap:
-      // SKIP_LOCAL_CI short-circuits the analyze/test half, so this exercises
-      // only the ref parsing and the changelog check.
+      // SKIP_LOCAL_CI short-circuits the analyze/test half.
       final result = Process.runSync(
         '.githooks/pre-push',
         ['refs/heads/staging:refs/heads/staging'],
@@ -232,17 +255,8 @@ void main() {
         workingDirectory: Directory.current.path,
       );
       final out = '${result.stdout}${result.stderr}';
-      expect(out, contains('checking CHANGELOG.md'),
-          reason: 'a staging push must verify the changelog: $out');
-
-      final dev = Process.runSync(
-        '.githooks/pre-push',
-        ['refs/heads/dev:refs/heads/dev'],
-        environment: {'SKIP_LOCAL_CI': '1', 'PATH': '/usr/bin:/bin:/usr/local/bin'},
-        workingDirectory: Directory.current.path,
-      );
-      expect('${dev.stdout}${dev.stderr}', isNot(contains('checking CHANGELOG')),
-          reason: 'a dev push should not pay for the changelog check');
+      expect(out, isNot(contains('skipping the gate')),
+          reason: 'a staging push must not be treated as a no-op: $out');
     }, skip: !File('.githooks/pre-push').existsSync());
 
     test('hooks are shipped executable, or git silently ignores them', () {

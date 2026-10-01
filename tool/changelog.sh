@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Regenerate CHANGELOG.md from commit history, locally.
 #
-# This is the same generator the CI "changelog" job used to run, moved here
-# because that job costs runner minutes and this does not. CHANGELOG.md is
-# generated, never hand-edited — the rules live in cliff.toml.
+# CHANGELOG.md is generated, never hand-edited — the rules live in cliff.toml.
 #
-# The pre-push hook calls this in --check mode on staging/main pushes, so the
-# changelog is verified to match history at the moment it matters instead of
-# being patched up by a bot afterwards.
+# The CI "changelog" job is the only thing that runs this on push, and it is the
+# only place the file is written: pushes to staging/dev regenerate and commit
+# it, while pushes to main and to release tags run it in --check mode. The
+# pre-push hook used to do this too, and having two writers meant whichever ran
+# second produced a commit the other had not verified.
 #
 # Usage:
 #   tool/changelog.sh           rewrite CHANGELOG.md

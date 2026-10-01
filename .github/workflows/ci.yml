@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, staging, dev]
+    # Release tags. Without this the workflow does not run on a tag at all, so
+    # the publishing jobs below were unreachable no matter what they contained.
+    tags: ['v*']
   pull_request:
     # Every PR, regardless of target branch. Limited to these four activity
     # types: with no types filter GitHub runs the workflow on *every*
@@ -72,17 +75,64 @@ jobs:
       - name: Build web (release)
         run: flutter build web --release
 
-  # NOTE: there is deliberately no `changelog` job here any more.
-  #
-  # It used to run git-cliff on a runner and push the result onto the PR head
-  # branch. That costs runner minutes, which this repo exhausted, and it
-  # *raced* the local pre-push hook: both regenerate the same generated file,
-  # so whichever ran second produced a commit the other had not verified.
-  #
-  # The generator now lives in tool/changelog.sh and is verified by
-  # .githooks/pre-push on staging/main pushes, which costs nothing and happens
-  # before the push rather than after it. See README, "Local checks".
-  #
+  changelog:
+    # CHANGELOG.md is generated, never hand-edited; the rules live in cliff.toml
+    # and the generator is tool/changelog.sh, which is the same script the local
+    # hook used to call. Generating it here rather than in the hook means the
+    # file is produced once, in one place, and cannot be a bot commit racing a
+    # human commit.
+    #
+    # Branch pushes (staging, dev) regenerate and commit it. main and tag pushes
+    # only VERIFY: main's head must stay a merge commit for the guard-main job
+    # below, and a bot commit pushed straight to it would fail that guard and
+    # break the "no direct pushes to main" rule the guard exists to enforce.
+    # main gets its changelog by merging staging, which already has it.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # git-cliff resolves versioned sections from tags; a shallow clone
+          # silently produces a changelog with the release history missing.
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        env:
+          GIT_CLIFF_VERSION: 2.14.2
+          GIT_CLIFF_SHA256: 24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
+        run: |
+          url="https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" -o /tmp/git-cliff.tar.gz
+          echo "${GIT_CLIFF_SHA256}  /tmp/git-cliff.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/git-cliff.tar.gz -C /usr/local/bin --strip-components=1 \
+            "git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu/git-cliff"
+          git-cliff --version
+
+      - name: Verify the changelog matches history
+        # A tag is the release record: if the changelog is stale here, the
+        # release notes shipped to users are wrong, and nothing later will fix
+        # it. Failing the tag is the point.
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        run: tool/changelog.sh --check
+
+      - name: Regenerate and commit
+        if: github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/dev'
+        run: |
+          tool/changelog.sh
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "CHANGELOG.md already matches history."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore: regenerate CHANGELOG.md from history"
+          # A plain push, not --force: if the branch moved while this ran the
+          # push is rejected and the next push regenerates from the new head.
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+
   # The `test` and `guard-main` jobs stay. They are the only real backstop —
   # a hook can be skipped with --no-verify and does not run on merges made from
   # the GitHub UI — so they are worth restoring the moment quota allows.
@@ -162,7 +212,11 @@ jobs:
     # only route; there is no local equivalent worth automating.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
-    needs: test
+    # Needs `changelog`, NOT `test`. `test` only runs for pull requests whose
+    # base is main, so on a tag push it is skipped - and a job whose dependency
+    # was skipped never starts, which is what left publishing stuck instead of
+    # running. The changelog job is the tag-path check that actually runs.
+    needs: changelog
     permissions:
       contents: read
     steps:
@@ -198,7 +252,7 @@ jobs:
   #
   # if: startsWith(github.ref, 'refs/tags/v')
   # runs-on: ubuntu-24.04
-  # needs: test
+  # needs: changelog
   # permissions:
   #   contents: read
   # steps:
