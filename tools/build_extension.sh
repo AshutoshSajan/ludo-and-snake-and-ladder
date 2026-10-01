@@ -40,7 +40,7 @@ mkdir -p "$out"
 python3 tools/gen_extension_icons.py >/dev/null
 cp -r build/web/. "$out"/
 cp "extension/manifest.$target.json" "$out/manifest.json"
-cp extension/background.js "$out"/
+cp extension/popup.html extension/popup.js "$out"/
 cp -r extension/icons/. "$out/icons/"
 
 # 2. A service worker cannot run in an extension page — there is no such
@@ -99,21 +99,20 @@ print('  (any fonts.gstatic.com above is fallback code, unreachable while '
 PY
 
 
-# 5. The manifest must be valid JSON, and must not carry the other browser's
-#    background model. A silently wrong manifest installs and then does
-#    nothing when clicked, which is an unpleasant way to find out.
-python3 - "$out/manifest.json" "$target" <<'PY'
-import json, sys
-path, target = sys.argv[1], sys.argv[2]
-m = json.load(open(path))
-bg = m.get('background', {})
-if target == 'firefox':
-    assert 'service_worker' not in bg, 'Firefox MV3 rejects background.service_worker'
-    assert 'scripts' in bg, 'Firefox MV3 needs background.scripts'
-else:
-    assert 'service_worker' in bg, 'Chrome MV3 needs background.service_worker'
-print(f'manifest ok for {target}: background={list(bg)[0]}, v{m["version"]}')
-PY
+# 5. The manifest must be valid JSON and must open the popup. A missing
+#    default_popup falls back to "no page at all", and the failure is silent:
+#    the add-on installs and the button does nothing.
+python3 - "$out/manifest.json" <<'PY2'
+import json, os, sys
+out = os.path.dirname(sys.argv[1])
+m = json.load(open(sys.argv[1]))
+popup = m.get('action', {}).get('default_popup')
+assert popup, 'action.default_popup is required, or the button does nothing'
+for f in [popup, 'popup.js']:
+    assert os.path.exists(os.path.join(out, f)), f'{f} is referenced but not packaged'
+assert 'background' not in m, 'the popup replaced the background click handler'
+print('manifest ok: popup=%s, no background script' % popup)
+PY2
 
 if [ "$want_zip" = 1 ]; then
   ext=zip
