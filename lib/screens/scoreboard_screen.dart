@@ -279,7 +279,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     return [
       for (var i = 0; i < rows.length && i < 3; i++)
         Padding(
-          padding: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.only(bottom: 6),
           child: Card(
             color: AppColors.feltLight,
             shape: RoundedRectangleBorder(
@@ -287,10 +287,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               side: BorderSide(color: medalColors[i], width: 1.5),
             ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               child: Row(
                 children: [
-                  Icon(Icons.emoji_events, color: medalColors[i], size: 28),
+                  Icon(Icons.emoji_events, color: medalColors[i], size: 22),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -316,12 +316,15 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                             ),
                           ],
                         ),
+                        // Same numbers as before, on the name's line. Stacked
+                        // beneath it, the podium was three two-line cards and
+                        // a phone showed no other players at all.
                         Text(
-                          '${rows[i].wins} wins · ${rows[i].games} games · '
+                          '  ·  ${rows[i].wins}W  ${rows[i].games}G  '
                           'avg ${rows[i].avgRank.toStringAsFixed(1)}',
                           style: const TextStyle(
                             color: AppColors.ivoryDark,
-                            fontSize: 12,
+                            fontSize: 11.5,
                           ),
                         ),
                       ],
@@ -345,7 +348,9 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
 
   Widget _row(int place, LeaderboardRow r) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      // 2px, not 6: the rows are the only reason a ten-player board fits, and
+      // twelve pixels of padding per row is most of a phone screen.
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
           SizedBox(

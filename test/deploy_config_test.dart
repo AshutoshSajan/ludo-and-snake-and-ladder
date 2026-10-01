@@ -57,6 +57,19 @@ void main() {
           reason: 'the guard must precede the build command');
     });
 
+    test('rejects a server URL that could never work', () {
+      // Netlify scopes env vars per context, so Production can be right while a
+      // deploy preview points somewhere useless. The build has to notice: a
+      // build aimed at Render's *internal* address is a site that loads
+      // perfectly and then cannot do anything, and the browser reports it as a
+      // content-security violation rather than as an unreachable address.
+      final cmd = toml.substring(toml.indexOf('command = '));
+      expect(cmd, contains('wss://*|ws://*'),
+          reason: 'plain http is blocked by the page and refused by the browser');
+      expect(cmd, contains('*onrender.com*'),
+          reason: 'a bare hostname is Render\'s private address, not the public one');
+    });
+
     test('pins the same Flutter version as the Dockerfile', () {
       // pubspec needs Dart ^3.13.2, which ships with Flutter 3.47.2. The
       // cirruslabs images cannot resolve it, so a drift here breaks the build.

@@ -74,6 +74,31 @@ flutter:
   assets:
     - assets/sounds/
 
+  # Roboto is bundled rather than fetched.
+  #
+  # Flutter's web build ships no default font in the asset bundle: CanvasKit
+  # fetches Roboto from https://fonts.gstatic.com at runtime. On an ordinary
+  # site that is invisible. Inside a browser extension it is fatal - MV3's CSP
+  # blocks the fetch - and it fails by drawing every pixel of the board and not
+  # one character of text, with nothing in the console to explain it.
+  #
+  # Bundling it also makes the add-on genuinely offline, which is the thing it
+  # is advertised as, and drops a third-party request from every page view. The
+  # family name stays "Roboto" so existing fontFamily and weight lookups resolve
+  # to the bundled copy and nothing else in the app has to change.
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/roboto/Roboto-Regular.ttf
+        - asset: assets/fonts/roboto/Roboto-Italic.ttf
+          style: italic
+        - asset: assets/fonts/roboto/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/roboto/Roboto-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/roboto/Roboto-Black.ttf
+          weight: 900
+
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

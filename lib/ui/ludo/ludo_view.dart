@@ -11,6 +11,7 @@ import '../../engine/ludo/ludo_models.dart';
 import '../../engine/ludo/ludo_rules.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
@@ -31,9 +32,14 @@ class LudoGameView extends ConsumerStatefulWidget {
     this.onlineClient,
     this.onlineSeatId,
     this.onOnlineLeave,
+    this.savedGame,
   });
 
   final List<SeatSetup> seats;
+
+  /// A game to pick up rather than a new one. Replaces [seats], which stay for
+  /// the normal start.
+  final SavedGame? savedGame;
 
   /// When set, the game is driven by this authoritative-server connection
   /// (online mode): the session sends intents and adopts snapshots.
@@ -78,6 +84,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         sound: ref.read(soundServiceProvider),
         onGameOver: _onGameOver,
       );
+    } else if (widget.savedGame != null) {
+      session = LudoSession.resume(
+        stateJson: widget.savedGame!.state,
+        seatNames: widget.savedGame!.seatNames,
+        profiles: ref.read(profilesProvider.notifier),
+        sound: ref.read(soundServiceProvider),
+        onGameOver: _onGameOver,
+      );
+      // Only now, with the inherited turn actually in view: a timer started in
+      // the constructor would time out a turn the player never saw begin.
+      session.scheduleNext();
     } else {
       session = LudoSession(
         seats: widget.seats,
@@ -93,8 +110,38 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     _lastSeenSeq = session.state.rollSeq;
   }
 
+  /// Autosave debounce. The session notifies on every animation tick, so the
+  /// save is trailing-debounced instead of written per frame — and flushed on
+  /// dispose, which is the case that actually matters: leaving is the moment a
+  /// player expects their position to be kept.
+  static const _saveDebounce = Duration(milliseconds: 800);
+  Timer? _saveTimer;
+
+  void _scheduleSave() {
+    if (widget.onlineClient != null) return; // the server owns online state
+    _saveTimer?.cancel();
+    _saveTimer = Timer(_saveDebounce, _saveNow);
+  }
+
+  Future<void> _saveNow() async {
+    if (widget.onlineClient != null || session.state.phase == LudoPhase.gameOver) {
+      // A finished game must not offer itself for resume.
+      await SavedGameStore().clear(GameKind.ludo);
+      return;
+    }
+    await SavedGameStore().save(SavedGame(
+      game: GameKind.ludo,
+      state: session.state.toJson(),
+      seatNames: [for (final p in session.state.players) p.name],
+      savedAt: DateTime.now(),
+    ));
+  }
+
   @override
   void dispose() {
+    // Flush rather than debounce: this is the "player left" moment.
+    _saveTimer?.cancel();
+    unawaited(_saveNow());
     _animTimer?.cancel();
     _diceTimer?.cancel();
     _fx.dispose();
@@ -169,6 +216,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _onSessionChanged() {
+    _scheduleSave();
     // Kick off the 3D dice tumble whenever a fresh roll appears — tracked by
     // roll sequence, so it tumbles even when the same number comes up again.
     // Every roll animates, including the ones the engine resolves before this
