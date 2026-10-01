@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<!--
+  The toolbar popup: a launcher, not the game.
+
+  A browser popup is capped at 800x600 and is meant to be dismissed the moment
+  you finish with it. Ludo's board and a 10-seat Snakes grid both need more
+  room than that, and squeezing them in would produce a board too small to
+  read and a window that closes when the player clicks the wrong thing. So this
+  stays a launcher and the game opens in a tab, which is the pattern every
+  extension with real content uses.
+
+  Plain HTML rather than a second Flutter build: a popup that has to boot
+  CanvasKit to draw one button takes seconds, and this opens instantly. The
+  colours are copied from lib/ui/theme.dart so it matches the app.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --felt: #123524;
+        --felt-light: #1b4a33;
+        --ivory: #f5efe0;
+        --ivory-dark: #e5dcc3;
+        --gold: #d9a441;
+      }
+      * { box-sizing: border-box; }
+      body {
+        width: 300px;
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--ivory);
+        background: radial-gradient(
+          circle at 50% -20%, var(--felt-light) 0%, var(--felt) 70%
+        );
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 16px 16px 10px;
+      }
+      .die {
+        width: 30px; height: 30px; flex: none;
+        border-radius: 7px;
+        border: 2px solid var(--gold);
+        background: var(--ivory);
+        /* four pips, in the same arrangement as the app's icon */
+        background-image:
+          radial-gradient(circle 2.4px at 9px 9px, #b3372f 2.4px, transparent 2.5px),
+          radial-gradient(circle 2.4px at 21px 9px, #2f5fb3 2.4px, transparent 2.5px),
+          radial-gradient(circle 2.4px at 9px 21px, #2f5fb3 2.4px, transparent 2.5px),
+          radial-gradient(circle 2.4px at 21px 21px, #b3372f 2.4px, transparent 2.5px);
+      }
+      h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: .2px; }
+      .sub { font-size: 11px; color: rgba(245,239,224,.62); margin-top: 1px; }
+      .body { padding: 4px 16px 16px; }
+      .btn {
+        display: block; width: 100%; padding: 11px 14px; margin-top: 10px;
+        font-size: 13.5px; font-weight: 700; font-family: inherit;
+        color: #1d1405; background: var(--gold);
+        border: 0; border-radius: 10px; cursor: pointer;
+      }
+      .btn:hover { filter: brightness(1.07); }
+      .btn:active { transform: translateY(1px); }
+      .btn.secondary {
+        background: transparent; color: var(--ivory);
+        border: 1px solid rgba(245,239,224,.28); font-weight: 600;
+      }
+      .note {
+        margin: 12px 0 0; font-size: 10.5px; line-height: 1.45;
+        color: rgba(245,239,224,.5); text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="head">
+      <div class="die" aria-hidden="true"></div>
+      <div>
+        <h1>Game Club</h1>
+        <div class="sub">Ludo &middot; Snakes &amp; Ladders</div>
+      </div>
+    </div>
+    <div class="body">
+      <button class="btn" id="play">Open Game Club</button>
+      <button class="btn secondary" id="online">Play online</button>
+      <p class="note">Local play works offline. Online needs the game server awake.</p>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

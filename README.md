@@ -223,7 +223,10 @@ select `build/extension-chrome/`.
 **Firefox:** `about:debugging#/runtime/this-firefox` → **Load Temporary
 Add-on** → pick `build/extension-firefox/manifest.json`.
 
-A die icon appears in the toolbar; clicking it opens the game in a new tab.
+Clicking the die in the toolbar opens a small **launcher popup** — it starts the
+game in a tab, reusing the one that is already open. The game itself is not
+drawn in the popup: a browser popup is capped at 800×600, which is too small for
+either board, and a window that vanishes when you misclick is no way to play.
 Local play works fully offline.
 
 **Why two manifests.** MV3 split the background model and the browsers did not

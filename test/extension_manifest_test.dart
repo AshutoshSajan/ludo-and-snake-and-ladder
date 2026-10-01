@@ -43,18 +43,38 @@ void main() {
     });
   });
 
-  test('the Firefox manifest uses an event page, not a service worker', () {
-    final bg = load('manifest.firefox.json')['background'] as Map;
-    expect(bg.containsKey('scripts'), isTrue,
-        reason: 'Firefox MV3 has no service workers; it needs background.scripts');
-    expect(bg.containsKey('service_worker'), isFalse,
-        reason: 'Firefox rejects a manifest declaring a service worker');
+  test('both manifests open a popup, and declare no background', () {
+    // A popup replaced the toolbar click handler, so neither browser needs a
+    // background script - which also removed the only key that differed
+    // between the two. Without default_popup the add-on installs and the
+    // button does nothing, silently.
+    for (final n in names) {
+      final m = load(n);
+      expect((m['action'] as Map)['default_popup'], 'popup.html', reason: n);
+      expect(m.containsKey('background'), isFalse,
+          reason: '$n: the popup handles the click; a background script is dead '
+              'weight and Firefox would reject a service_worker one anyway');
+    }
   });
 
-  test('the Chrome manifest still uses a service worker', () {
-    final bg = load('manifest.chrome.json')['background'] as Map;
-    expect(bg.containsKey('service_worker'), isTrue,
-        reason: 'Chrome MV3 ignores background.scripts');
+  test('the popup and its script are packaged', () {
+    for (final f in ['extension/popup.html', 'extension/popup.js']) {
+      expect(File(f).existsSync(), isTrue, reason: '$f is missing');
+    }
+    // MV3 forbids inline script, so the handler has to be its own file.
+    final html = File('extension/popup.html').readAsStringSync();
+    expect(html, contains('src="popup.js"'));
+    expect(html, isNot(contains('<script>')),
+        reason: 'inline script is refused under the MV3 CSP');
+  });
+
+  test('the popup launches into a tab rather than into itself', () {
+    // A popup is capped at 800x600 and both boards need more room, so the
+    // popup is a launcher. Running the game inside it would be a board too
+    // small to read and a window that closes when you misclick.
+    final js = File('extension/popup.js').readAsStringSync();
+    expect(js, contains('chrome.tabs.create'));
+    expect(js, contains('window.close()'));
   });
 
   test('both manifests can reach the game server for online play', () {
@@ -78,14 +98,13 @@ void main() {
         contains('https://ludo-1zpb.onrender.com/*'));
   });
 
-  test('the build script accepts a target and refuses a wrong background model',
-      () {
+  test('the build script packages the popup and checks it', () {
     final sh = File('tools/build_extension.sh').readAsStringSync();
-    expect(sh, contains('--firefox'));
-    // The assertion is the part that matters: it is what turns "installed but
-    // does nothing" into a failed build.
-    expect(sh, contains('Firefox MV3 rejects background.service_worker'));
-    expect(sh, contains('Chrome MV3 needs background.service_worker'));
+    expect(sh, contains('extension/popup.html extension/popup.js'),
+        reason: 'the popup must be copied into the package');
+    // The assertion is what turns "installed, button does nothing" into a
+    // failed build.
+    expect(sh, contains('action.default_popup is required'));
     // A service worker cannot run in an extension page at all.
     expect(sh, contains('flutter_service_worker.js'));
   });
