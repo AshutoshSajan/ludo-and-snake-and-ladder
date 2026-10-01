@@ -189,7 +189,7 @@ void main() {
       // The old arrangement had the hook and a CI job both regenerating
       // CHANGELOG.md, so whichever ran second produced a commit the other had
       // not verified. The hook no longer touches it; CI owns it.
-      expect(workflow, matches(RegExp(r'^  changelog:', multiLine: true)),
+      expect(workflow, matches(RegExp(r'^  release-prep:', multiLine: true)),
           reason: 'CI must generate the changelog');
       expect(workflow, contains("github.event_name == 'push'"),
           reason: 'generation is a push-time action');
@@ -218,12 +218,12 @@ void main() {
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
       expect(workflow, contains("tags: ['v*']"),
           reason: 'release tags must trigger the workflow');
-      expect(workflow, contains('needs: changelog'),
+      expect(workflow, contains('needs: release-prep'),
           reason: 'publishing must wait on a job that runs on tags');
       expect(workflow, isNot(matches(RegExp(r'^\s*needs: test', multiLine: true))),
           reason: 'nothing on the tag path may depend on the PR-only test job');
       // The commented-out Chrome job had the same defect; keep it consistent.
-      expect(workflow, contains('# needs: changelog'));
+      expect(workflow, contains('# needs: release-prep'));
     });
 
     test('the pre-push hook gates pushes and does not rewrite them', () {
@@ -291,6 +291,55 @@ void main() {
       // "issuer:secret" single argument.
       expect(step, contains('--api-key'));
       expect(step, contains('--api-secret'));
+    });
+
+    test('pull requests run tests; pushes run changelog, version and publish', () {
+      // The two halves of the workflow, kept apart on purpose:
+      //
+      //   pull_request -> test only
+      //   push         -> changelog + version bump (+ publish on a tag)
+      //
+      // They used to overlap, which meant a push to dev ran a test job scoped
+      // away to nothing while a PR into dev ran no checks at all.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      expect(workflow, contains('if: github.event_name == \'pull_request\''),
+          reason: 'the test job is pull-only, and unscoped by base branch');
+      // A base_ref restriction is what left PRs into dev with no CI.
+      expect(workflow, isNot(contains("github.base_ref == 'main'")),
+          reason: 'tests must run for every PR, not only those targeting main');
+      expect(workflow, contains('if: github.event_name == \'push\''),
+          reason: 'changelog and version are push-time work');
+    });
+
+    test('the version is bumped on push, in the same commit as the changelog', () {
+      // The version lived in three files that had already drifted: pubspec said
+      // 1.0.0, both manifests said 1.0.0, the newest tag said v1.1.0. AMO
+      // rejects an upload whose version does not increase, so that drift fails
+      // during a release, with credentials in hand.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      expect(workflow, contains('tool/version.sh --bump'));
+      expect(workflow, contains('tool/version.sh --set'));
+      // One commit: two could land in either order and re-introduce the drift.
+      expect(workflow, contains('git add CHANGELOG.md pubspec.yaml extension/'));
+      // A tag that disagrees with the declared version must fail before upload.
+      expect(workflow, contains('does not match the declared version'));
+    });
+
+    test('one script owns every place the version is declared', () {
+      // tool/version.sh is the only writer, so the three declarations cannot
+      // drift apart again.
+      final script = File('tool/version.sh').readAsStringSync();
+      expect(script, contains('pubspec.yaml'));
+      expect(script, contains('manifest.chrome.json'));
+      expect(script, contains('manifest.firefox.json'));
+      // Lexical tag sorting puts v1.9.0 above v1.10.0, and bumping from the
+      // wrong "latest" silently moves the version backwards.
+      expect(script, contains('--sort=-v:refname'));
+      // Extension manifests reject anything that is not 1-4 integers < 65536,
+      // so a typo must fail on a laptop rather than at AMO.
+      expect(script, contains('65535'));
+      expect(script, isNot(contains('--tags | sort')),
+          reason: 'lexical tag sorting breaks at v1.10.0');
     });
   });
 }

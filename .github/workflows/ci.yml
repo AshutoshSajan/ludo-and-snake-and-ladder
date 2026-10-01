@@ -39,18 +39,20 @@ jobs:
           echo "main head is a merge commit — OK"
 
   test:
-    # Only for PRs that target main. This is the entire point of the scoping:
-    # GitHub-hosted runner minutes are a metered resource and this repo
-    # exhausted them, so a full Flutter build on every PR to dev - several a
-    # day - spent the quota on work that is not going to ship yet.
+    # Pull requests only. This job is the reason to open a PR: it is the only
+    # place the full suite runs on GitHub's infrastructure, so it belongs on
+    # every PR rather than only the ones about to ship.
     #
-    # What this gives up, stated plainly: a broken PR into dev or staging is
-    # not caught by CI. It is caught by the pre-push hook instead, which runs
-    # the same commands locally on every push. Local coverage is not a
-    # substitute - it can be skipped with --no-verify, and it does not run for
-    # a maintainer merging from the GitHub UI - so the release PR into main
-    # remains the one that must be green.
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    # It previously ran only for PRs targeting main, because hosted runner
+    # minutes are metered and this repo had exhausted them. That is a quota
+    # decision, not a correctness one, and it left PRs into dev and staging with
+    # no CI at all - which is the whole path this branch travelled, and the
+    # reason its commits reached dev unverified.
+    #
+    # If the quota runs short again, the lever is `paths` or a self-hosted
+    # runner, not dropping dev and staging from coverage. Skipping the branch
+    # work is what leaves the release carrying every mistake.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -75,7 +77,7 @@ jobs:
       - name: Build web (release)
         run: flutter build web --release
 
-  changelog:
+  release-prep:
     # CHANGELOG.md is generated, never hand-edited; the rules live in cliff.toml
     # and the generator is tool/changelog.sh, which is the same script the local
     # hook used to call. Generating it here rather than in the hook means the
@@ -110,6 +112,22 @@ jobs:
             "git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu/git-cliff"
           git-cliff --version
 
+      - name: Verify the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # The tag is what users see and what AMO records. If the declared
+          # version disagrees with it, the release notes, the store listing and
+          # the uploaded package would all name different versions. Fail here,
+          # before credentials are used.
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(tool/version.sh)
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the declared version $declared"
+            echo "  fix: tool/version.sh --set $tagged && git commit -am 'chore: set version to $tagged'"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches the declared version"
+
       - name: Verify the changelog matches history
         # A tag is the release record: if the changelog is stale here, the
         # release notes shipped to users are wrong, and nothing later will fix
@@ -120,15 +138,23 @@ jobs:
       - name: Regenerate and commit
         if: github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/dev'
         run: |
+          # The version is bumped in the SAME commit as the changelog, on
+          # purpose. Two commits could land in either order, and a changelog
+          # describing 1.1.0 sitting next to a pubspec claiming 1.2.0 is exactly
+          # the drift that made the declared version untrustworthy in the first
+          # place.
+          next=$(tool/version.sh --bump)
+          echo "next version: $next"
+          tool/version.sh --set "$next"
           tool/changelog.sh
-          if git diff --quiet -- CHANGELOG.md; then
-            echo "CHANGELOG.md already matches history."
+          if git diff --quiet -- CHANGELOG.md pubspec.yaml extension/; then
+            echo "Nothing to commit: changelog and version already current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "chore: regenerate CHANGELOG.md from history"
+          git add CHANGELOG.md pubspec.yaml extension/
+          git commit -m "chore: release prep $next - regenerate changelog, bump version"
           # A plain push, not --force: if the branch moved while this ran the
           # push is rejected and the next push regenerates from the new head.
           git push origin HEAD:"${GITHUB_REF_NAME}"
@@ -216,7 +242,7 @@ jobs:
     # base is main, so on a tag push it is skipped - and a job whose dependency
     # was skipped never starts, which is what left publishing stuck instead of
     # running. The changelog job is the tag-path check that actually runs.
-    needs: changelog
+    needs: release-prep
     permissions:
       contents: read
     steps:
@@ -268,7 +294,7 @@ jobs:
   #
   # if: startsWith(github.ref, 'refs/tags/v')
   # runs-on: ubuntu-24.04
-  # needs: changelog
+  # needs: release-prep
   # permissions:
   #   contents: read
   # steps:
