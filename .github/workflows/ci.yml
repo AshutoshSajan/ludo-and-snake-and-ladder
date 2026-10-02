@@ -245,7 +245,7 @@ jobs:
   # whole thing is not.
   #
   # Both need credentials in repository secrets, which are NOT in the repo:
-  #   AMO_JWT_ISSUER, AMO_JWT_SECRET      (addons.mozilla.org API credentials)
+  #   AMO_API_KEY, AMO_API_SECRET            (addons.mozilla.org API credentials)
   #   CHROME_CLIENT_ID, CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN
   #
   # They run on a tag so a release is a deliberate act rather than something
@@ -310,8 +310,8 @@ jobs:
 
       - name: Submit to addons.mozilla.org
         env:
-          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+          AMO_API_KEY: ${{ secrets.AMO_API_KEY }}
+          AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
         run: |
           # `sign`, not `publish`: web-ext has no `publish` subcommand. The
           # commands are build, sign, run, lint, docs, dump-config. Passing
@@ -330,8 +330,8 @@ jobs:
           npx --yes web-ext@10.7.0 sign \
             --source-dir build/extension-firefox \
             --channel listed \
-            --api-key "$AMO_JWT_ISSUER" \
-            --api-secret "$AMO_JWT_SECRET" \
+            --api-key "$AMO_API_KEY" \
+            --api-secret "$AMO_API_SECRET" \
             --approval-timeout 0
 
   # publish-chrome:
