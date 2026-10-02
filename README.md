@@ -160,7 +160,7 @@ developer account that is not set up, and a publish job failing on every tag is
 worse than no job. The steps are kept so enabling it is a review, not a rewrite.
 
 Credentials go in repository secrets and are **not** in the repo:
-`AMO_JWT_ISSUER` and `AMO_JWT_SECRET` for Firefox, plus
+`AMO_API_KEY` and `AMO_API_SECRET` for Firefox, plus
 `CHROME_CLIENT_ID`, `CHROME_CLIENT_SECRET` and `CHROME_REFRESH_TOKEN` when
 Chrome is enabled.
 
