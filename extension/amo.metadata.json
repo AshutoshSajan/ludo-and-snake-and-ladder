@@ -1,8 +1,7 @@
 {
-  "license": "GPL-3.0-only",
-  "categories": ["games"],
+  "categories": ["games-entertainment"],
   "homepage_url": "https://github.com/AshutoshSajan/ludo-and-snake-and-ladder",
-  "developer": {
-    "name": "Ashutosh Sajan"
+  "version": {
+    "license": "GPL-3.0-only"
   }
 }

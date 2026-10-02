@@ -62,33 +62,51 @@ cp -r extension/icons/. "$out/icons/"
 cp LICENSE "$out/LICENSE"
 
 if [ "$target" = firefox ]; then
-  # AMO reads this from the extension source directory and sends it with the
-  # submission; it is not part of the shipped add-on. Without it AMO rejects a
-  # listed version: "This field, or custom_license, is required for listed
-  # versions." Chrome does not read it, so packaging it there would only add a
-  # file the Web Store ignores.
+  # This file is NOT read by AMO from the source directory. `web-ext sign` only
+  # reads it when `--amo-metadata` names the path, and the CI passes that
+  # explicitly - see .github/workflows/ci.yml. Copying it into the package
+  # achieves nothing on its own and only bloats the add-on, so it is not copied.
   #
-  # web-ext sign does not fail on a missing file - it just sends nothing - so
-  # the license has to be checked here, where the error names the field. The
-  # placeholder below is refused outright: it is not a licence grant, and an
-  # add-on that ships claiming one is worse than one that does not ship.
+  # It is validated here because web-ext does not fail on a missing or malformed
+  # file: it sends whatever it read, and AMO answers with a 400 that names a
+  # field but not the file. Two shapes have already been wrong here:
+  #   * `license` at the top level. AMO reads it under `version` - web-ext
+  #     spreads `{...metadata, version: {upload, ...metadata.version}}`, so a
+  #     top-level license never reaches version.license.
+  #   * `categories: ["games"]`. That is not an AMO slug; the API has 32 and
+  #     this one is `games-entertainment`. A wrong slug is the same silent 400.
   if ! python3 -c "
 import json, sys
+
+VALID_CATEGORIES = {'games-entertainment'}
+
 m = json.load(open('extension/amo.metadata.json'))
-lic = (m.get('license') or '').strip()
+
+# version.license: an SPDX slug from AMO's builtin list. GPL-3.0-only is on it;
+# bare GPL-3.0 is not (SPDX deprecated it), and neither is MIT-as-an-slug.
+lic = str((m.get('version') or {}).get('license') or '').strip()
 if not lic:
-    sys.exit('FAIL: extension/amo.metadata.json has no license. AMO rejects a '
-             'listed version without one.')
+    sys.exit('FAIL: extension/amo.metadata.json has no version.license. AMO '
+             'rejects a listed version without one, naming it under \"version\".')
 if lic.startswith('UNSET'):
-    sys.exit('FAIL: extension/amo.metadata.json still holds the placeholder '
-             'license %r. Pick a real SPDX id (MIT, MPL-2.0, GPL-3.0-or-later) '
-             'or replace it with custom_license, then commit that.' % lic)
+    sys.exit('FAIL: version.license is still the placeholder %r. Pick a real '
+             'AMO license slug and commit it.' % lic)
+if lic == 'GPL-3.0':
+    sys.exit('FAIL: version.license %r is not an AMO slug - SPDX deprecated it '
+             'for GPL-3.0-only / GPL-3.0-or-later.' % lic)
+
+cats = m.get('categories') or []
+if not cats:
+    sys.exit('FAIL: amo.metadata.json has no categories; a listed add-on needs one.')
+bad = [c for c in cats if c not in VALID_CATEGORIES]
+if bad:
+    sys.exit('FAIL: unknown AMO category slug(s) %r. Valid here: %s.'
+             % (bad, sorted(VALID_CATEGORIES)))
 "; then
     exit 1
   fi
-  cp extension/amo.metadata.json "$out/amo.metadata.json"
-  # A `listed` submission may reference the licence by SPDX id alone, but the
-  # add-on still has to carry the text (GPL section 4). Both are checked here so
+  # A `listed` submission references the licence by slug alone, but the add-on
+  # still has to carry the text (GPL section 4). Both are checked here so
   # neither is discovered by AMO instead.
   if ! cmp -s LICENSE "$out/LICENSE"; then
     echo "ERROR: the packaged LICENSE differs from the repository one." >&2

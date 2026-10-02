@@ -344,18 +344,35 @@ void main() {
           reason: 'changelog and version are push-time work');
     });
 
-    test('the version is bumped on push, in the same commit as the changelog', () {
+    test('a bump is still one script, and a stale tag still fails', () {
       // The version lived in three files that had already drifted: pubspec said
       // 1.0.0, both manifests said 1.0.0, the newest tag said v1.1.0. AMO
       // rejects an upload whose version does not increase, so that drift fails
       // during a release, with credentials in hand.
+      //
+      // The bot that bumped it on every staging/dev push is gone, so the
+      // guarantee now rests on two things: the script still writes all three
+      // files together, and the workflow still refuses a tag whose version
+      // disagrees with what is declared.
+      final script = File('tool/version.sh').readAsStringSync();
+      expect(script, contains('--bump'),
+          reason: 'bumping is a local step now, not a job');
+      expect(script, contains('--set'));
+
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
-      expect(workflow, contains('tool/version.sh --bump'));
-      expect(workflow, contains('tool/version.sh --set'));
-      // One commit: two could land in either order and re-introduce the drift.
-      expect(workflow, contains('git add CHANGELOG.md pubspec.yaml extension/'));
       // A tag that disagrees with the declared version must fail before upload.
+      // This check is what replaced the automation: forgetting to bump stops the
+      // release here, with a message naming the command, rather than shipping
+      // drift that only fails once credentials are in hand.
       expect(workflow, contains('does not match the declared version'));
+      // ...and the step must actually run on a tag, or it is decoration.
+      final prep = workflow
+          .split('\n')
+          .skipWhile((l) => l != '  release-prep:')
+          .skip(1)
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:').hasMatch(l))
+          .join('\n');
+      expect(prep, contains("startsWith(github.ref, 'refs/tags/v')"));
     });
 
     test('one script owns every place the version is declared', () {
@@ -423,16 +440,23 @@ void main() {
       expect(workflow, contains('needs: [release-prep, verify-release]'));
     });
 
-    test('the bot retries its push instead of failing on a race', () {
-      // If the branch moved during the run the push is rejected. Going red for
-      // a race nobody caused is noise that trains people to ignore CI - and it
-      // happened twice locally while this branch was being built.
+    test('nothing pushes on CI any more, so the race cannot recur', () {
+      // The bot committed the changelog and pushed it back with a three-attempt
+      // rebase-and-retry loop, because a branch moving mid-run rejects the push.
+      // With staging/dev no longer triggering the workflow there is no writer
+      // and no push, so the loop is gone rather than merely untested. Guarding
+      // the absence is deliberate: if someone re-adds a pushing job, this fails
+      // and makes them think about the race instead of copying the old loop.
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
-      expect(workflow, contains('for attempt in 1 2 3'));
-      expect(workflow, contains('pull --rebase'));
-      // Never --force: that could discard someone else's commit.
-      expect(workflow, isNot(contains('push --force')));
+      expect(workflow, isNot(contains('push --force')),
+          reason: 'a force push could discard someone else\'s commit');
       expect(workflow, isNot(contains('push -f ')));
+      expect(workflow, isNot(contains('git push origin HEAD:')),
+          reason: 'the only writer of the changelog is a person now');
+      expect(workflow, isNot(contains('for attempt in 1 2 3')),
+          reason: 'the retry loop belonged to the push that no longer happens');
+      // The verification it used to race against is still there.
+      expect(workflow, contains('tool/changelog.sh --check'));
     });
   });
 }

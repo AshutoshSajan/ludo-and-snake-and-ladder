@@ -152,45 +152,103 @@ void main() {
         reason: 'a gecko id is an email-shaped string or a GUID');
   });
 
-  test('AMO metadata exists and is packaged for Firefox only', () {
-    // Found by a real submission: web-ext sign uploaded the add-on and AMO
-    // answered `Submission failed (2): Bad Request - "This field, or
-    // custom_license, is required for listed versions."` The license is not in
-    // the manifest; it goes in amo.metadata.json, which web-ext reads from the
-    // extension source directory. A missing file is silent — web-ext sends
-    // nothing and AMO decides — so both halves are pinned here.
+  test('AMO metadata is shaped the way the API reads it', () {
+    // Found by a real submission: web-ext uploaded the add-on and AMO answered
+    //   Submission failed (2): Bad Request
+    //   {"version": {"license": ["This field, or custom_license, is required
+    //                              for listed versions."]}}
+    //
+    // Two shapes in that file have been wrong. Both produce the same opaque
+    // 400, because web-ext does not validate it - it forwards whatever it read.
     final meta = jsonDecode(File('extension/amo.metadata.json').readAsStringSync())
         as Map<String, dynamic>;
-    expect(meta['license'], isA<String>(),
+
+    // 1. license lives under `version`, not at the top level. web-ext sends
+    //    {...metadata, version: {upload, ...metadata.version}}, so a top-level
+    //    license never reaches version.license — the field AMO complained about.
+    final version = meta['version'] as Map<String, dynamic>?;
+    expect(version, isNotNull,
+        reason: 'the metadata must carry a "version" object');
+    final lic = '${(version!['license'] ?? '')}';
+    expect(lic, isNotEmpty,
         reason: 'AMO rejects a listed version with no license');
-    expect('${meta['license']}', isNot(startsWith('UNSET')),
+    expect(lic, isNot(startsWith('UNSET')),
         reason: 'the placeholder is not a licence grant');
-    // AMO matches the SPDX list, where bare `GPL-3.0` is deprecated in favour
-    // of the -only / -or-later forms. A deprecated id is one AMO may drop.
-    expect('${meta['license']}', isNot('GPL-3.0'),
-        reason: 'deprecated SPDX id; use GPL-3.0-only or GPL-3.0-or-later');
-    expect(meta['categories'], isNotEmpty, reason: 'AMO requires categories');
-    expect((meta['developer'] as Map)['name'], isNotEmpty);
+    expect(meta.containsKey('license'), isFalse,
+        reason: 'a top-level license is silently ignored by AMO');
+
+    // 2. categories are AMO slugs. There are 32 and `games` is not one of them;
+    //    the games category is `games-entertainment`.
+    final cats = (meta['categories'] as List?)?.cast<String>() ?? const [];
+    expect(cats, isNotEmpty, reason: 'a listed add-on needs a category');
+    expect(cats, contains('games-entertainment'),
+        reason: '"games" is not an AMO slug; see /api/v5/addons/categories/');
 
     // GPL section 4 requires the licence text to travel with the covered work,
-    // so the file is not just a repo-level courtesy - it has to be packaged.
+    // so it is packaged - but the metadata itself is NOT, because web-ext only
+    // reads it when --amo-metadata names the path. Copying it in achieved
+    // nothing and only bloated the add-on.
     expect(File('LICENSE').existsSync(), isTrue,
         reason: 'the declared licence must have its text in the repo');
     expect(File('LICENSE').readAsStringSync(),
         contains('GNU GENERAL PUBLIC LICENSE'));
     final sh = File('tools/build_extension.sh').readAsStringSync();
+    // Validated, not copied. web-ext reads this file only when --amo-metadata
+    // names it, so shipping it inside the add-on achieved nothing.
     expect(sh, contains('amo.metadata.json'),
-        reason: 'the metadata must be copied into the Firefox package');
+        reason: 'the build must validate the metadata it cannot affect');
+    expect(sh, isNot(contains(r'cp extension/amo.metadata.json')),
+        reason: 'the metadata is not part of the add-on');
     expect(sh, contains(r'cp LICENSE "$out/LICENSE"'),
         reason: 'the licence text must ship inside the add-on');
     // The placeholder is a stand-in, not a licence grant. Packaging it would
     // publish a licence the project never chose, so the build refuses instead.
     expect(sh, contains('UNSET'),
         reason: 'the build must refuse the placeholder license');
-    // Chrome does not read this file; shipping it there adds bytes the Web
-    // Store ignores. The LICENSE copy above is not store-specific, so it is
-    // outside this guard deliberately.
+    // Chrome does not read this file; validating it there would only add a
+    // failure mode. The LICENSE copy is not store-specific, so it stays outside.
     expect(sh, contains(r'if [ "$target" = firefox ]; then'));
+  });
+
+  test('the publishing job passes the metadata to web-ext', () {
+    // The whole point of the file above. `web-ext sign` does not discover
+    // amo.metadata.json by convention - amoMetadata is only populated when the
+    // --amo-metadata option names a path (web-ext src/cmd/sign.js). Without this
+    // flag the job uploads successfully and AMO rejects it with a 400 about a
+    // field nobody in the repository ever mentions.
+    final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+    expect(workflow, contains('--amo-metadata extension/amo.metadata.json'));
+  });
+
+  test('the Firefox manifest declares data collection, which AMO requires', () {
+    // Since 2025-11-03 AMO blocks uploads for a *new* add-on that omits
+    // browser_specific_settings.gecko.data_collection_permissions. It has no
+    // previous version, so it is exactly the case the rule targets - and
+    // `web-ext lint` reports this only as a WARNING, which is why it was easy
+    // to miss next to 11 lint warnings that genuinely are noise.
+    final gecko = (load('manifest.firefox.json')['browser_specific_settings']
+        as Map)['gecko'] as Map;
+    final dcp = gecko['data_collection_permissions'] as Map?;
+    expect(dcp, isNotNull,
+        reason: 'AMO refuses a listed upload for a new add-on without this');
+
+    final required = (dcp!['required'] as List?)?.cast<String>() ?? const [];
+    // "none" means nothing is required to function. Offline play needs no data
+    // at all, and online play is opt-in, so none is right for `required`.
+    expect(required, contains('none'));
+
+    // Online play does transmit a chosen display name and chat to the game
+    // server, so those are declared as optional rather than left undeclared.
+    final optional = (dcp['optional'] as List?)?.cast<String>() ?? const [];
+    expect(optional, contains('personalCommunications'),
+        reason: 'online chat is transmitted to the game server');
+    expect(optional, contains('personallyIdentifyingInfo'),
+        reason: 'the display name is transmitted');
+
+    // The built-in consent UI only exists from Firefox 140, so declaring the
+    // key while claiming support for 115 would mean older Firefox installs
+    // collect data with no way for the user to see or control it.
+    expect('${gecko['strict_min_version']}', '140.0');
   });
 
   test('the build script packages the popup and checks it', () {
