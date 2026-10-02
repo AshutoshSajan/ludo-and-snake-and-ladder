@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:game_club/screens/online_lobby_screen.dart';
 
 /// The two extension manifests.
 ///
@@ -130,14 +131,45 @@ void main() {
           as String;
       expect(csp, contains('connect-src'), reason: n);
       expect(csp, contains('https://ludo-1zpb.onrender.com'), reason: n);
+      // The wss:// scheme is NOT implied by the https:// one. CSP scheme
+      // matching is exact (CSP3 6.6.2.6 "scheme-part match"): a source
+      // expression of https://host matches only https URLs, and wss is a
+      // different scheme. Naming only https therefore permits the leaderboard
+      // fetch and silently forbids the socket, which is exactly the shape of
+      // the bug this found: online play reported "could not reach the server"
+      // from a server that was answering fine. Derive both from the same
+      // constant the client dials, so they cannot drift apart again.
+      expect(csp, contains('wss://ludo-1zpb.onrender.com'),
+          reason: '$n blocks the game socket: wss:// is a distinct scheme from '
+              'https:// under connect-src');
     }
   });
 
-  test('Firefox also declares host_permissions for the server', () {
-    // Firefox gates a cross-origin fetch from an extension page on host
-    // permissions, not only on connect-src, so it needs both.
-    expect(load('manifest.firefox.json')['host_permissions'],
-        contains('https://ludo-1zpb.onrender.com/*'));
+  test('every scheme the client dials is granted to the add-on', () {
+    // The client resolves a hosted wss:// URL for add-on pages; the manifest
+    // has to grant it, in both the CSP and (for Firefox) host_permissions.
+    // Cross-check against the real constant rather than a copy of the string,
+    // so renaming the server cannot leave the policy behind again.
+    const hosted = OnlineLobbyScreen.hostedServerUrl;
+    final wsUri = Uri.parse(hosted);
+    final httpsOrigin = 'https://${wsUri.host}';
+    final wssOrigin = 'wss://${wsUri.host}';
+    expect(hosted, startsWith('wss://'),
+        reason: 'this test is about wss:// not being covered by https://');
+
+    for (final n in ['manifest.chrome.json', 'manifest.firefox.json']) {
+      final m = load(n);
+      final csp = (m['content_security_policy'] as Map)['extension_pages']
+          as String;
+      expect(csp, contains(httpsOrigin), reason: '$n: leaderboard fetch');
+      expect(csp, contains(wssOrigin), reason: '$n: game socket');
+      // Chrome gates extension-page fetches on connect-src alone; Firefox
+      // additionally requires a host permission. Declaring it in both is
+      // harmless and keeps the two manifests from drifting.
+      final hosts = (m['host_permissions'] as List?)?.cast<String>() ?? [];
+      expect(hosts, contains('$wssOrigin/*'),
+          reason: '$n: the socket origin needs a host permission');
+    }
   });
 
   test('the Firefox manifest carries the add-on id AMO demands', () {
@@ -150,6 +182,14 @@ void main() {
     expect(gecko['id'], isNotEmpty);
     expect('${gecko['id']}', contains('@'),
         reason: 'a gecko id is an email-shaped string or a GUID');
+    // Pinned by value, not just by shape. This is the identity AMO has already
+    // registered an add-on under; changing it does not rename that add-on, it
+    // creates a different one - and the placeholder it replaced
+    // (`game-club@ludo-snails.example`, on the `.example` reserved TLD) was never
+    // a real address. A shape-only assertion passes through both mistakes.
+    expect(gecko['id'], 'ludo-snake@dev-ashu');
+    expect('${gecko['id']}', isNot(contains('.example')),
+        reason: '`.example` is reserved and is not a deliverable address');
   });
 
   test('AMO metadata is shaped the way the API reads it', () {
