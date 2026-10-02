@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
-## Unreleased
+## [v1.2.1] - 2026-10-02
 ### Fixed
 - Fix three things that each blocked the Firefox release on their own
 ### Other
