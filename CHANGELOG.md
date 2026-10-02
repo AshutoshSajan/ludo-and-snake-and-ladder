@@ -7,6 +7,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## [v1.2.0] - 2026-10-02
 ### Added
+- Add the changelog guard fix to the v1.2.0 notes
 - Feat(deploy): split the web client onto Vercel, and survive a cold start
 - Feat(online): a reusable player identity, in-game chat, and a dice that signals
 - Feat(leaderboard): per-game boards for Ludo and Snakes
