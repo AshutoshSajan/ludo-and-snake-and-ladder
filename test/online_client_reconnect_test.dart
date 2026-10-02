@@ -161,6 +161,12 @@ void main() {
 
       client.connect();
       async.flushMicrotasks();
+      // Reach 'joined' first. A close *before* the server ever seated us is a
+      // refused connection, which spends the cold-start budget; the reconnect
+      // path only owns a socket that was actually established. These tests are
+      // about the reconnect backoff, so they have to set that precondition.
+      factory.last.serverAdd({'type': 'joined', 'code': 'CODE', 'color': 'red'});
+      async.flushMicrotasks();
 
       factory.last.dropConnection();
       async.elapse(const Duration(milliseconds: 500)); // attempt 1
@@ -187,6 +193,10 @@ void main() {
           seatId: 'p1', name: 'A', channelFactory: factory.create);
 
       client.connect();
+      async.flushMicrotasks();
+      // As above: establish the socket before dropping it, so the drop is a
+      // drop and not a refusal.
+      factory.last.serverAdd({'type': 'joined', 'code': 'CODE', 'color': 'red'});
       async.flushMicrotasks();
 
       // Five retries each fail too (delays: 500+1000+2000+4000+8000 ms).

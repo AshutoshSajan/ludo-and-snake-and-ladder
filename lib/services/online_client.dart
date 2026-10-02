@@ -442,6 +442,15 @@ class OnlineClient extends ChangeNotifier {
   bool _userClosed = false;
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
+
+  /// Whether a socket has ever reached `joined` since the last [connect].
+  ///
+  /// The discriminator between a refused connection and a dropped one. A
+  /// refusal arrives before anything was ever established, and must spend the
+  /// cold-start budget; a drop arrives after a good session and is the
+  /// reconnect path's business. Both surface at [_onClosed], which is the only
+  /// place that can tell them apart.
+  bool _everEstablished = false;
   static const _maxReconnectAttempts = 5;
   static const _reconnectBaseDelay = Duration(milliseconds: 500);
 
@@ -479,6 +488,9 @@ class OnlineClient extends ChangeNotifier {
     _coldStartAttempts = 0;
     waitingForColdStart = false;
     _coldStartTimer?.cancel();
+    // A fresh connect has established nothing yet, so its failures are
+    // refusals again rather than drops.
+    _everEstablished = false;
     // Canonicalize up front: the server stores rooms under the uppercase
     // code, and we hash-route by `?code=` — a lowercase-typed code must not
     // be pinned to a different replica than the room's uppercase one.
@@ -541,19 +553,8 @@ class OnlineClient extends ChangeNotifier {
       // and the proxy answers with an error until it is listening. Give it a
       // warm-up window rather than reporting "Could not reach server" to
       // someone who simply pressed Play a moment early.
-      final attempt = _coldStartAttempts + 1;
       if (_userClosed) return;
-      if (attempt <= maxColdStartAttempts) {
-        _coldStartAttempts = attempt;
-        waitingForColdStart = true;
-        // Back off gently: the host usually answers within a few seconds,
-        // and a tight loop would just burn the window.
-        final delay = coldStartBaseDelay * attempt;
-        notifyListeners();
-        _coldStartTimer?.cancel();
-        _coldStartTimer = Timer(delay, _openAndHello);
-        return;
-      }
+      if (_scheduleColdStart()) return;
       waitingForColdStart = false;
       status = OnlineStatus.error;
       errorText =
@@ -562,6 +563,40 @@ class OnlineClient extends ChangeNotifier {
           'minute after being idle. Try again in a moment.';
       notifyListeners();
     }
+  }
+
+  /// Books a cold-start re-probe. Returns false once the budget is spent, so
+  /// the caller can fall through to reporting the failure.
+  ///
+  /// Split out of the `catch` in [_openAndHello] because the refusal has two
+  /// shapes and both must spend the *same* budget:
+  ///
+  ///  * a synchronous throw from the channel factory, and
+  ///  * the ordinary case — [WebSocketChannel.connect] hands back a channel
+  ///    synchronously and only reports the failure later, as an error on the
+  ///    stream.
+  ///
+  /// Only the first was caught. The second reached [_onClosed], which spends
+  /// the *reconnect* budget: 5 attempts at 500ms doubling, 15.5s total, ending
+  /// in "Connection lost — could not reach the server". That is shorter than
+  /// the 22s cold-start window, and it reports a dropped connection for
+  /// something that never connected — which is exactly what a player pressing
+  /// Play against a sleeping free-tier host hits.
+  bool _scheduleColdStart() {
+    // The refusal arrives as both an error and a done event. Without this the
+    // pair would book two re-probes and burn the window twice as fast.
+    if (waitingForColdStart && _coldStartTimer?.isActive == true) return true;
+    final attempt = _coldStartAttempts + 1;
+    if (attempt > maxColdStartAttempts) return false;
+    _coldStartAttempts = attempt;
+    waitingForColdStart = true;
+    // Back off gently: the host usually answers within a few seconds, and a
+    // tight loop would just burn the window.
+    final delay = coldStartBaseDelay * attempt;
+    notifyListeners();
+    _coldStartTimer?.cancel();
+    _coldStartTimer = Timer(delay, _openAndHello);
+    return true;
   }
 
   /// True while we are waiting out a sleeping host to wake. The UI shows a
@@ -590,6 +625,25 @@ class OnlineClient extends ChangeNotifier {
     if (status == OnlineStatus.reconnecting && _reconnectTimer != null) return;
     _sub?.cancel();
     _sub = null;
+    // Never established: this is a refused first connection, not a drop.
+    // WebSocketChannel.connect reports a refusal asynchronously, so it lands
+    // here rather than in the catch above, and it used to be charged to the
+    // reconnect budget below — 5 attempts, 15.5s, "Connection lost". A host
+    // still waking from sleep routinely needs longer than that, so a player
+    // creating a room on an idle free-tier server was told the connection had
+    // dropped when in truth it had never opened. Spend the cold-start budget
+    // instead, which is sized for exactly this wake-up.
+    if (!_everEstablished) {
+      if (_scheduleColdStart()) return;
+      waitingForColdStart = false;
+      status = OnlineStatus.error;
+      errorText =
+          'Could not reach the game server.\n'
+          'It may still be starting up — free hosting can take up to a '
+          'minute after being idle. Try again in a moment.';
+      notifyListeners();
+      return;
+    }
     // Unplanned drop (network blip, server bounce): retry with backoff.
     if (_reconnectAttempts >= _maxReconnectAttempts) {
       status = OnlineStatus.error;
@@ -626,6 +680,18 @@ class OnlineClient extends ChangeNotifier {
     switch (msg['type'] as String?) {
       case 'joined':
         roomCode = msg['code'] as String;
+        // The socket is live and the server owns us. From here on a close is a
+        // drop, not a refusal.
+        _everEstablished = true;
+        // A cold-start re-probe succeeded, so stop claiming we are waiting for
+        // a sleeping host. Without this the UI sits behind its loader even
+        // though the room was created — the fix for "gave up too early" would
+        // have introduced "never stops loading".
+        if (waitingForColdStart) {
+          waitingForColdStart = false;
+          _coldStartTimer?.cancel();
+          _coldStartTimer = null;
+        }
         // Remember the room we were actually seated in so a quick-match
         // reconnect lands back with the same strangers, not a new match.
         _joinCode = roomCode;

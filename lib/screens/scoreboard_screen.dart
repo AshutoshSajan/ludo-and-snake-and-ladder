@@ -1,3 +1,4 @@
+import '../ui/page_app_bar.dart';
 import 'package:flutter/material.dart';
 
 import '../services/online_client.dart';
@@ -60,11 +61,14 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.felt,
-      appBar: AppBar(
+      appBar: PageAppBar(
+        title: 'Leaderboard',
         backgroundColor: AppColors.feltLight,
         foregroundColor: AppColors.ivory,
-        title: const Text('Leaderboard'),
         actions: [
+          // Inside the content column, so the refresh button lines up with the
+          // right edge of the rows it reloads rather than floating at the far
+          // edge of a 1900px window with nothing under it.
           IconButton(icon: const Icon(Icons.refresh), onPressed: _reload),
         ],
       ),
@@ -100,7 +104,14 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           }
           if (snap.hasError) return _error(snap.error!);
           final data = snap.data!;
-          return Column(
+          // A reading-width column, centred. Same reason as the setup screen:
+          // unconstrained, every row stretched the full viewport, so on a wide
+          // desktop the rank sat at one edge and the name at the other with the
+          // numbers floating in the gulf between them. A leaderboard is a
+          // comparison, and a comparison needs its columns close enough to scan
+          // DOWN as a column rather than across a metre of empty felt.
+          return ContentColumn(
+            child: Column(
             children: [
               // The tabs sit outside the FutureBuilder so switching games is
               // instant to tap and the selection survives a reload. They are
@@ -143,6 +154,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                       ),
               ),
             ],
+          ),
           );
         },
       ),
@@ -208,7 +220,12 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
         : 'Could not reach the server at $_serverUrl.\n'
               'It may be a free-tier host waking up — that takes up to half a '
               'minute. Tap refresh to try again.';
-    return Center(
+    return ContentColumn(
+      // `Center` alone centres but does not constrain, so the message still
+      // wrapped at the full viewport width and the "could not reach the server"
+      // paragraph became one unreadable 1900px line. Same column as the rows it
+      // replaces, so the empty and error states sit on the same measure as the
+      // leaderboard they stand in for.
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -232,9 +249,9 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               onPressed: _reload,
             ),
           ],
+          ),
         ),
-      ),
-    );
+      );
   }
 
   Widget _empty(int games) {

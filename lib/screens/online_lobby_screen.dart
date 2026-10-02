@@ -1,3 +1,4 @@
+import '../ui/page_app_bar.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -205,8 +206,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     return Scaffold(
       appBar: inGame
           ? null
-          : AppBar(
-              title: const Text('Play Online'),
+          : PageAppBar(
+              title: 'Play Online',
               actions: [
                 // No message icon here. Chat lives on the game board's app bar,
                 // next to sound and autoplay, which is where a player is once

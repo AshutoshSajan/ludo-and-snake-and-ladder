@@ -1,3 +1,4 @@
+import '../page_app_bar.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -336,7 +337,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     }
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: PageAppBar(
         title: widget.onlineClient?.isSpectator ?? false
             ? const Row(
                 mainAxisSize: MainAxisSize.min,
@@ -460,6 +461,9 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                         child: LayoutBuilder(
                           builder: (context, cons) {
                             final boardSize = cons.biggest.width;
+                            // Captured for the corner dice below, which size
+                            // themselves against the board.
+                            _lastBoardSize = boardSize;
                             final highlights = {
                               for (final m in legalMoves(s))
                                 if (movable.isNotEmpty &&
@@ -522,10 +526,34 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                         ),
                       ),
                     ),
-                    // One die per player, pinned to the outer felt corners of the
-                    // play area — outside the board, never inside a player's yard.
-                    for (var i = 0; i < s.players.length; i++)
-                      _cornerDice(s, i),
+                    // One die per player, pinned just outside the board's corners — never inside
+                    // a player's yard, but close enough to reach. They used to be
+                    // aligned to the corners of the play area, which on a wide
+                    // window put each die ~600px of empty felt away from the
+                    // board it belongs to: the roll control looked like it
+                    // belonged to nothing. Snapped to the board instead.
+                    LayoutBuilder(
+                      builder: (context, outer) {
+                        // Matches how the board above sizes itself: a square as
+                        // large as the play area allows.
+                        final boardSize =
+                            math.min(outer.maxWidth, outer.maxHeight);
+                        // The felt margin the dice sit in, just outside the
+                        // board's own square.
+                        const felt = 18.0;
+                        return Center(
+                          child: SizedBox.square(
+                            dimension: boardSize + felt * 2,
+                            child: Stack(
+                              children: [
+                                for (var i = 0; i < s.players.length; i++)
+                                  _cornerDice(s, i),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -538,6 +566,16 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   // -------------------------------------------------- per-corner dice HUD
+
+  /// The board's laid-out edge length, captured so the corner dice can size
+  /// themselves against the board instead of the window.
+  ///
+  /// A field rather than a parameter because the board and the dice are built
+  /// in separate branches of the same [Stack]; threading a size through would
+  /// mean restructuring both. It is set during layout and only read while
+  /// painting the dice, which are laid out in the same pass, so it is always
+  /// current for the frame being built.
+  double _lastBoardSize = 0;
 
   /// One small die pinned to each player's outer corner of the play area
   /// (the felt margin around the board), so every human can reach their own
@@ -575,10 +613,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             rolling: tumbling,
             enabled: canRoll,
             onTap: session.roll,
-            size: (MediaQuery.sizeOf(context).shortestSide * 0.15).clamp(
-              60.0,
-              92.0,
-            ),
+            // Sized against the board, not the window. Off the window's
+            // shortestSide this clamped to its 92px maximum on any wide
+            // screen, so the dice stayed large while the board they ringed
+            // shrank — the felt gap between them grew with the window
+            // instead of holding still. A tenth of the board keeps their
+            // proportion constant from a phone to a 1900px window.
+            size: (_lastBoardSize * 0.11).clamp(34.0, 72.0),
             accent: AppColors.ludo(p.color),
           ),
         ),

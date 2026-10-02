@@ -326,22 +326,40 @@ void main() {
       expect(step, contains('--api-secret'));
     });
 
-    test('pull requests run tests; pushes run changelog, version and publish', () {
+    test('only PRs into main run tests; pushes run the release checks', () {
       // The two halves of the workflow, kept apart on purpose:
       //
       //   pull_request -> test only
-      //   push         -> changelog + version bump (+ publish on a tag)
+      //   push         -> changelog + version verify (+ publish on a tag)
       //
-      // They used to overlap, which meant a push to dev ran a test job scoped
-      // away to nothing while a PR into dev ran no checks at all.
+      // Scoping is done with `on.pull_request.branches: [main]` rather than an
+      // `if: github.base_ref == 'main'` inside the job. Both stop a PR into the
+      // integration branch from billing a full suite, but the trigger filter
+      // also stops the workflow from starting at all - an `if` still spins up
+      // the runner and every job just to skip. Runner minutes are metered and
+      // this repo exhausted them.
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
       expect(workflow, contains('if: github.event_name == \'pull_request\''),
-          reason: 'the test job is pull-only, and unscoped by base branch');
-      // A base_ref restriction is what left PRs into dev with no CI.
+          reason: 'the test job is pull-only');
       expect(workflow, isNot(contains("github.base_ref == 'main'")),
-          reason: 'tests must run for every PR, not only those targeting main');
+          reason: 'scope PRs with a trigger filter, not a job condition');
+      expect(workflow, contains('branches: [main]'),
+          reason: 'pushes must be limited to main');
       expect(workflow, contains('if: github.event_name == \'push\''),
           reason: 'changelog and version are push-time work');
+
+      // Sliced out of the `on:` block rather than matched anywhere in the file:
+      // `branches: [main]` legitimately appears twice (push and pull_request),
+      // so a whole-file `contains` still passes with the PR filter deleted -
+      // which is exactly the regression this test exists to catch. Verified by
+      // removing the filter and watching this fail.
+      final triggers = workflow.substring(0, workflow.indexOf('\njobs:'));
+      final prBlock = triggers.substring(triggers.indexOf('pull_request:'));
+      expect(prBlock, contains('branches: [main]'),
+          reason: 'the PR trigger must be limited to main, or a PR into the '
+              'integration branch runs the full suite');
+      expect(prBlock, isNot(contains('branches: [main, ')),
+          reason: 'no other branch may be added back to the PR trigger');
     });
 
     test('a bump is still one script, and a stale tag still fails', () {
@@ -438,6 +456,96 @@ void main() {
       expect(body, contains('flutter analyze --fatal-infos'));
       // Publishing must wait for it, or the gate is decorative.
       expect(workflow, contains('needs: [release-prep, verify-release]'));
+    });
+
+    test('the release bot bumps and regenerates on main, via a PR', () {
+      // Automatic release-prep, restored after the staging/dev triggers went
+      // away and left the step unreachable. Two properties are load-bearing:
+      //
+      // 1. It commits THROUGH A PULL REQUEST. `guard-main` rejects any main head
+      //    that is not a merge commit, and a bot push is not one — so a direct
+      //    `git push origin HEAD:main` here fails the very next push, and the
+      //    failure names the guard, not the cause.
+      // 2. It runs BEFORE the changelog verify. The verify is `--check`, so with
+      //    the order reversed it fails against the changelog the bot has not
+      //    written yet, on every single main push.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final steps = RegExp(r'      - name: ([^\n]+)')
+              .allMatches(workflow)
+              .map((m) => m.group(1)!.trim())
+              .toList();
+      final regen = steps.indexWhere((s) =>
+          s.toLowerCase().contains('regenerate') ||
+          s.toLowerCase().contains('bump'));
+      final verify = steps.indexWhere(
+          (s) => s.toLowerCase().contains('verify the changelog'));
+      expect(regen, isNonNegative, reason: 'the bump step must exist');
+      expect(verify, isNonNegative, reason: 'the verify step must exist');
+      expect(regen, lessThan(verify),
+          reason: 'regenerating after --check fails every main push');
+
+      final prep = workflow
+          .split('\n')
+          .skipWhile((l) => l != '  release-prep:')
+          .skip(1)
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:$').hasMatch(l))
+          .join('\n');
+      expect(prep, contains('gh pr create'),
+          reason: 'guard-main forbids a bot push to main');
+      expect(prep, contains('tool/version.sh --set'));
+      expect(prep, contains('tool/changelog.sh'));
+      // A `chore:` subject is what makes this converge: cliff.toml skips it, so
+      // the bot's own commit adds no changelog entry and does not re-stale the
+      // file it just wrote. A `feat:`/`fix:` subject here loops forever.
+      //
+      // Matched on the `git commit` line specifically, not the string anywhere in
+      // the job - `chore: release prep` also appears in the gh pr create --title,
+      // so a looser assertion passes even when the commit subject is `feat:`.
+      final commitLine = prep
+          .split('\n')
+          .firstWhere((l) => l.contains('git commit -m'), orElse: () => '');
+      expect(commitLine, contains('chore:'),
+          reason: 'a non-chore subject makes the bot re-stale its own changelog, '
+              'forever');
+      // Never --force: a branch can move between the check and the push, and a
+      // force would discard whatever landed there.
+      expect(prep, isNot(contains('push --force')));
+      expect(prep, isNot(contains('push -f ')));
+      // It must open a PR, never push to main: guard-main forbids the head of
+      // main from being anything but a merge commit.
+      expect(prep, isNot(contains('push origin HEAD:main')));
+      expect(prep, isNot(contains('origin HEAD:refs/heads/main')));
+    });
+
+    test('publishing follows the bump on main, not a hand-pushed tag', () {
+      // The order the user asked for: changelog + version, then the Firefox
+      // upload. `needs` is what enforces it — release-prep bumps, verify-release
+      // is the only test gate on a push path, and publish runs after both.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      // Sliced line-by-line, not by regex. A lookahead like `(?=\n  [a-z-]+:|\Z)`
+      // matches the COMMENTED-OUT `publish-chrome` block, whose body is indented
+      // two spaces and whose keys are commented - so the match stops early and
+      // returns null. Slicing on real job headers cannot be fooled by a block
+      // that is not a job.
+      String jobBody(String name) => workflow
+          .split('\n')
+          .skipWhile((l) => l != '  $name:')
+          .skip(1)
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:\s*$').hasMatch(l))
+          .join('\n');
+
+      final fox = jobBody('publish-firefox');
+      expect(fox, contains("github.ref == 'refs/heads/main'"),
+          reason: 'a main merge carries the bump and must trigger the upload');
+      expect(fox, contains('needs: [release-prep, verify-release]'),
+          reason: 'publishing must wait for the bump and the test gate');
+
+      // verify-release has to run on main too. If it were tag-only it would be
+      // skipped on a push, and a job whose dependency was skipped never starts -
+      // which is precisely how publishing got stuck before.
+      final verify = jobBody('verify-release');
+      expect(verify, contains("github.ref == 'refs/heads/main'"),
+          reason: 'without a test gate on main, uploads ship untested');
     });
 
     test('nothing pushes on CI any more, so the race cannot recur', () {

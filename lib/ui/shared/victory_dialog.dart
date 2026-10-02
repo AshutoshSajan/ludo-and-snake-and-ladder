@@ -97,14 +97,12 @@ class _VictoryDialogState extends State<VictoryDialog>
                           0,
                           1,
                         ),
-                      child: const Text(
-                        '🏆',
-                        style: TextStyle(
-                          fontSize: 64,
-                          shadows: [
-                            Shadow(color: AppColors.gold, blurRadius: 28),
-                          ],
-                        ),
+                      child: const Icon(
+                        Icons.emoji_events,
+                        size: 64,
+                        shadows: [
+                          Shadow(color: AppColors.gold, blurRadius: 28),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -125,10 +123,12 @@ class _VictoryDialogState extends State<VictoryDialog>
                           children: [
                             SizedBox(
                               width: 36,
-                              child: Text(
-                                i < 3 ? _medals[i] : '${i + 1}.',
-                                style: const TextStyle(fontSize: 18),
-                              ),
+                              child: i < 3
+                                  ? Icon(_medals[i], size: 22)
+                                  : Text(
+                                      '${i + 1}.',
+                                      style: const TextStyle(fontSize: 18),
+                                    ),
                             ),
                             Expanded(
                               child: Text(
@@ -169,7 +169,16 @@ class _VictoryDialogState extends State<VictoryDialog>
     );
   }
 
-  static const _medals = ['🏆', '🥈', '🥉'];
+  // Material icons, not the 🏆🥈🥉 emoji. Those were literal glyphs and
+  // rendered as tofu boxes in the packaged add-on: only Roboto,
+  // MaterialIcons and CupertinoIcons are bundled, and Roboto carries no
+  // emoji. MaterialIcons IS bundled — the build script fails the package if
+  // Roboto is missing, and the icons here ride the same asset bundle.
+  static const _medals = <IconData>[
+    Icons.emoji_events,
+    Icons.workspace_premium,
+    Icons.military_tech,
+  ];
 }
 
 class _Confetti {
