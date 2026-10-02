@@ -43,8 +43,19 @@ git-cliff --config cliff.toml --output "$out"
 # A regeneration that drops a released section means this branch is missing
 # commits its base has — the changelog would erase history rather than add to
 # it. This is the check that made the CI job worth keeping, so it stays.
+#
+# `## Unreleased` is the one section that legitimately disappears. Once a
+# `v*` tag exists, git-cliff promotes that section to a versioned one
+# (`## [v1.2.0] - date`) and no longer emits `## Unreleased`. Pushing the tag
+# is therefore the one action that makes this file legitimately change shape,
+# and on the tag run itself - where the check exists precisely to catch a stale
+# release record - the guard fired on the promotion and failed the release with
+# a message about missing commits, which is both wrong and unactionable.
+#
+# Only that section is exempt. Dropping `## [v1.1.0]` or any other released
+# version still fails, which is the case the guard was written for.
 missing=$(comm -23 \
-  <(grep '^## ' "$before" 2>/dev/null | sort) \
+  <(grep '^## ' "$before" 2>/dev/null | grep -vxF '## Unreleased' | sort) \
   <(grep '^## ' "$out" | sort))
 if [ -n "$missing" ]; then
   echo "error: regenerated CHANGELOG.md would drop section(s):" >&2
