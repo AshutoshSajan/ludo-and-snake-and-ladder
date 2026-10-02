@@ -171,11 +171,11 @@ npx web-ext lint --source-dir build/extension-firefox --self-hosted
 ```
 
 That is what caught the missing `gecko.id`, which AMO rejects a listed add-on
-without. It now reports 0 errors; the remaining warnings are all inside the
-compiled Dart bundle.
+without, and the missing `data_collection_permissions`. Note that lint reports
+the latter only as a **warning**, among 11 warnings that are genuine noise.
 
-**The license lives in `extension/amo.metadata.json`, not the manifest.** AMO
-rejects a listed version without one, and says so only after the upload:
+**The license lives in `extension/amo.metadata.json`, not the manifest**, and AMO
+rejects a listed version without it — saying so only after the upload:
 
 ```
 WebExtError: Submission failed (2): Bad Request
@@ -183,13 +183,37 @@ WebExtError: Submission failed (2): Bad Request
     "This field, or custom_license, is required for listed versions." ] }
 ```
 
-`web-ext sign` reads that file from the extension source directory, so
-`tools/build_extension.sh` copies it into the Firefox package only — Chrome
-ignores it. A missing file is silent: `web-ext` sends nothing and AMO decides.
-It declares `GPL-3.0-only` — not bare `GPL-3.0`, which SPDX has deprecated in
-favour of the `-only` / `-or-later` forms. GPL section 4 also requires the
-licence text to travel with the covered work, so `LICENSE` is packaged into the
-add-on rather than living only in the repository.
+Three things about that file are easy to get wrong, and each one produces the
+same opaque 400, because `web-ext` does not validate it — it forwards whatever
+it read:
+
+- **`license` goes under `version`, not at the top level.** `web-ext` sends
+  `{...metadata, version: {upload, ...metadata.version}}`, so a top-level
+  `license` never reaches `version.license`.
+- **`categories` must be an AMO slug.** There are 32; `games` is not one of
+  them. The games category is `games-entertainment`.
+- **The value is an AMO license slug** — `GPL-3.0-only`, not bare `GPL-3.0`,
+  which SPDX has deprecated in favour of the `-only` / `-or-later` forms.
+
+And `--amo-metadata extension/amo.metadata.json` must be passed to `web-ext
+sign`. `web-ext` does **not** discover the file by convention: it reads it only
+when that flag names a path. Without the flag the upload succeeds and AMO
+rejects it with a 400 about a field nothing in the repository mentions. The file
+is therefore *not* packaged into the add-on; `tools/build_extension.sh` validates
+it instead, so a malformed shape fails in seconds on a laptop rather than after a
+runner build.
+
+GPL section 4 also requires the licence text to travel with the covered work, so
+`LICENSE` is packaged into the add-on rather than living only in the repository.
+
+**`data_collection_permissions` is mandatory.** Since 2025-11-03, AMO blocks an
+upload for a *new* add-on that omits
+`browser_specific_settings.gecko.data_collection_permissions`. A first release is
+exactly the case that rule targets. Offline play needs nothing, so `required` is
+`["none"]`; online play does transmit a chosen display name and chat to the game
+server, so those are declared `optional`. Because the built-in consent UI only
+exists from Firefox 140, `strict_min_version` is `140.0` — otherwise installs on
+older Firefox would collect data with no visible consent.
 
 Licensed under **GPL-3.0-only** — see [LICENSE](LICENSE).
 
