@@ -2,7 +2,23 @@ name: CI
 
 on:
   push:
-    branches: [main, staging, dev]
+    # main and release tags only. `staging` and `dev` used to be listed here, but
+    # every job they triggered was either redundant or harmful:
+    #
+    #   release-prep  verify + regenerate, for staging/dev pushes
+    #   test          already runs on every pull_request, so a push run of it
+    #                 duplicated a suite that had just passed on the PR
+    #
+    # Merging into a non-trunk branch is covered by its pull_request run, so
+    # removing them loses no test coverage — it stops paying twice for the same
+    # commit. Runner minutes are metered and this repo has exhausted them before.
+    #
+    # CONSEQUENCE: release-prep's "Regenerate and commit" step is gated on
+    # staging/dev pushes, so nothing bumps the version or rewrites CHANGELOG.md
+    # automatically any more. The tag path still verifies both and will fail on
+    # a tag that does not match the declared version, so bump before tagging:
+    #   tool/version.sh --bump && tool/changelog.sh && git commit -am '...'
+    branches: [main]
     # Release tags. Without this the workflow does not run on a tag at all, so
     # the publishing jobs below were unreachable no matter what they contained.
     tags: ['v*']
@@ -20,7 +36,7 @@ jobs:
     # the "no direct pushes to main" rule here: the head of main must always
     # be a merge commit (i.e. it arrived via a PR / maintainer merge).
     # Note: squash-merging PRs into main will fail this guard — use merge
-    # commits for staging -> main.
+    # commits.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
@@ -33,7 +49,7 @@ jobs:
           parents=$(git rev-list --parents -n 1 "${{ github.sha }}" | wc -w)
           if [ "$parents" -lt 3 ]; then
             echo "::error::Direct push to main is forbidden."
-            echo "::error::Merge 'staging' into 'main' via a pull request (merge commit, not squash)."
+            echo "::error::Open a pull request into 'main' and merge it (merge commit, not squash)."
             exit 1
           fi
           echo "main head is a merge commit — OK"
@@ -45,13 +61,13 @@ jobs:
     #
     # It previously ran only for PRs targeting main, because hosted runner
     # minutes are metered and this repo had exhausted them. That is a quota
-    # decision, not a correctness one, and it left PRs into dev and staging with
-    # no CI at all - which is the whole path this branch travelled, and the
-    # reason its commits reached dev unverified.
+    # decision, not a correctness one, and it left PRs into the integration
+    # branch with no CI at all - which is the whole path a change travels,
+    # and the reason its commits reached it unverified.
     #
     # If the quota runs short again, the lever is `paths` or a self-hosted
-    # runner, not dropping dev and staging from coverage. Skipping the branch
-    # work is what leaves the release carrying every mistake.
+    # runner, not dropping branches from coverage. Skipping the branch work
+    # is what leaves the release carrying every mistake.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
@@ -84,11 +100,9 @@ jobs:
     # file is produced once, in one place, and cannot be a bot commit racing a
     # human commit.
     #
-    # Branch pushes (staging, dev) regenerate and commit it. main and tag pushes
-    # only VERIFY: main's head must stay a merge commit for the guard-main job
-    # below, and a bot commit pushed straight to it would fail that guard and
-    # break the "no direct pushes to main" rule the guard exists to enforce.
-    # main gets its changelog by merging staging, which already has it.
+    # main and tag pushes only VERIFY. Regenerating here would be wrong twice
+    # over: main's head must stay a merge commit for guard-main, and a bot
+    # commit pushed straight at it would fail that guard.
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
@@ -139,45 +153,19 @@ jobs:
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         run: tool/changelog.sh --check
 
-      - name: Regenerate and commit
-        if: github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/dev'
-        run: |
-          # The version is bumped in the SAME commit as the changelog, on
-          # purpose. Two commits could land in either order, and a changelog
-          # describing 1.1.0 sitting next to a pubspec claiming 1.2.0 is exactly
-          # the drift that made the declared version untrustworthy in the first
-          # place.
-          next=$(tool/version.sh --bump)
-          echo "next version: $next"
-          tool/version.sh --set "$next"
-          tool/changelog.sh
-          if git diff --quiet -- CHANGELOG.md pubspec.yaml extension/; then
-            echo "Nothing to commit: changelog and version already current."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md pubspec.yaml extension/manifest.chrome.json \
-            extension/manifest.firefox.json
-          git commit -m "chore: release prep $next - regenerate changelog, bump version"
-          # Retried, not left to fail. If the branch moved while this job ran
-          # the push is rejected, and a red run for a race nobody caused is
-          # noise that trains people to ignore CI. Still a plain push, never
-          # --force: a force here could discard someone's commit.
-          for attempt in 1 2 3; do
-            if git push origin HEAD:"${GITHUB_REF_NAME}"; then
-              exit 0
-            fi
-            echo "::warning::push rejected (attempt $attempt); rebasing and retrying"
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
-            if ! git diff --quiet -- CHANGELOG.md pubspec.yaml extension/; then
-              git add CHANGELOG.md pubspec.yaml extension/manifest.chrome.json \
-                extension/manifest.firefox.json
-              git commit --amend --no-edit
-            fi
-          done
-          echo "::error::could not push after 3 attempts"
-          exit 1
+      # "Regenerate and commit" used to live here, gated on staging/dev pushes,
+      # and was the only writer of CHANGELOG.md and the declared version. Those
+      # branches no longer trigger the workflow, so the step could never fire —
+      # leaving it in place would have meant a job that looked like it maintained
+      # the release record and quietly did nothing.
+      #
+      # Bumping is now a deliberate local step before tagging:
+      #   tool/version.sh --bump && tool/changelog.sh
+      #   git add -A && git commit -m "chore: release prep <version>"
+      #
+      # The verify step above is what makes that safe to forget: a tag whose
+      # version disagrees with the declared one fails before any credential is
+      # used, and says which command to run.
 
   # The `test` and `guard-main` jobs stay. They are the only real backstop —
   # a hook can be skipped with --no-verify and does not run on merges made from
@@ -187,8 +175,7 @@ jobs:
     # Remove a merged PR's head branch so merged branches stop piling up. The
     # repo's own "delete branch on merge" setting is off and cannot simply be
     # turned on: it deletes the head branch of *every* merged PR, and this repo
-    # promotes with dev -> staging -> main, so the next promotion would delete
-    # dev, and the one after that staging.
+    # promotes through an integration branch, so a promotion would delete it.
     #
     # Runs on the "closed" event, for which GitHub reads the workflow file from
     # the base branch — so this job prunes only once it has landed on the trunk
@@ -218,7 +205,7 @@ jobs:
           branch="${{ github.event.pull_request.head.ref }}"
           base="${{ github.base_ref }}"
           case "$branch" in
-            main | staging | dev)
+            main | dev)
               echo "head branch '$branch' is a trunk — keeping it"
               exit 0
               ;;
@@ -341,6 +328,7 @@ jobs:
           npx --yes web-ext@10.7.0 sign \
             --source-dir build/extension-firefox \
             --channel listed \
+            --amo-metadata extension/amo.metadata.json \
             --api-key "$AMO_API_KEY" \
             --api-secret "$AMO_API_SECRET" \
             --approval-timeout 0
