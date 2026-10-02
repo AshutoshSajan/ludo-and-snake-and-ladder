@@ -2,32 +2,25 @@ name: CI
 
 on:
   push:
-    # main and release tags only. `staging` and `dev` used to be listed here, but
-    # every job they triggered was either redundant or harmful:
-    #
-    #   release-prep  verify + regenerate, for staging/dev pushes
-    #   test          already runs on every pull_request, so a push run of it
-    #                 duplicated a suite that had just passed on the PR
-    #
-    # Merging into a non-trunk branch is covered by its pull_request run, so
-    # removing them loses no test coverage — it stops paying twice for the same
-    # commit. Runner minutes are metered and this repo has exhausted them before.
-    #
-    # CONSEQUENCE: release-prep's "Regenerate and commit" step is gated on
-    # staging/dev pushes, so nothing bumps the version or rewrites CHANGELOG.md
-    # automatically any more. The tag path still verifies both and will fail on
-    # a tag that does not match the declared version, so bump before tagging:
-    #   tool/version.sh --bump && tool/changelog.sh && git commit -am '...'
+    # main and release tags only. Runner minutes are metered and this repo
+    # exhausted them before, so a run has to be worth it: main is where a
+    # change ships, and a tag is where a release is cut.
     branches: [main]
     # Release tags. Without this the workflow does not run on a tag at all, so
     # the publishing jobs below were unreachable no matter what they contained.
     tags: ['v*']
   pull_request:
-    # Every PR, regardless of target branch. Limited to these four activity
-    # types: with no types filter GitHub runs the workflow on *every*
-    # pull_request activity (labeled, assigned, converted_to_draft, ...), which
-    # means a full test run whenever someone edits a PR's metadata. 'closed' is
-    # included because prune-branch acts once the PR merges.
+    # Only PRs that target main. Without this filter the workflow runs for a PR
+    # into dev too, which is the whole point of a cheap integration branch: the
+    # full suite then bills twice for one commit (once for the PR into dev,
+    # again for the PR that promotes it), and hosted runner minutes are metered
+    # and were exhausted in this repo before.
+    #
+    # Four activity types, no more: with no types filter GitHub also runs on
+    # labeled, assigned, converted_to_draft and the rest, so editing a PR's
+    # metadata triggers a full suite. 'closed' stays because prune-branch acts
+    # once the PR merges.
+    branches: [main]
     types: [opened, synchronize, reopened, closed]
 
 jobs:
@@ -55,19 +48,11 @@ jobs:
           echo "main head is a merge commit — OK"
 
   test:
-    # Pull requests only. This job is the reason to open a PR: it is the only
-    # place the full suite runs on GitHub's infrastructure, so it belongs on
-    # every PR rather than only the ones about to ship.
-    #
-    # It previously ran only for PRs targeting main, because hosted runner
-    # minutes are metered and this repo had exhausted them. That is a quota
-    # decision, not a correctness one, and it left PRs into the integration
-    # branch with no CI at all - which is the whole path a change travels,
-    # and the reason its commits reached it unverified.
-    #
-    # If the quota runs short again, the lever is `paths` or a self-hosted
-    # runner, not dropping branches from coverage. Skipping the branch work
-    # is what leaves the release carrying every mistake.
+    # Pull requests into main only - the `on.pull_request.branches` filter is
+    # what scopes that, not this `if`. Full analyze + suite + release build costs
+    # several minutes of metered runner time, so it runs where a change is about
+    # to ship, not at every hop on the way there. A PR into the integration
+    # branch is covered by `tool/ci.sh` locally, which runs the same checks.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
@@ -249,6 +234,10 @@ jobs:
   # The `test` and `guard-main` jobs stay. They are the only real backstop —
   # a hook can be skipped with --no-verify and does not run on merges made from
   # the GitHub UI — so they are worth restoring the moment quota allows.
+  #
+  # Note that `prune-branch` only runs for PRs into main, because the whole
+  # workflow is scoped to that base. A PR into the integration branch is
+  # therefore not pruned; delete those branches by hand, or the pile-up returns.
 
   prune-branch:
     # Remove a merged PR's head branch so merged branches stop piling up. The
