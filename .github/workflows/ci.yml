@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, staging, dev]
+    # Release tags. Without this the workflow does not run on a tag at all, so
+    # the publishing jobs below were unreachable no matter what they contained.
+    tags: ['v*']
   pull_request:
     # Every PR, regardless of target branch. Limited to these four activity
     # types: with no types filter GitHub runs the workflow on *every*
@@ -36,6 +39,20 @@ jobs:
           echo "main head is a merge commit — OK"
 
   test:
+    # Pull requests only. This job is the reason to open a PR: it is the only
+    # place the full suite runs on GitHub's infrastructure, so it belongs on
+    # every PR rather than only the ones about to ship.
+    #
+    # It previously ran only for PRs targeting main, because hosted runner
+    # minutes are metered and this repo had exhausted them. That is a quota
+    # decision, not a correctness one, and it left PRs into dev and staging with
+    # no CI at all - which is the whole path this branch travelled, and the
+    # reason its commits reached dev unverified.
+    #
+    # If the quota runs short again, the lever is `paths` or a self-hosted
+    # runner, not dropping dev and staging from coverage. Skipping the branch
+    # work is what leaves the release carrying every mistake.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -60,17 +77,108 @@ jobs:
       - name: Build web (release)
         run: flutter build web --release
 
-  # NOTE: there is deliberately no `changelog` job here any more.
-  #
-  # It used to run git-cliff on a runner and push the result onto the PR head
-  # branch. That costs runner minutes, which this repo exhausted, and it
-  # *raced* the local pre-push hook: both regenerate the same generated file,
-  # so whichever ran second produced a commit the other had not verified.
-  #
-  # The generator now lives in tool/changelog.sh and is verified by
-  # .githooks/pre-push on staging/main pushes, which costs nothing and happens
-  # before the push rather than after it. See README, "Local checks".
-  #
+  release-prep:
+    # CHANGELOG.md is generated, never hand-edited; the rules live in cliff.toml
+    # and the generator is tool/changelog.sh, which is the same script the local
+    # hook used to call. Generating it here rather than in the hook means the
+    # file is produced once, in one place, and cannot be a bot commit racing a
+    # human commit.
+    #
+    # Branch pushes (staging, dev) regenerate and commit it. main and tag pushes
+    # only VERIFY: main's head must stay a merge commit for the guard-main job
+    # below, and a bot commit pushed straight to it would fail that guard and
+    # break the "no direct pushes to main" rule the guard exists to enforce.
+    # main gets its changelog by merging staging, which already has it.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # git-cliff resolves versioned sections from tags; a shallow clone
+          # silently produces a changelog with the release history missing.
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        env:
+          GIT_CLIFF_VERSION: 2.14.2
+          GIT_CLIFF_SHA256: 24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
+        run: |
+          url="https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" -o /tmp/git-cliff.tar.gz
+          echo "${GIT_CLIFF_SHA256}  /tmp/git-cliff.tar.gz" | sha256sum -c -
+          # The archive's top directory is "git-cliff-<version>", not the
+          # asset's platform triplet - naming the wrong one fails with
+          # "Not found in archive", which says nothing about the real cause.
+          tar -xzf /tmp/git-cliff.tar.gz -C /usr/local/bin --strip-components=1 \
+            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+          chmod +x /usr/local/bin/git-cliff
+          git-cliff --version
+
+      - name: Verify the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # The tag is what users see and what AMO records. If the declared
+          # version disagrees with it, the release notes, the store listing and
+          # the uploaded package would all name different versions. Fail here,
+          # before credentials are used.
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(tool/version.sh)
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the declared version $declared"
+            echo "  fix: tool/version.sh --set $tagged && git commit -am 'chore: set version to $tagged'"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches the declared version"
+
+      - name: Verify the changelog matches history
+        # A tag is the release record: if the changelog is stale here, the
+        # release notes shipped to users are wrong, and nothing later will fix
+        # it. Failing the tag is the point.
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        run: tool/changelog.sh --check
+
+      - name: Regenerate and commit
+        if: github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/dev'
+        run: |
+          # The version is bumped in the SAME commit as the changelog, on
+          # purpose. Two commits could land in either order, and a changelog
+          # describing 1.1.0 sitting next to a pubspec claiming 1.2.0 is exactly
+          # the drift that made the declared version untrustworthy in the first
+          # place.
+          next=$(tool/version.sh --bump)
+          echo "next version: $next"
+          tool/version.sh --set "$next"
+          tool/changelog.sh
+          if git diff --quiet -- CHANGELOG.md pubspec.yaml extension/; then
+            echo "Nothing to commit: changelog and version already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md pubspec.yaml extension/manifest.chrome.json \
+            extension/manifest.firefox.json
+          git commit -m "chore: release prep $next - regenerate changelog, bump version"
+          # Retried, not left to fail. If the branch moved while this job ran
+          # the push is rejected, and a red run for a race nobody caused is
+          # noise that trains people to ignore CI. Still a plain push, never
+          # --force: a force here could discard someone's commit.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:"${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "::warning::push rejected (attempt $attempt); rebasing and retrying"
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+            if ! git diff --quiet -- CHANGELOG.md pubspec.yaml extension/; then
+              git add CHANGELOG.md pubspec.yaml extension/manifest.chrome.json \
+                extension/manifest.firefox.json
+              git commit --amend --no-edit
+            fi
+          done
+          echo "::error::could not push after 3 attempts"
+          exit 1
+
   # The `test` and `guard-main` jobs stay. They are the only real backstop —
   # a hook can be skipped with --no-verify and does not run on merges made from
   # the GitHub UI — so they are worth restoring the moment quota allows.
@@ -128,3 +236,125 @@ jobs:
           fi
           git push origin --delete "$branch"
           echo "deleted $branch (merged into $base)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Store publishing
+  #
+  # Both jobs live here so the Chrome path is not lost while it is switched
+  # off. Uncommenting the Chrome job is a one-step change; rediscovering the
+  # whole thing is not.
+  #
+  # Both need credentials in repository secrets, which are NOT in the repo:
+  #   AMO_JWT_ISSUER, AMO_JWT_SECRET      (addons.mozilla.org API credentials)
+  #   CHROME_CLIENT_ID, CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN
+  #
+  # They run on a tag so a release is a deliberate act rather than something
+  # that happens whenever main moves.
+  # ---------------------------------------------------------------------------
+
+  verify-release:
+    # The tag path's test gate. `test` cannot serve here: it is scoped to pull
+    # requests, and a skipped job's dependent never starts. Without this, a tag
+    # ran changelog-verify, version-verify, build and upload - and no test at
+    # all - so anything merged since the last CI could ship unverified.
+    #
+    # Tags are rare and deliberate, so the runner minutes this costs are not
+    # the metered-per-push problem the PR scoping was about.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux audio deps (audioplayers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test
+
+  publish-firefox:
+    # Builds the signed-package-ready .xpi and hands it to addons.mozilla.org,
+    # which does the signing. AMO rejects an unsigned upload, so this is the
+    # only route; there is no local equivalent worth automating.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    # Needs `changelog`, NOT `test`. `test` only runs for pull requests whose
+    # base is main, so on a tag push it is skipped - and a job whose dependency
+    # was skipped never starts, which is what left publishing stuck instead of
+    # running. The changelog job is the tag-path check that actually runs.
+    needs: [release-prep, verify-release]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the web bundle
+        # The extension bundles the whole Flutter payload; there is no dart-define
+        # for the server here, so an add-on build needs no configuration.
+        run: |
+          flutter pub get
+          flutter build web --release
+
+      - name: Package the add-on
+        run: ./tools/build_extension.sh --firefox --zip
+
+      - name: Submit to addons.mozilla.org
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          # `sign`, not `publish`: web-ext has no `publish` subcommand. The
+          # commands are build, sign, run, lint, docs, dump-config. Passing
+          # `publish` fails on argument parsing before it ever reaches AMO, so
+          # the job could not have worked however long it was left running.
+          #
+          # AMO does the signing; there is no unsigned upload route. `listed`
+          # publishes to the public channel, `unlisted` self-signs only.
+          #
+          # --approval-timeout 0 disables the wait for AMO's automatic
+          # approval. Without it `sign` blocks for the default 5 minutes on
+          # every submission, which on a runner is five minutes of doing
+          # nothing and then a timeout - the job hangs rather than finishing.
+          # New add-ons are held for human review regardless, so waiting buys
+          # nothing; the upload itself has already been accepted by then.
+          npx --yes web-ext@10.7.0 sign \
+            --source-dir build/extension-firefox \
+            --channel listed \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET" \
+            --approval-timeout 0
+
+  # publish-chrome:
+  #   COMMENTED OUT ON PURPOSE. The Chrome Web Store path needs a paid developer
+  #   account ($5 one-off, then a 5% cut), which is not set up, and a publish
+  #   job that fails on every tag is worse than no job. The build and upload
+  #   steps are kept so enabling it is a review, not a rewrite.
+  #
+  #   To enable: uncomment, and add the three CHROME_* secrets.
+  #
+  # if: startsWith(github.ref, 'refs/tags/v')
+  # runs-on: ubuntu-24.04
+  # needs: [release-prep, verify-release]
+  # permissions:
+  #   contents: read
+  # steps:
+  #   - uses: actions/checkout@v7
+  #   - run: flutter pub get
+  #   - run: flutter build web --release
+  #   - run: ./tools/build_extension.sh --chrome --zip
+  #   - uses: actions/upload-artifact@v4
+  #     with:
+  #       name: game-club-chrome
+  #       path: build/game-club-chrome.zip
+  #   # Uploading to the Web Store needs the Chrome Web Store API via a
+  #   # publisher service account; the credential names are in the README.

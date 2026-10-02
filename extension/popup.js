@@ -1,33 +1,32 @@
-// Toolbar popup: launches the game *inside* the popup.
+// Toolbar popup: opens the game in a new tab, then closes itself.
 //
-// The game is loaded in an iframe over the launcher, so nothing opens a new
-// page and the tab count never changes. A browser popup is capped at 800x600,
-// so the board is smaller here than in a tab - popup.html says so, and "Open
-// in a tab" is still one click away for when the space is not enough.
+// The popup is a launcher, not the game. A browser popup is capped at 800x600
+// and closes when you click outside it, so running a board game inside one means
+// a board too small to read in a window that vanishes mid-move.
 //
-// Note the popup closes when you click outside it. That is the browser's rule
-// for popups, not something this page can override, and it is the main reason
-// the tab is still offered rather than removed.
+// A plain tab, and a fresh one every click:
+//
+//   - chrome.tabs.create needs no permission at all, which is why it is used
+//     rather than chrome.windows.create or anything that inspects tabs.
+//   - Focusing an already-open game tab is deliberately NOT attempted. Finding
+//     a tab by URL needs the "tabs" permission, which Chrome presents to users
+//     as "read your browsing history" - not a fair trade for saving one tab.
+//     The original launcher did query by URL without declaring the permission,
+//     so the reuse never worked and it opened a tab each time regardless. Better
+//     to be plainly one-tab-per-click than to ship a dedupe that looks live and
+//     silently is not.
+//
+// If you want one tab to be reused, the honest way is to declare "tabs" in both
+// manifests and accept the permission warning. The test in
+// test/extension_manifest_test.dart asserts the permission is NOT declared while
+// this stays a plain create, so the two cannot drift apart.
 
-const body = document.body;
-const frame = document.getElementById('game');
-const launcher = document.getElementById('launcher');
+const GAME = 'index.html';
 
-function play() {
-  body.classList.add('playing');
-  // Focus the frame so the game takes keyboard input immediately; an iframe
-  // that never receives focus swallows every key press.
-  frame.focus();
-}
-
-function openInTab() {
-  chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+function openGame() {
+  chrome.tabs.create({ url: chrome.runtime.getURL(GAME) });
+  // The launcher has done its job; leaving it open would sit over the game.
   window.close();
 }
 
-document.getElementById('play').addEventListener('click', play);
-document.getElementById('online').addEventListener('click', play);
-document.getElementById('tab').addEventListener('click', openInTab);
-document.getElementById('back').addEventListener('click', () => {
-  body.classList.remove('playing');
-});
+document.getElementById('play').addEventListener('click', openGame);

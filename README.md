@@ -137,12 +137,42 @@ gh pr create --base dev                     # PR to the parent, never main
 `.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
 release web build) and on **every merge to `dev`/`staging`/`main`**.
 
-> **CI is currently over its GitHub-hosted runner quota**, so every job reports
-> `steps=0` and nothing verifies a push. The checks run locally instead via the
-> pre-push hook — see [Local checks](#local-checks-the-free-stand-in-for-ci).
-> The workflow is kept intact and should be restored when quota returns; a
+> **Which event runs what.** `pull_request` runs the `test` job and nothing
+> else — analyze, the full suite, and a release web build. `push` runs
+> `release-prep`: regenerate `CHANGELOG.md` and bump the version. A `v*` tag
+> then runs `verify-release` (the same gate, because `test` cannot run there)
+> and `publish-firefox`, in that order.
+>
+> Tests used to run only for PRs targeting `main`, because runner minutes are
+> metered and this repo had exhausted them. That was a quota decision dressed up
+> as a policy, and it left PRs into `dev` and `staging` with no CI at all — the
+> exact path this branch travelled, which is why its commits reached `dev`
+> unverified. If the quota runs short again, the lever is a
 > [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners)
-> does not consume hosted minutes.
+> which consumes no hosted minutes, not dropping `dev` and `staging` from
+> coverage.
+
+### Publishing the add-ons
+
+Both store jobs are in the workflow, triggered on a `v*` tag so a release is a
+deliberate act. The **Chrome job is commented out** — the Web Store needs a paid
+developer account that is not set up, and a publish job failing on every tag is
+worse than no job. The steps are kept so enabling it is a review, not a rewrite.
+
+Credentials go in repository secrets and are **not** in the repo:
+`AMO_JWT_ISSUER` and `AMO_JWT_SECRET` for Firefox, plus
+`CHROME_CLIENT_ID`, `CHROME_CLIENT_SECRET` and `CHROME_REFRESH_TOKEN` when
+Chrome is enabled.
+
+Before uploading, check the package the way AMO will:
+
+```bash
+npx web-ext lint --source-dir build/extension-firefox --self-hosted
+```
+
+That is what caught the missing `gecko.id`, which AMO rejects a listed add-on
+without. It now reports 0 errors; the remaining warnings are all inside the
+compiled Dart bundle.
 
 `CHANGELOG.md` is **generated** by [git-cliff](https://git-cliff.org) from the
 commit history using `cliff.toml` (Keep a Changelog format) — never hand-edit
@@ -245,11 +275,19 @@ select `build/extension-chrome/`.
 **Firefox:** `about:debugging#/runtime/this-firefox` → **Load Temporary
 Add-on** → pick `build/extension-firefox/manifest.json`.
 
-Clicking the die in the toolbar opens a small **launcher popup** — it starts the
-game in a tab, reusing the one that is already open. The game itself is not
-drawn in the popup: a browser popup is capped at 800×600, which is too small for
-either board, and a window that vanishes when you misclick is no way to play.
-Local play works fully offline.
+Clicking the die in the toolbar opens a small **launcher popup**, and the game
+opens in a **new tab**. The popup is 300px wide on purpose: a browser popup is
+capped at 800x600 and closes the moment you click outside it, so playing inside
+one gives a board too small to read in a window that vanishes mid-move.
+Interim versions played inside the popup and in a dedicated window; this is the
+launcher with the game in a tab.
+
+Each click opens a fresh tab. Focusing an already-open game tab is deliberately
+**not** attempted: finding a tab by URL needs the `tabs` permission, Chrome
+presents that to users as "read your browsing history", and that is not a fair
+trade for saving one tab. The original launcher did query by URL without
+declaring the permission, so its reuse silently never worked. `chrome.tabs.create`
+needs no permission at all. Local play works fully offline.
 
 **Why two manifests.** MV3 split the background model and the browsers did not
 follow each other. Chrome runs the toolbar handler as a **service worker**;
@@ -260,10 +298,23 @@ selects the manifest, not the build. The build script asserts the right one
 was packaged, because a wrong manifest installs and then does nothing when
 clicked, which is a poor way to find out.
 
-The Firefox manifest also declares `host_permissions` and a `connect-src` for
-the game server. Offline play needs neither, but online play is a cross-origin
-fetch from a `moz-extension://` page, and without those the request is blocked
-in a way that looks like a dead server.
+Both manifests declare a `connect-src` naming the hosted game server. Offline
+play needs no network at all, but online play is a cross-origin socket from an
+add-on page, and without that directive the browser blocks it in a way that
+looks like a dead server.
+
+**Online play points at the hosted server, not the page.** A packaged add-on
+serves the game from `chrome-extension://<id>/` or `moz-extension://<uuid>/`,
+which is same-origin with nothing playable — and, worse, its "host" is the
+extension id, so the client's same-origin fallback once produced
+`ws://<extension-id>:8080/ws`, a URL that can never dial. Online play in the
+packaged add-ons failed while the Netlify build worked, for exactly that
+reason: same client, different default URL. `sameOriginServerUrl` now sends
+every non-`http(s)` scheme to the hosted game server, and the value is a
+constant in `lib/screens/online_lobby_screen.dart` rather than a build-time
+`--dart-define`, because one packaged build is installed everywhere and cannot
+carry a per-deployment setting. `GAME_SERVER_URL` still overrides it wherever
+it is set.
 
 **Publishing.** Firefox: upload the `.xpi` (or `.zip`) at
 [addons.mozilla.org](https://addons.mozilla.org/developers/addon/submit/distribution);
@@ -306,13 +357,37 @@ tool/ci.sh              # analyze + test              (~30s)
 tool/ci.sh --web        # also build web release     (~90s)
 tool/changelog.sh       # rewrite CHANGELOG.md
 tool/changelog.sh --check   # fail if out of date, change nothing
+tool/version.sh         # print the version
+tool/version.sh --bump  # next version, from the commits since the last tag
+tool/version.sh --set 1.2.0   # write it to pubspec + both manifests
 ```
 
 `CHANGELOG.md` is generated by `git-cliff` from commit history (rules in
 `cliff.toml`) and should never be hand-edited. `tool/changelog.sh` keeps the
-guard the CI job had: a regeneration that would *drop* a released section fails
-loudly instead of erasing history, which is what happens when a branch is
-missing commits its base has.
+guard: a regeneration that would *drop* a released section fails loudly instead
+of erasing history, which is what happens when a branch is missing commits its
+base has.
+
+**The changelog is written by CI alone**, on push. The pre-push hook used to
+check it too, and two writers meant whichever ran second produced a commit the
+other had not verified. Now the `changelog` job regenerates and commits it on
+`staging`/`dev` pushes, and only *verifies* it on `main` and on release tags —
+`main` deliberately, because a bot commit pushed straight at it would fail
+`guard-main` and break the no-direct-pushes rule that job exists to enforce.
+`main` gets its changelog by merging `staging`, which already has it.
+
+`tool/version.sh` is the only thing that writes the version. It used to be
+declared in three files that had already drifted apart — `pubspec.yaml` said
+1.0.0, both extension manifests said 1.0.0, the newest tag said v1.1.0 — and
+AMO rejects an upload whose version does not increase, so that drift surfaces
+during a release with credentials in hand rather than before it. It also sorts
+tags with `-v:refname`, because lexical order puts v1.9.0 above v1.10.0 and
+bumping from the wrong "latest" moves the version backwards.
+
+`--bump` reads the commits since the last tag: `feat!` or `BREAKING CHANGE`
+moves the major, `feat` the minor, anything else the patch. It used to add one
+to the minor unconditionally, which meant patch and major could never advance
+and a bug-fix-only release still moved the minor.
 
 **Bypassing, and what it costs.** `git push --no-verify` skips all of it, and so
 does `SKIP_LOCAL_CI=1 git push` for just the slow half. Be deliberate about it:
@@ -322,10 +397,15 @@ while CI is over quota, a skipped hook means nothing verified the push.
 by `--no-verify`, and does not run at all for a merge made from the GitHub UI or
 from another machine. The `test` and `guard-main` jobs in
 `.github/workflows/ci.yml` are therefore still there and should be restored the
-moment quota allows — they are the only checks that apply to everyone. The
-`changelog` job was removed from the workflow on purpose: it regenerated the
-same file as the hook, so the two raced, and whichever ran second produced a
-commit the other had not verified.
+moment quota allows — they are the only checks that apply to everyone.
+
+**Release tags are a separate path.** `on.push` filters both branches and
+`tags: ['v*']`, so a tag runs the workflow; `test` does not, because it is
+scoped to pull requests. The `changelog` job is what the tag path waits on, and
+`publish-firefox` needs *that* — an earlier version had `needs: test`, and since
+`test` is skipped on a tag, publishing never started. It appeared to be "waiting
+for approval" because a job whose dependency was skipped sits in exactly that
+state.
 
 **If you want CI back without using hosted minutes**, a
 [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners)

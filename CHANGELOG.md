@@ -15,6 +15,9 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Feat: horizontal scaling — room registry, /stats, sticky LB config
 - Feat: persistent leaderboard via Turso (libSQL HTTP API)
 ### Fixed
+- Fix the three real review findings, and correct the one I got wrong
+- Fix the git-cliff install path, which failed on its first real run
+- Fix the AMO upload: `sign`, not `publish`, and do not wait for approval
 - Fix the leaderboard tab counts and refuse a Netlify build with no game server
 - Fix cliff.toml rendering whole commit bodies as changelog entries
 - Fix(deploy): revalidate the app shell, and give new players a name
@@ -28,6 +31,24 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Point packaged extension pages at the hosted game server
+- Open the game in a new tab, not a dedicated window
+- Restore the launcher popup; open the game in a window
+- Review fixes: an over-broad assertion, and CSS that worked by accident
+- Split CI by event, and give the version one owner
+- Make the release path reachable, and give the changelog one writer
+- Popup goes straight to the main screen, no launcher in front of it
+- Keep the game iframe laid out, instead of revealing it from display:none
+- Refuse to package a stale web build, and stamp what was packaged
+- Scope CI to release PRs, add store publishing, give the add-on an id
+- Play the game inside the extension popup, and compact the leaderboard cards
+- Give the extension a toolbar popup instead of opening straight into a tab
+- Autosave local games so a player can resume where they left off
+- Fail the Netlify build on a GAME_SERVER_URL that could never work
+- Restructure the README and correct what had drifted out of date
+- Bundle Roboto so the extension renders its own text
+- Ship the extension to Firefox as well as Chrome
+- Regenerate CHANGELOG.md for the merged leaderboard work
 - Explain the leaderboard's wait instead of showing a bare spinner
 - Name the wrong-server case, and answer preflights that ask for headers
 - Replace the autoplay text with a spinning loop beside the name
@@ -44,8 +65,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Host the web client on Netlify instead of Vercel
 - Give every player a unique name and an avatar
 - Ci: render each changelog entry once
-- Ci: generate CHANGELOG.md on the promotion PR and commit it onto the PR branch
 - Ci: delete merged PR head branches automatically
+- Ci: generate CHANGELOG.md on the promotion PR and commit it onto the PR branch
 - Move the app providers onto Riverpod 3 notifiers
 - Refresh the locked dependency versions and CI action pins
 - Say which part of the leaderboard path is broken

@@ -38,11 +38,31 @@ class OnlineLobbyScreen extends StatefulWidget {
   /// its HTTP origin from the same URL and stays correct too. Plain http
   /// is the local dev case: the page comes from the Flutter dev server,
   /// the game server from :8080.
+  ///
+  /// A packaged add-on page is NOT same-origin with anything playable.
+  /// `chrome-extension://<id>/index.html` has a non-empty host (the id), so
+  /// a naive "reuse the page's host" check builds `ws://<extension-id>:8080/ws`
+  /// — a URL that can never dial, and the packaged builds failed exactly
+  /// that way while the Netlify build (which bakes the URL in via
+  /// dart-define) worked. Every non-http(s) scheme therefore gets the hosted
+  /// game server: a page served over an add-on scheme has no origin to be
+  /// same-as, so there is nothing else it could mean.
   static String sameOriginServerUrl(Uri page) {
-    return page.scheme == 'https'
-        ? 'wss://${page.authority}/ws'
-        : 'ws://${page.host}:8080/ws';
+    switch (page.scheme) {
+      case 'https':
+        return 'wss://${page.authority}/ws';
+      case 'http':
+        return 'ws://${page.host}:8080/ws';
+      default:
+        return hostedServerUrl;
+    }
   }
+
+  /// The hosted game server that unpacked and web builds both play against.
+  /// Deliberately a constant rather than a define-only setting: a packaged
+  /// build is built once and installed everywhere, so it cannot depend on a
+  /// per-deployment dart-define. `GAME_SERVER_URL` still wins where set.
+  static const hostedServerUrl = 'wss://ludo-1zpb.onrender.com/ws';
 
   @override
   State<OnlineLobbyScreen> createState() => _OnlineLobbyScreenState();
@@ -180,8 +200,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     // lobby's bar used to stay wrapped around it, so online play showed two
     // stacked title bars — "Play Online" above the game's own — where local
     // play shows one. The bar belongs to the lobby; the board brings its own.
-    final inGame = client != null &&
-        (client.state != null || client.snakesState != null);
+    final inGame =
+        client != null && (client.state != null || client.snakesState != null);
     return Scaffold(
       appBar: inGame
           ? null

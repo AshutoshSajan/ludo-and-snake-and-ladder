@@ -2,12 +2,16 @@
 <!--
   The toolbar popup: a launcher, not the game.
 
-  A browser popup is capped at 800x600 and is meant to be dismissed the moment
-  you finish with it. Ludo's board and a 10-seat Snakes grid both need more
-  room than that, and squeezing them in would produce a board too small to
-  read and a window that closes when the player clicks the wrong thing. So this
-  stays a launcher and the game opens in a tab, which is the pattern every
-  extension with real content uses.
+  A browser popup is capped at 800x600 and is dismissed the moment you click
+  outside it. Ludo's board and a 10-seat Snakes grid both need more room than
+  that, and playing inside one gives a board too small to read in a window that
+  disappears mid-move. So this stays a small launcher and the game opens in a
+  normal browser tab.
+
+  This is the original launcher, restored - with the game opening in a tab
+  rather than the dedicated window an earlier pass used. An in-between version
+  played the game in an iframe inside the popup, which hit exactly the two
+  problems above.
 
   Plain HTML rather than a second Flutter build: a popup that has to boot
   CanvasKit to draw one button takes seconds, and this opens instantly. The
@@ -25,11 +29,8 @@
         --gold: #d9a441;
       }
       * { box-sizing: border-box; }
-      html, body {
-        width: 800px;
-        height: 600px;
-        margin: 0;
-        overflow: hidden;
+      body {
+        width: 300px;
         margin: 0;
         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         color: var(--ivory);
@@ -37,43 +38,14 @@
           circle at 50% -20%, var(--felt-light) 0%, var(--felt) 70%
         );
       }
-      /* The launcher sits centred in the popup; the game fills it. */
-      #launcher {
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        max-width: 320px;
-        margin: 0 auto;
-        padding: 0 16px;
-      }
-      #over { display: none; }
-      body.playing #over {
-        display: flex; position: absolute; top: 6px; right: 6px; gap: 6px;
-      }
-      #over button {
-        font-family: inherit; font-size: 11px; color: var(--ivory);
-        background: rgba(18, 53, 36, .82); border: 1px solid rgba(245,239,224,.3);
-        border-radius: 7px; padding: 4px 8px; cursor: pointer;
-      }
-      #over button:hover { background: rgba(27, 74, 51, .95); }
-      #game {
-        display: none;
-        width: 100%;
-        height: 100%;
-        border: 0;
-        background: #123524;
-      }
-      body.playing #launcher { display: none; }
-      body.playing #game { display: block; }
       .head {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 0 0 12px;
+        padding: 16px 16px 10px;
       }
       .die {
-        width: 34px; height: 34px; flex: none;
+        width: 30px; height: 30px; flex: none;
         border-radius: 7px;
         border: 2px solid var(--gold);
         background: var(--ivory);
@@ -86,7 +58,7 @@
       }
       h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: .2px; }
       .sub { font-size: 11px; color: rgba(245,239,224,.62); margin-top: 1px; }
-      .body { padding: 0 0 12px; }
+      .body { padding: 4px 16px 16px; }
       .btn {
         display: block; width: 100%; padding: 11px 14px; margin-top: 10px;
         font-size: 13.5px; font-weight: 700; font-family: inherit;
@@ -95,10 +67,6 @@
       }
       .btn:hover { filter: brightness(1.07); }
       .btn:active { transform: translateY(1px); }
-      .btn.secondary {
-        background: transparent; color: var(--ivory);
-        border: 1px solid rgba(245,239,224,.28); font-weight: 600;
-      }
       .note {
         margin: 12px 0 0; font-size: 10.5px; line-height: 1.45;
         color: rgba(245,239,224,.5); text-align: center;
@@ -106,7 +74,6 @@
     </style>
   </head>
   <body>
-    <div id="launcher">
     <div class="head">
       <div class="die" aria-hidden="true"></div>
       <div>
@@ -116,16 +83,7 @@
     </div>
     <div class="body">
       <button class="btn" id="play">Open Game Club</button>
-      <button class="btn secondary" id="online">Play online</button>
-      <p class="note">Local play works offline. Online needs the game server awake.</p>
-    </div>
-    </div>
-    <!-- The game itself, loaded in place so nothing opens a new page. -->
-    <iframe id="game" title="Game Club" src="index.html"></iframe>
-    <!-- Over the game: a way back, and a way out to a real tab. -->
-    <div id="over">
-      <button id="back" title="Back to the menu">&#x2190;</button>
-      <button id="tab" title="Open in a tab">&#x1F5D5; Tab</button>
+      <p class="note">Opens in a new tab. Local play works offline.</p>
     </div>
     <script src="popup.js"></script>
   </body>
