@@ -114,6 +114,19 @@ jobs:
           # silently produces a changelog with the release history missing.
           fetch-depth: 0
 
+      # The bump below opens a pull request, and `gh` is preinstalled on
+      # GitHub-hosted runners — so this is only a guard, not the mechanism.
+      # Without it the job fails at the last step with "gh: command not found",
+      # after the version has already been bumped in the working tree and
+      # committed, so the run looks like a toolchain problem instead of the
+      # policy problem it is.
+      - name: Check gh is available
+        run: |
+          if ! gh --version; then
+            echo "::error::the GitHub CLI is missing from this runner image"
+            exit 1
+          fi
+
       - name: Install git-cliff
         env:
           GIT_CLIFF_VERSION: 2.14.2
@@ -146,26 +159,92 @@ jobs:
           fi
           echo "tag $GITHUB_REF_NAME matches the declared version"
 
-      - name: Verify the changelog matches history
-        # A tag is the release record: if the changelog is stale here, the
-        # release notes shipped to users are wrong, and nothing later will fix
-        # it. Failing the tag is the point.
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-        run: tool/changelog.sh --check
+      # "Regenerate and commit" used to live here, gated on staging/dev pushes.
+      # Those branches no longer trigger the workflow, so the step could never
+      # fire — it would have been a job that looked like it maintained the
+      # release record and quietly did nothing.
+      #
+      # It is back, on main, and it commits THROUGH A PULL REQUEST rather than
+      # pushing. That indirection is the whole trick: `guard-main` rejects any
+      # main head that is not a merge commit, and a bot commit pushed straight at
+      # main is not one — so the automated version has to arrive by merge, the
+      # same way a person's does.
+      #
+      # Changelog and version move together in ONE commit. Two commits could land
+      # in either order, and a changelog describing 1.1.0 sitting next to a
+      # pubspec claiming 1.2.0 is exactly the drift that made the declared version
+      # untrustworthy in the first place.
+      #
+      # `chore:` matters: cliff.toml skips chore subjects, so this commit adds no
+      # changelog entry of its own. Without that, the bot's commit would make the
+      # changelog stale again the moment it landed and the verify step would fail
+      # the very push that fixed it — a loop. That is exactly what happened when
+      # the tag, rather than the PR, was the thing being committed to.
+      #
+      # It runs BEFORE the changelog verify, and deliberately so: that verify is
+      # `--check`, so on a main push it would fail against the changelog the bot
+      # has not written yet, every single time. Regenerating first and verifying
+      # after makes the check a real assertion about what was just produced
+      # instead of a race between two steps.
+      - name: Regenerate the changelog and bump the version
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          base=$(tool/version.sh)
+          echo "declared version: $base"
+          if ! git diff --quiet origin/main HEAD; then
+            echo "::warning::main moved while this run started; skipping the bump"
+            exit 0
+          fi
+          next=$(tool/version.sh --bump)
+          if [ "$next" = "$base" ]; then
+            echo "no release-worthy commits since the last tag; nothing to bump"
+            exit 0
+          fi
+          echo "next version: $next"
+          tool/version.sh --set "$next"
+          tool/changelog.sh
 
-      # "Regenerate and commit" used to live here, gated on staging/dev pushes,
-      # and was the only writer of CHANGELOG.md and the declared version. Those
-      # branches no longer trigger the workflow, so the step could never fire —
-      # leaving it in place would have meant a job that looked like it maintained
-      # the release record and quietly did nothing.
-      #
-      # Bumping is now a deliberate local step before tagging:
-      #   tool/version.sh --bump && tool/changelog.sh
-      #   git add -A && git commit -m "chore: release prep <version>"
-      #
-      # The verify step above is what makes that safe to forget: a tag whose
-      # version disagrees with the declared one fails before any credential is
-      # used, and says which command to run.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "chore/release-prep-$next"
+          git add CHANGELOG.md pubspec.yaml extension/manifest.chrome.json \
+            extension/manifest.firefox.json
+          if git diff --quiet --cached; then
+            echo "nothing changed; not opening a PR"
+            exit 0
+          fi
+          git commit -m "chore: release prep $next - regenerate changelog, bump version"
+          git push -u origin "chore/release-prep-$next"
+
+          # A PR, not a push, because guard-main forbids the alternative. Skipped
+          # rather than left failing if one is already open for this version: two
+          # would race, and the second push would be rejected anyway.
+          if gh pr list --head "chore/release-prep-$next" --state open \
+               --json number | grep -q number; then
+            echo "a PR for $next is already open; leaving it alone"
+            exit 0
+          fi
+          # The body is built with bash $'...' rather than a heredoc or a plain
+          # double-quoted string: both need the text to span lines, and inside a
+          # YAML block scalar an unindented continuation is parsed as a new key
+          # - which silently corrupts the workflow file instead of failing loudly.
+          # One line, \n escapes, no indentation to get wrong.
+          body=$'Automated: regenerates `CHANGELOG.md` and bumps the declared version to '"$next"'.\n\nOpened by the `release-prep` job. It commits through a PR because `guard-main` requires the head of main to be a merge commit, and a bot push is not one.\n\nMerge to apply. `verify-release` and `publish-firefox` run on the merge, not on this PR.'
+          if ! gh pr create --base main --head "chore/release-prep-$next" \
+               --title "chore: release prep $next" \
+               --body "$body"; then
+            echo "::warning::could not open the release-prep PR; the version stays at $base"
+          fi
+
+      # After the regenerate, not before it. On a main push this asserts that what
+      # the step above just produced is internally consistent; on a tag it is the
+      # release record, and failing it is the point — stale release notes would
+      # otherwise ship silently.
+      - name: Verify the changelog matches history
+        run: tool/changelog.sh --check
 
   # The `test` and `guard-main` jobs stay. They are the only real backstop —
   # a hook can be skipped with --no-verify and does not run on merges made from
@@ -240,14 +319,11 @@ jobs:
   # ---------------------------------------------------------------------------
 
   verify-release:
-    # The tag path's test gate. `test` cannot serve here: it is scoped to pull
-    # requests, and a skipped job's dependent never starts. Without this, a tag
-    # ran changelog-verify, version-verify, build and upload - and no test at
-    # all - so anything merged since the last CI could ship unverified.
-    #
-    # Tags are rare and deliberate, so the runner minutes this costs are not
-    # the metered-per-push problem the PR scoping was about.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # The gate between a merge and a store upload. Runs on a main push as well as
+    # on a tag, because publishing is driven by main now rather than by a tag.
+    # `test` cannot serve here: it is pull-request-scoped, and a skipped job's
+    # dependent never starts — which is what left publishing stuck.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -273,12 +349,18 @@ jobs:
     # Builds the signed-package-ready .xpi and hands it to addons.mozilla.org,
     # which does the signing. AMO rejects an unsigned upload, so this is the
     # only route; there is no local equivalent worth automating.
-    if: startsWith(github.ref, 'refs/tags/v')
+    #
+    # Driven by a main push, not a tag. release-prep bumps the version and
+    # regenerates the changelog first, so the merge carrying that bump is what
+    # triggers the upload — which is why it checks out the pushed SHA: by then
+    # the bump is already in history, so the package carries the new version.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
-    # Needs `changelog`, NOT `test`. `test` only runs for pull requests whose
-    # base is main, so on a tag push it is skipped - and a job whose dependency
-    # was skipped never starts, which is what left publishing stuck instead of
-    # running. The changelog job is the tag-path check that actually runs.
+    # Needs BOTH. `release-prep` performs the version bump and changelog
+    # regeneration this upload has to reflect, and `verify-release` is the only
+    # test gate on this path - `test` is pull-request-scoped, so on a push it is
+    # skipped, and a job whose dependency was skipped never starts. That is what
+    # left publishing stuck rather than running.
     needs: [release-prep, verify-release]
     permissions:
       contents: read

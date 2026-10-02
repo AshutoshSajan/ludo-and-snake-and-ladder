@@ -134,23 +134,35 @@ gh pr create --base dev                     # PR to the parent, never main
 
 ### CI & changelog
 
-`.github/workflows/ci.yml` runs on **every PR** (analyze + full test suite +
-release web build) and on **every merge to `dev`/`staging`/`main`**.
+`.github/workflows/ci.yml` runs on **PRs targeting `main`** and on **pushes to
+`main`**, plus `v*` tags.
 
-> **Which event runs what.** `pull_request` runs the `test` job and nothing
-> else — analyze, the full suite, and a release web build. `push` runs
-> `release-prep`: regenerate `CHANGELOG.md` and bump the version. A `v*` tag
-> then runs `verify-release` (the same gate, because `test` cannot run there)
-> and `publish-firefox`, in that order.
+> **Which event runs what.** `pull_request` (into `main`) runs the `test` job and
+> nothing else — analyze, the full suite, and a release web build.
 >
-> Tests used to run only for PRs targeting `main`, because runner minutes are
-> metered and this repo had exhausted them. That was a quota decision dressed up
-> as a policy, and it left PRs into `dev` and `staging` with no CI at all — the
-> exact path this branch travelled, which is why its commits reached `dev`
-> unverified. If the quota runs short again, the lever is a
-> [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners)
-> which consumes no hosted minutes, not dropping `dev` and `staging` from
-> coverage.
+> A **push to `main`** runs the release path, in this order:
+>
+> 1. `release-prep` regenerates `CHANGELOG.md` and bumps the declared version,
+>    then **opens a pull request** with both in one commit. It cannot push to
+>    `main` directly: `guard-main` requires the head of `main` to be a merge
+>    commit, and a bot commit is not one.
+> 2. You merge that `chore: release prep` PR. That merge re-runs the workflow.
+> 3. `verify-release` runs analyze + the full suite — the only test gate on a push
+>    path, since `test` is pull-request-scoped.
+> 4. `publish-firefox` builds the add-on and uploads it to addons.mozilla.org.
+>
+> So a release is: land your PR → merge the bot's `chore: release prep` PR → the
+> add-on is uploaded. No tagging and nothing typed by hand. A `v*` tag runs the
+> same path, for cutting a release without merging anything new.
+>
+> **Why only `main`.** Hosted runner minutes are metered and this repo exhausted
+> them once already, so a full run happens where a change is about to ship rather
+> than at every hop. Scoping is a trigger filter (`on.pull_request.branches:
+> [main]`) rather than an `if:` inside the job, because an `if` still starts the
+> runner and every job only to skip them. A PR into the integration branch has no
+> hosted CI — run `tool/ci.sh` locally, which is the same gate and what the
+> `pre-push` hook does. `prune-branch` only fires for PRs into `main`, so inner
+> branches need deleting by hand.
 
 ### Publishing the add-ons
 
