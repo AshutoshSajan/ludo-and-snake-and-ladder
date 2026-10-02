@@ -56,6 +56,45 @@ cp -r build/web/. "$out"/
 cp "extension/manifest.$target.json" "$out/manifest.json"
 cp extension/popup.html extension/popup.js "$out"/
 cp -r extension/icons/. "$out/icons/"
+# GPL section 4: a covered work must carry the licence text, so it ships inside
+# the add-on rather than only in the repository. Both stores, since it is not a
+# store-specific requirement.
+cp LICENSE "$out/LICENSE"
+
+if [ "$target" = firefox ]; then
+  # AMO reads this from the extension source directory and sends it with the
+  # submission; it is not part of the shipped add-on. Without it AMO rejects a
+  # listed version: "This field, or custom_license, is required for listed
+  # versions." Chrome does not read it, so packaging it there would only add a
+  # file the Web Store ignores.
+  #
+  # web-ext sign does not fail on a missing file - it just sends nothing - so
+  # the license has to be checked here, where the error names the field. The
+  # placeholder below is refused outright: it is not a licence grant, and an
+  # add-on that ships claiming one is worse than one that does not ship.
+  if ! python3 -c "
+import json, sys
+m = json.load(open('extension/amo.metadata.json'))
+lic = (m.get('license') or '').strip()
+if not lic:
+    sys.exit('FAIL: extension/amo.metadata.json has no license. AMO rejects a '
+             'listed version without one.')
+if lic.startswith('UNSET'):
+    sys.exit('FAIL: extension/amo.metadata.json still holds the placeholder '
+             'license %r. Pick a real SPDX id (MIT, MPL-2.0, GPL-3.0-or-later) '
+             'or replace it with custom_license, then commit that.' % lic)
+"; then
+    exit 1
+  fi
+  cp extension/amo.metadata.json "$out/amo.metadata.json"
+  # A `listed` submission may reference the licence by SPDX id alone, but the
+  # add-on still has to carry the text (GPL section 4). Both are checked here so
+  # neither is discovered by AMO instead.
+  if ! cmp -s LICENSE "$out/LICENSE"; then
+    echo "ERROR: the packaged LICENSE differs from the repository one." >&2
+    exit 1
+  fi
+fi
 
 # 2. A service worker cannot run in an extension page — there is no such
 #    context — so shipping one only buys a failed registration in the console.
