@@ -32,6 +32,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(docker): pin Flutter 3.47.2 from official tarball; dart build cli bundle
 - Fix(server): normalize /rooms/lookup codes like the join path
 ### Other
+- Install Flutter in publish-firefox, which had no toolchain
 - Let the changelog guard tolerate the section a tag promotes
 - Read the AMO credentials under the names the repo actually has
 - Point packaged extension pages at the hosted game server
