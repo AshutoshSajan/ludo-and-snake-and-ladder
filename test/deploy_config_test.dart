@@ -326,22 +326,40 @@ void main() {
       expect(step, contains('--api-secret'));
     });
 
-    test('pull requests run tests; pushes run changelog, version and publish', () {
+    test('only PRs into main run tests; pushes run the release checks', () {
       // The two halves of the workflow, kept apart on purpose:
       //
       //   pull_request -> test only
-      //   push         -> changelog + version bump (+ publish on a tag)
+      //   push         -> changelog + version verify (+ publish on a tag)
       //
-      // They used to overlap, which meant a push to dev ran a test job scoped
-      // away to nothing while a PR into dev ran no checks at all.
+      // Scoping is done with `on.pull_request.branches: [main]` rather than an
+      // `if: github.base_ref == 'main'` inside the job. Both stop a PR into the
+      // integration branch from billing a full suite, but the trigger filter
+      // also stops the workflow from starting at all - an `if` still spins up
+      // the runner and every job just to skip. Runner minutes are metered and
+      // this repo exhausted them.
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
       expect(workflow, contains('if: github.event_name == \'pull_request\''),
-          reason: 'the test job is pull-only, and unscoped by base branch');
-      // A base_ref restriction is what left PRs into dev with no CI.
+          reason: 'the test job is pull-only');
       expect(workflow, isNot(contains("github.base_ref == 'main'")),
-          reason: 'tests must run for every PR, not only those targeting main');
+          reason: 'scope PRs with a trigger filter, not a job condition');
+      expect(workflow, contains('branches: [main]'),
+          reason: 'pushes must be limited to main');
       expect(workflow, contains('if: github.event_name == \'push\''),
           reason: 'changelog and version are push-time work');
+
+      // Sliced out of the `on:` block rather than matched anywhere in the file:
+      // `branches: [main]` legitimately appears twice (push and pull_request),
+      // so a whole-file `contains` still passes with the PR filter deleted -
+      // which is exactly the regression this test exists to catch. Verified by
+      // removing the filter and watching this fail.
+      final triggers = workflow.substring(0, workflow.indexOf('\njobs:'));
+      final prBlock = triggers.substring(triggers.indexOf('pull_request:'));
+      expect(prBlock, contains('branches: [main]'),
+          reason: 'the PR trigger must be limited to main, or a PR into the '
+              'integration branch runs the full suite');
+      expect(prBlock, isNot(contains('branches: [main, ')),
+          reason: 'no other branch may be added back to the PR trigger');
     });
 
     test('a bump is still one script, and a stale tag still fails', () {
