@@ -174,6 +174,25 @@ That is what caught the missing `gecko.id`, which AMO rejects a listed add-on
 without. It now reports 0 errors; the remaining warnings are all inside the
 compiled Dart bundle.
 
+**The license lives in `extension/amo.metadata.json`, not the manifest.** AMO
+rejects a listed version without one, and says so only after the upload:
+
+```
+WebExtError: Submission failed (2): Bad Request
+  "version": { "license": [
+    "This field, or custom_license, is required for listed versions." ] }
+```
+
+`web-ext sign` reads that file from the extension source directory, so
+`tools/build_extension.sh` copies it into the Firefox package only — Chrome
+ignores it. A missing file is silent: `web-ext` sends nothing and AMO decides.
+It declares `GPL-3.0-only` — not bare `GPL-3.0`, which SPDX has deprecated in
+favour of the `-only` / `-or-later` forms. GPL section 4 also requires the
+licence text to travel with the covered work, so `LICENSE` is packaged into the
+add-on rather than living only in the repository.
+
+Licensed under **GPL-3.0-only** — see [LICENSE](LICENSE).
+
 `CHANGELOG.md` is **generated** by [git-cliff](https://git-cliff.org) from the
 commit history using `cliff.toml` (Keep a Changelog format) — never hand-edit
 it.

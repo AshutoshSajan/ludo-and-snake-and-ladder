@@ -152,6 +152,47 @@ void main() {
         reason: 'a gecko id is an email-shaped string or a GUID');
   });
 
+  test('AMO metadata exists and is packaged for Firefox only', () {
+    // Found by a real submission: web-ext sign uploaded the add-on and AMO
+    // answered `Submission failed (2): Bad Request - "This field, or
+    // custom_license, is required for listed versions."` The license is not in
+    // the manifest; it goes in amo.metadata.json, which web-ext reads from the
+    // extension source directory. A missing file is silent — web-ext sends
+    // nothing and AMO decides — so both halves are pinned here.
+    final meta = jsonDecode(File('extension/amo.metadata.json').readAsStringSync())
+        as Map<String, dynamic>;
+    expect(meta['license'], isA<String>(),
+        reason: 'AMO rejects a listed version with no license');
+    expect('${meta['license']}', isNot(startsWith('UNSET')),
+        reason: 'the placeholder is not a licence grant');
+    // AMO matches the SPDX list, where bare `GPL-3.0` is deprecated in favour
+    // of the -only / -or-later forms. A deprecated id is one AMO may drop.
+    expect('${meta['license']}', isNot('GPL-3.0'),
+        reason: 'deprecated SPDX id; use GPL-3.0-only or GPL-3.0-or-later');
+    expect(meta['categories'], isNotEmpty, reason: 'AMO requires categories');
+    expect((meta['developer'] as Map)['name'], isNotEmpty);
+
+    // GPL section 4 requires the licence text to travel with the covered work,
+    // so the file is not just a repo-level courtesy - it has to be packaged.
+    expect(File('LICENSE').existsSync(), isTrue,
+        reason: 'the declared licence must have its text in the repo');
+    expect(File('LICENSE').readAsStringSync(),
+        contains('GNU GENERAL PUBLIC LICENSE'));
+    final sh = File('tools/build_extension.sh').readAsStringSync();
+    expect(sh, contains('amo.metadata.json'),
+        reason: 'the metadata must be copied into the Firefox package');
+    expect(sh, contains(r'cp LICENSE "$out/LICENSE"'),
+        reason: 'the licence text must ship inside the add-on');
+    // The placeholder is a stand-in, not a licence grant. Packaging it would
+    // publish a licence the project never chose, so the build refuses instead.
+    expect(sh, contains('UNSET'),
+        reason: 'the build must refuse the placeholder license');
+    // Chrome does not read this file; shipping it there adds bytes the Web
+    // Store ignores. The LICENSE copy above is not store-specific, so it is
+    // outside this guard deliberately.
+    expect(sh, contains(r'if [ "$target" = firefox ]; then'));
+  });
+
   test('the build script packages the popup and checks it', () {
     final sh = File('tools/build_extension.sh').readAsStringSync();
     expect(sh, contains('extension/popup.html extension/popup.js'),
