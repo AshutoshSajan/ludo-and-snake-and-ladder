@@ -1,3 +1,4 @@
+import '../ui/page_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -15,8 +16,9 @@ class SettingsScreen extends ConsumerWidget {
     final anims = ref.watch(animationsEnabledProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
+      appBar: PageAppBar(title: 'Settings'),
+      body: ContentColumn(
+        child: ListView(
         children: [
           const SizedBox(height: 8),
           SwitchListTile(
@@ -62,6 +64,7 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

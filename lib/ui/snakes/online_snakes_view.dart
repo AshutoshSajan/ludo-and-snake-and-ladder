@@ -1,3 +1,4 @@
+import '../page_app_bar.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -276,7 +277,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     };
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: PageAppBar(
         title: const Text('Snakes & Ladders'),
         actions: [
           const SoundToggleButton(),

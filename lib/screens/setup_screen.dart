@@ -1,3 +1,4 @@
+import '../ui/page_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -127,9 +128,25 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     final label = widget.game == GameKind.ludo ? 'Ludo' : 'Snakes & Ladders';
 
     return Scaffold(
-      appBar: AppBar(title: Text('$label — New game')),
+      appBar: PageAppBar(title: '$label — New game'),
       body: SafeArea(
-        child: ListView(
+        // A reading-width column, centred. Unconstrained, every card and button
+        // stretched to the full viewport: on a wide desktop a seat row put a
+        // short name at the far left and its corner swatches at the far right,
+        // with a metre of empty felt between them. The swatch row is what makes
+        // it read badly - it is the thing you compare across seats, and it has
+        // to sit near the name to be comparable at all.
+        //
+        // 720 rather than the 520 the home screen uses: a seat card puts the
+        // Human/Bot toggle and the difficulty dropdown on the same row as the
+        // name, and 520 forces those onto their own lines.
+        //
+        // The inner block is deliberately left at its old indentation. Running
+        // `dart format` on this file rewrites 240 unrelated lines, because the
+        // committed formatting predates this SDK's formatter; CI does not check
+        // format, so reformatting here would bury the actual change in noise.
+        child: ContentColumn(
+            child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             Card(
@@ -187,6 +204,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

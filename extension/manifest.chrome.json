@@ -21,7 +21,11 @@
     }
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://ludo-1zpb.onrender.com"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://ludo-1zpb.onrender.com wss://ludo-1zpb.onrender.com"
   },
+  "host_permissions": [
+    "https://ludo-1zpb.onrender.com/*",
+    "wss://ludo-1zpb.onrender.com/*"
+  ],
   "offline_enabled": true
 }

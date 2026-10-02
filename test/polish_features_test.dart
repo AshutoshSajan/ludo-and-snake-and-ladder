@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:fake_async/fake_async.dart';
@@ -193,5 +194,40 @@ void main() {
       sound.enabled = true;
       sound.dispose();
     });
+  });
+  test('no emoji or symbol glyphs in the UI source', () {
+    // Every glyph here rendered as a tofu box in the packaged add-on. The
+    // extension bundles only Roboto, MaterialIcons and CupertinoIcons - the
+    // build script hard-fails if Roboto is missing - and Roboto carries no
+    // emoji. The web build hides this because the browser substitutes a system
+    // emoji font; an extension page has no such fallback, so the die above
+    // "Game Club", the arrow after "Play now" and the victory-dialog medals
+    // all came out as empty boxes.
+    //
+    // Comments are exempt: prose may name a glyph to explain what replaced it,
+    // and ludo_board_painter draws its arrow with strokes, which its docstring
+    // names.
+    final offenders = <String>[];
+    // Compared by code point rather than matched with RegExp: Dart's RegExp does
+    // not support the `\u{...}` escape, and writing the ranges as literal
+    // characters in the source is the very thing this test forbids. Covers the
+    // emoji blocks and the arrows/symbols block, which is where the die, the
+    // "Play now" arrow and the victory medals came from.
+    bool isOffendingGlyph(int c) =>
+        (c >= 0x1F000 && c <= 0x1FAFF) || (c >= 0x2100 && c <= 0x2BFF);
+
+    for (final f in Directory('lib').listSync(recursive: true).whereType<File>()) {
+      if (!f.path.endsWith('.dart')) continue;
+      for (final (i, line) in f.readAsLinesSync().indexed) {
+        final t = line.trimLeft();
+        if (t.startsWith('//') || t.startsWith('*')) continue;
+        for (final c in line.runes.where(isOffendingGlyph)) {
+          offenders.add('${f.path}:${i + 1}  U+${c.toRadixString(16).toUpperCase()}');
+        }
+      }
+    }
+    expect(offenders, isEmpty,
+        reason: 'use a Material icon or CustomPaint; the add-on bundles no '
+            'emoji font, so these render as tofu: ${offenders.join(', ')}');
   });
 }

@@ -1,3 +1,4 @@
+import '../page_app_bar.dart';
 import 'dart:async';
 import 'dart:math' show Random;
 import 'dart:math' as math;
@@ -181,7 +182,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     final movingToken = session.activeAnim?.tokenIndex;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: PageAppBar(
         title: const Text('Snakes & Ladders'),
         actions: [
           const SoundToggleButton(),
