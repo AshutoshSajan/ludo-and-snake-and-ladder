@@ -9,6 +9,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 ### Fixed
 - Fix three things that each blocked the Firefox release on their own
 ### Other
+- Regenerate the changelog for the v1.2.1 release
 - Give the Firefox add-on a licence AMO will accept
 ## [v1.2.0] - 2026-10-02
 ### Added
