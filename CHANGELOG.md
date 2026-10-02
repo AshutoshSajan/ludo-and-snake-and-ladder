@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
+## Unreleased
+### Other
+- Give the Firefox add-on a licence AMO will accept
 ## [v1.2.0] - 2026-10-02
 ### Added
 - Add the changelog guard fix to the v1.2.0 notes
