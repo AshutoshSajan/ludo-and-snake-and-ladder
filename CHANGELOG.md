@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
+## Unreleased
+### Fixed
+- Fix(ui): align title bars to the content column and pull the dice in
+- Fix(online): spend the cold-start budget on refused first connections
+- Fix(extension): grant wss:// so online play can reach the game server
+### Other
+- Stop running the full suite on PRs into dev
+- Ci: make release prep open a PR and run before the changelog check
 ## [v1.2.1] - 2026-10-02
 ### Fixed
 - Fix three things that each blocked the Firefox release on their own
