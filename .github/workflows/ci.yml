@@ -298,6 +298,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Without this the job's very first command is `flutter pub get`, and a
+      # GitHub runner has no Flutter on PATH: `flutter: command not found`,
+      # exit 127, before any credential is touched. Both other jobs that build
+      # (test, verify-release) install it here, and publish-firefox was the one
+      # that did not - it is the only job whose failure was invisible, because
+      # its trigger had never fired.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
       - name: Build the web bundle
         # The extension bundles the whole Flutter payload; there is no dart-define
         # for the server here, so an add-on build needs no configuration.
