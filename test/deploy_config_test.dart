@@ -228,6 +228,24 @@ void main() {
           reason: 'the hook must not write or check it; CI is the only writer');
     });
 
+    test('release-prep can actually open the pull request it describes', () {
+      // Found in production, not in review: release-prep pushed its
+      // chore/release-prep-* branch fine and then `gh pr create` died with
+      // "GraphQL: Resource not accessible by integration
+      // (repository.pullRequests)" — because the job had `contents: write`
+      // and no `pull-requests: write`. The branch existed with no PR and no
+      // path to main. Assert on the job's own block, so a permission that is
+      // granted elsewhere in the file cannot satisfy this.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final prep = RegExp(r'  release-prep:[\s\S]*?(?=\n  [a-z-]+:|$)')
+          .firstMatch(workflow)
+          ?.group(0);
+      expect(prep, isNotNull, reason: 'the release-prep job must exist');
+      expect(prep, contains('pull-requests: write'),
+          reason: 'gh pr create needs pull-requests: write on this job, '
+              'not just contents: write');
+    });
+
     test('a tag push triggers the workflow, and publishing can run there', () {
       // Two separate defects made the release path unreachable while the
       // workflow still looked correct on screen.

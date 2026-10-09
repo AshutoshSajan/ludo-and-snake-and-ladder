@@ -91,7 +91,13 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
+      # contents: push the bump branch. pull-requests: open it. Without the
+      # second, `gh pr create` fails with "Resource not accessible by
+      # integration (repository.pullRequests)" AFTER the branch is pushed,
+      # leaving a stranded chore/release-prep-* branch with no PR — which is
+      # exactly how this was found.
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
