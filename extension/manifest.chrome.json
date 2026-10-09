@@ -3,7 +3,7 @@
   "name": "Game Club — Ludo & Snakes n Ladders",
   "short_name": "Game Club",
   "description": "Play Ludo and Snakes & Ladders offline — 2-10 players, smart bots, pass-and-play.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
