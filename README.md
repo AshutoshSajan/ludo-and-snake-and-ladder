@@ -59,26 +59,26 @@ Runs on **web, Linux, macOS, Windows, Android and iOS**, and ships as a
 
 ### 🎲 Ludo
 <p align="center">
-  <img src="assets/screenshots/ludo-gameplay.png" alt="Ludo Gameplay" width="700"/>
+  <img src="assets/screenshots/ludo-gameplay.svg" alt="Ludo Gameplay" width="700"/>
   <br/>
   <em>Ludo gameplay with animated dice rolls, token movements, and captures</em>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/ludo-board.png" alt="Ludo Board" width="700"/>
+  <img src="assets/screenshots/ludo-board.svg" alt="Ludo Board" width="700"/>
   <br/>
   <em>Classic Ludo board with 4 players, safe cells, and home columns</em>
 </p>
 
 ### 🐍 Snakes & Ladders
 <p align="center">
-  <img src="assets/screenshots/snakes-gameplay.png" alt="Snakes & Ladders Gameplay" width="700"/>
+  <img src="assets/screenshots/snakes-gameplay.svg" alt="Snakes & Ladders Gameplay" width="700"/>
   <br/>
   <em>Snakes & Ladders with animated pawn movements, ladder climbs, and snake slides</em>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/snakes-board.png" alt="Snakes & Ladders Board" width="700"/>
+  <img src="assets/screenshots/snakes-board.svg" alt="Snakes & Ladders Board" width="700"/>
   <br/>
   <em>Classic 100-square board with 9 ladders and 10 snakes</em>
 </p>

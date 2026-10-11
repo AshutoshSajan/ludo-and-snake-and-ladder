@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="500" viewBox="0 0 700 500">
+  <rect width="700" height="500" fill="#1B5E20"/>
+  <text x="350" y="200" font-family="Arial, sans-serif" font-size="28" fill="white" text-anchor="middle" font-weight="bold">Ludo Gameplay</text>
+  <text x="350" y="240" font-family="Arial, sans-serif" font-size="18" fill="#A5D6A7" text-anchor="middle">Animated dice rolls, token moves, captures</text>
+  <rect x="250" y="280" width="200" height="80" rx="8" fill="#2E7D32" stroke="#4CAF50" stroke-width="2"/>
+  <text x="350" y="335" font-family="Arial, sans-serif" font-size="16" fill="#C8E6C9" text-anchor="middle" font-weight="bold">Replace with real screenshot</text>
+  <text x="350" y="380" font-family="Arial, sans-serif" font-size="14" fill="#81C784" text-anchor="middle">Run: ./tools/capture-screenshots.sh</text>
+  <text x="350" y="420" font-family="Arial, sans-serif" font-size="12" fill="#66BB6A" text-anchor="middle">Or manually capture from: flutter run -d chrome</text>
+</svg>
