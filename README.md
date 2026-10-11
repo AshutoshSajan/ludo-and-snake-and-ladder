@@ -95,6 +95,32 @@ Runs on **web, Linux, macOS, Windows, Android and iOS**, and ships as a
   <em>Classic 100-square board with 9 ladders and 10 snakes</em>
 </p>
 
+### 🌐 Online Play & Club
+
+<p align="center">
+  <img src="assets/screenshots/play-online.png" alt="Play Online — connect and room form" width="700"/>
+  <br/>
+  <em>Play Online: connect to the authoritative server, pick Ludo or Snakes, create a room or join by code</em>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/room-creation.png" alt="Online room with two players seated" width="700"/>
+  <br/>
+  <em>Room lobby: share the 4-letter code, seats fill up, host starts the match — table chat included</em>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/leaderboard.png" alt="Online leaderboard" width="700"/>
+  <br/>
+  <em>Server-backed career leaderboard with per-game boards (Ludo / Snakes / All) and a top-3 podium</em>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/settings.png" alt="Settings" width="700"/>
+  <br/>
+  <em>Settings: sound, haptics and board-animation toggles, persisted on device</em>
+</p>
+
 ---
 
 ## Architecture
