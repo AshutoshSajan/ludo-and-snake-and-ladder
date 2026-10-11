@@ -1,0 +1,11 @@
+{
+  "name": "game-club-screenshots",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "capture": "node capture-screenshots.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.44.0"
+  }
+}
