@@ -16,6 +16,103 @@ import 'package:game_club/server/web_cache.dart';
 /// whichever origin was missed — and only on that origin, which is why it is so
 /// easy to misread as a deploy that did not happen.
 void main() {
+  group('release.yaml — one-tag binary releases (Sudoku-tested pattern)', () {
+    late String release;
+    setUpAll(() {
+      release = File('.github/workflows/release.yaml').readAsStringSync();
+    });
+
+    test('only app tags drive a release; ext-v* can never do it', () {
+      // Copied from the incident the guard documents: an ext-v tag through
+      // the version resolver would cut an app release named after an
+      // extension version. The resolver must refuse it, and manual dispatch
+      // still needs a way to name the version.
+      expect(release, contains("tags: ['v*']"));
+      expect(release, contains('ext-v*'));
+      expect(
+        release,
+        contains("Tag {ref_name!r} is not a vX.Y.Z app release tag"),
+      );
+    });
+
+    test('every artifact the release needs has a build job behind it', () {
+      // The publish step's `needs` is the complete list; the job names are
+      // what download-artifact's '*-dist' pattern collects. A job here but
+      // not in `needs` builds and then discards its output — the shape of
+      // the bug this pins.
+      for (final job in [
+        'build-android',
+        'build-linux',
+        'build-appimage',
+        'build-windows',
+        'build-web',
+        'build-extension',
+        'build-snap',
+      ]) {
+        expect(release, contains('  $job:'),
+            reason: '$job must exist as a job');
+      }
+      final publish = RegExp(r'  publish:[\s\S]*?(?=\n  [a-z-]+:|$)')
+          .firstMatch(release)
+          ?.group(0);
+      expect(publish, isNotNull, reason: 'the publish job must exist');
+      for (final job in [
+        'build-android',
+        'build-linux',
+        'build-appimage',
+        'build-windows',
+        'build-web',
+        'build-extension',
+        'build-snap',
+      ]) {
+        expect(publish, contains(job),
+            reason: 'publish must wait on $job, or its artifacts are orphaned');
+      }
+    });
+
+    test('the Linux jobs carry the audio deps the game needs', () {
+      // LUDO-specific, not in the Sudoku original: the game plays sounds
+      // through audioplayers, so a runner without the GStreamer headers
+      // fails the Flutter build, not just the tests. Both jobs that compile
+      // C++ must name them.
+      for (final job in ['build-linux:', 'build-appimage:']) {
+        final block = release.split(job).elementAtOrNull(1);
+        expect(block, isNotNull, reason: '$job must exist');
+        expect(block, contains('libgstreamer1.0-dev'),
+            reason: '$job compiles the audio plugins and needs the headers');
+      }
+    });
+
+    test('the desktop artifacts use the real executable names', () {
+      // Also LUDO-specific: linuxdeploy is handed an explicit -e path, and
+      // the Inno script has its own Source line. Both must name the binary
+      // CMake actually produces (`game_club`, not `game-club`), or the
+      // packaging succeeds while wrapping nothing. Checked here because a
+      // runner is the only other place it would fail.
+      expect(release, contains('-e build/linux/x64/release/bundle/game_club'));
+      final iss = File('packaging/inno/game-club.iss').readAsStringSync();
+      expect(iss, contains(r'build\windows\x64\runner\Release\*'));
+      expect(iss, contains('game_club.exe'));
+    });
+
+    test('a manual dispatch can only dry-run, never publish', () {
+      // workflow_dispatch shares the whole pipeline so a dry run is a real
+      // validation. But the publish step must be tag-gated, or a dry run
+      // from the Actions tab cuts a public release with a hand-typed
+      // version. The `if` is the only thing standing between the two.
+      expect(
+        release,
+        contains("if: startsWith(github.ref, 'refs/tags/v')"),
+        reason: 'only a real v* tag may run softprops/action-gh-release',
+      );
+    });
+
+    test('the release computes checksums over everything it ships', () {
+      expect(release, contains('sha256sum -- * > SHA256SUMS.txt'));
+      expect(release, contains('files: dist/*'));
+    });
+  });
+
   group('netlify.toml', () {
     late String toml;
     setUpAll(() {
@@ -226,6 +323,24 @@ void main() {
           .replaceAll(RegExp(r'^#.*$', multiLine: true), '');
       expect(hook, isNot(contains('changelog')),
           reason: 'the hook must not write or check it; CI is the only writer');
+    });
+
+    test('release-prep can actually open the pull request it describes', () {
+      // Found in production, not in review: release-prep pushed its
+      // chore/release-prep-* branch fine and then `gh pr create` died with
+      // "GraphQL: Resource not accessible by integration
+      // (repository.pullRequests)" — because the job had `contents: write`
+      // and no `pull-requests: write`. The branch existed with no PR and no
+      // path to main. Assert on the job's own block, so a permission that is
+      // granted elsewhere in the file cannot satisfy this.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final prep = RegExp(r'  release-prep:[\s\S]*?(?=\n  [a-z-]+:|$)')
+          .firstMatch(workflow)
+          ?.group(0);
+      expect(prep, isNotNull, reason: 'the release-prep job must exist');
+      expect(prep, contains('pull-requests: write'),
+          reason: 'gh pr create needs pull-requests: write on this job, '
+              'not just contents: write');
     });
 
     test('a tag push triggers the workflow, and publishing can run there', () {

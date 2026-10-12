@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: 'RobotoApp'; src: url('../../assets/fonts/roboto/Roboto-Regular.ttf'); font-weight: 400; }
+  @font-face { font-family: 'RobotoApp'; src: url('../../assets/fonts/roboto/Roboto-Medium.ttf'); font-weight: 500; }
+  @font-face { font-family: 'RobotoApp'; src: url('../../assets/fonts/roboto/Roboto-Bold.ttf'); font-weight: 700; }
+  @font-face { font-family: 'RobotoApp'; src: url('../../assets/fonts/roboto/Roboto-Black.ttf'); font-weight: 900; }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 400px; overflow: hidden; }
+
+  body {
+    position: relative;
+    font-family: 'RobotoApp', 'Lato', sans-serif;
+    background:
+      radial-gradient(120% 150% at 50% -40%, rgba(233, 180, 76, 0.16), transparent 55%),
+      linear-gradient(135deg, #0C3420 0%, #16482D 45%, #1D5C38 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #F4EFE2;
+  }
+
+  /* ---- decorative watermarks ---- */
+  .deco { position: absolute; opacity: 0.09; pointer-events: none; }
+  .ladder { left: -30px; top: -40px; transform: rotate(24deg); }
+  .snake  { right: -40px; bottom: -60px; transform: rotate(-8deg); }
+
+  /* ---- gold hairline frame ---- */
+  .frame {
+    position: absolute; inset: 14px;
+    border: 1.5px solid rgba(233, 180, 76, 0.45);
+    border-radius: 18px;
+    pointer-events: none;
+  }
+  .frame::before, .frame::after {
+    content: ''; position: absolute; width: 10px; height: 10px;
+    background: #E9B44C; transform: rotate(45deg);
+  }
+  .frame::before { left: -5px; top: -5px; }
+  .frame::after  { right: -5px; bottom: -5px; }
+
+  /* ---- center stack ---- */
+  .stack { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; }
+
+  .die {
+    width: 74px; height: 74px; border-radius: 18px;
+    background: linear-gradient(145deg, #FFFDF4, #EFE6CE);
+    border: 3px solid #E9B44C;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.35), inset 0 -4px 10px rgba(0,0,0,0.08);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 14px; gap: 10px;
+    transform: rotate(-6deg);
+    margin-bottom: 16px;
+  }
+  .pip { border-radius: 50%; }
+  .pip.r { background: #CF3F3F; }
+  .pip.b { background: #3C6FD8; }
+  .pip.y { background: #F2C14E; }
+  .pip.g { background: #2E9E5B; }
+
+  h1 {
+    font-weight: 900; font-size: 76px; letter-spacing: 10px;
+    line-height: 1; text-transform: uppercase;
+    background: linear-gradient(180deg, #FBE3A2 0%, #E9B44C 55%, #C9922F 100%);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 4px 10px rgba(0,0,0,0.35));
+  }
+
+  .divider {
+    display: flex; align-items: center; gap: 16px;
+    margin-top: 18px; color: #E9B44C;
+    font-size: 21px; font-weight: 700; letter-spacing: 7px;
+  }
+  .divider .line { width: 90px; height: 2px; background: linear-gradient(90deg, transparent, #E9B44C); }
+  .divider .line.rev { background: linear-gradient(90deg, #E9B44C, transparent); }
+  .divider .dot { width: 8px; height: 8px; background: #E9B44C; transform: rotate(45deg); }
+
+  .sub {
+    margin-top: 14px; font-size: 19px; font-weight: 500;
+    color: rgba(244, 239, 226, 0.82); letter-spacing: 1.5px;
+  }
+
+  .pills { display: flex; gap: 14px; margin-top: 22px; }
+  .pill {
+    font-size: 14.5px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    color: #F4EFE2; background: rgba(244, 239, 226, 0.07);
+    border: 1.5px solid rgba(233, 180, 76, 0.55); border-radius: 999px;
+    padding: 9px 20px;
+  }
+
+  /* ---- ludo color stripe ---- */
+  .stripe { position: absolute; left: 0; right: 0; bottom: 0; display: flex; height: 10px; z-index: 3; }
+  .stripe span { flex: 1; }
+  .stripe .r { background: #CF3F3F; }
+  .stripe .g { background: #2E9E5B; }
+  .stripe .y { background: #F2C14E; }
+  .stripe .b { background: #3C6FD8; }
+</style>
+</head>
+<body>
+  <!-- ladder watermark -->
+  <svg class="deco ladder" width="360" height="520" viewBox="0 0 360 520" fill="none">
+    <rect x="60"  y="-40" width="26" height="620" rx="13" fill="#F4EFE2"/>
+    <rect x="240" y="-40" width="26" height="620" rx="13" fill="#F4EFE2"/>
+    <g fill="#F4EFE2">
+      <rect x="60" y="10"   width="206" height="22" rx="11"/>
+      <rect x="60" y="110"  width="206" height="22" rx="11"/>
+      <rect x="60" y="210"  width="206" height="22" rx="11"/>
+      <rect x="60" y="310"  width="206" height="22" rx="11"/>
+      <rect x="60" y="410"  width="206" height="22" rx="11"/>
+    </g>
+  </svg>
+
+  <!-- snake watermark -->
+  <svg class="deco snake" width="560" height="420" viewBox="0 0 560 420" fill="none">
+    <path d="M20 300 C 110 140, 210 400, 320 240 S 480 90, 545 170"
+          stroke="#E9B44C" stroke-width="34" stroke-linecap="round"/>
+    <circle cx="545" cy="170" r="30" fill="#E9B44C"/>
+    <circle cx="556" cy="160" r="6"  fill="#0C3420"/>
+  </svg>
+
+  <div class="frame"></div>
+
+  <div class="stack">
+    <div class="die">
+      <span class="pip r"></span><span class="pip b"></span>
+      <span class="pip y"></span><span class="pip g"></span>
+    </div>
+
+    <h1>Game Club</h1>
+
+    <div class="divider">
+      <span class="line"></span>
+      <span>LUDO</span>
+      <span class="dot"></span>
+      <span>SNAKES &amp; LADDERS</span>
+      <span class="line rev"></span>
+    </div>
+
+    <div class="sub">Play local, online, or right in your browser</div>
+
+    <div class="pills">
+      <span class="pill">Rooms &amp; chat</span>
+      <span class="pill">Smart bots</span>
+      <span class="pill">Leaderboards</span>
+      <span class="pill">6 platforms</span>
+    </div>
+  </div>
+
+  <div class="stripe">
+    <span class="r"></span><span class="g"></span><span class="y"></span><span class="b"></span>
+  </div>
+</body>
+</html>

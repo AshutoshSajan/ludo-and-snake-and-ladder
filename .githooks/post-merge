@@ -1,0 +1,30 @@
+#!/bin/sh
+# Refresh CHANGELOG.md locally after every merge.
+#
+# CI owns the file: the release-prep job regenerates it on a push to main and
+# opens the bump PR, and `tool/changelog.sh --check` guards it from a tag. That
+# leaves the inner branches (dev/staging) with a changelog that only catches up
+# when main moves — this hook is the local catch-up. It does NOT commit: the
+# diff is left in the working tree to review and fold into your next commit, so
+# there is still exactly one writer of record (CI) and no bot/human race.
+
+if ! command -v git-cliff >/dev/null 2>&1; then
+  echo "⚠️  git-cliff not installed — skipping local CHANGELOG update." >&2
+  echo "   see https://git-cliff.org/docs/installation/" >&2
+  exit 0
+fi
+
+# tool/changelog.sh, not `git cliff -o` directly: it is the one generator
+# (cliff.toml holds the rules) and it refuses to emit a file that would drop a
+# released section, which is what a stale local branch would otherwise do.
+if tool/changelog.sh >/dev/null 2>&1; then
+  if ! git diff --quiet -- CHANGELOG.md; then
+    echo "📝 CHANGELOG.md regenerated locally — review it, commit it with your change."
+  fi
+else
+  echo "⚠️  changelog not regenerated (git-cliff missing, no tags, or the guard" >&2
+  echo "     refused because this branch lacks commits its base has)." >&2
+  echo "     run tool/changelog.sh by hand to see why." >&2
+fi
+
+exit 0
