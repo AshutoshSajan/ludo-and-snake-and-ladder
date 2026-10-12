@@ -28,6 +28,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: ''
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -48,6 +51,9 @@ jobs:
       build-number: ${{ steps.ver.outputs.build-number }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: ''
       - id: ver
         run: |
           python3 - <<'EOF'
@@ -102,6 +108,9 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: ''
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -164,6 +173,9 @@ jobs:
       BUILD_NUMBER: ${{ needs.resolve-version.outputs.build-number }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: \'\'
       # LUDO plays sounds through audioplayers, so the runner needs the same
       # GStreamer headers a laptop build needs — not just the GTK set.
       - run: >
@@ -211,6 +223,9 @@ jobs:
       BUILD_NUMBER: ${{ needs.resolve-version.outputs.build-number }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: \'\'
       # LUDO plays sounds through audioplayers, so the runner needs the same
       # GStreamer headers a laptop build needs — not just the GTK set.
       - run: >
@@ -268,6 +283,9 @@ jobs:
       BUILD_NUMBER: ${{ needs.resolve-version.outputs.build-number }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: ''
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -304,6 +322,9 @@ jobs:
       VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: ''
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -331,6 +352,9 @@ jobs:
       VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: ''
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -356,6 +380,9 @@ jobs:
       VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          sparse-checkout: ''
       - name: Fail on snapcraft.yaml version drift
         run: |
           snap_ver=$(grep -Po "^version:\s*'\K[^']+" snap/snapcraft.yaml)
