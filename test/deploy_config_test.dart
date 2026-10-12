@@ -632,10 +632,13 @@ void main() {
       expect(prep, isNot(contains('origin HEAD:refs/heads/main')));
     });
 
-    test('publishing follows the bump on main, not a hand-pushed tag', () {
-      // The order the user asked for: changelog + version, then the Firefox
-      // upload. `needs` is what enforces it — release-prep bumps, verify-release
+    test('publishing follows the bump on ext-v* tag, not on main push', () {
+      // The order: changelog + version bump, then the Firefox
+      // upload. `needs` enforces the order — release-prep bumps, verify-release
       // is the only test gate on a push path, and publish runs after both.
+      // 
+      // IMPORTANT: Firefox publishing now runs on ext-v* tags (extension releases),
+      // NOT on main push. This matches the Sudoku workflow pattern.
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
       // Sliced line-by-line, not by regex. A lookahead like `(?=\n  [a-z-]+:|\Z)`
       // matches the COMMENTED-OUT `publish-chrome` block, whose body is indented
@@ -650,8 +653,8 @@ void main() {
           .join('\n');
 
       final fox = jobBody('publish-firefox');
-      expect(fox, contains("github.ref == 'refs/heads/main'"),
-          reason: 'a main merge carries the bump and must trigger the upload');
+      expect(fox, contains("startsWith(github.ref, 'refs/tags/ext-v')"),
+          reason: 'an ext-v* tag carries the bump and must trigger the upload');
       expect(fox, contains('needs: [release-prep, verify-release]'),
           reason: 'publishing must wait for the bump and the test gate');
 
