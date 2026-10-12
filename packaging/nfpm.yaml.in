@@ -1,0 +1,22 @@
+# Packaged by nFPM (see release.yaml). @VERSION@ is stamped by CI.
+name: game-club
+arch: amd64
+version: "@VERSION@"
+maintainer: Ashutosh Sajan
+description: Ludo and Snakes & Ladders — hot-seat and online board games
+homepage: https://github.com/AshutoshSajan/ludo-and-snake-and-ladder
+license: GPL-3.0-only
+# Alternation covers the 24.04 rename (libgtk-3-0t64) and older suites.
+depends:
+  - libgtk-3-0t64 | libgtk-3-0
+# nFPM resolves src relative to the repository root (its CWD), not packaging/.
+contents:
+  - src: build/linux/x64/release/bundle/
+    dst: /usr/lib/game-club/
+  - src: packaging/game-club.desktop
+    dst: /usr/share/applications/game-club.desktop
+  - src: web/icons/Icon-512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/game-club.png
+  - src: /usr/lib/game-club/game_club
+    dst: /usr/bin/game-club
+    type: symlink

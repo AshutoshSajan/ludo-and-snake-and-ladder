@@ -1,0 +1,47 @@
+# Snap packaging for the Linux desktop build.
+# Build on Ubuntu 18.04+ with snapcraft + LXD:
+#   sudo snap install snapcraft --classic
+#   sudo snap install lxd && sudo lxd init && sudo usermod -a -G lxd $USER
+#   snapcraft --use-lxd          # from the project root
+# Publish (needs a Snap Store account):
+#   snapcraft register game-club-ludo
+#   snapcraft upload game-club-ludo_1.2.2_amd64.snap --release=edge
+# Keep `version` in sync with pubspec.yaml.
+name: game-club-ludo
+version: '1.2.2'
+# Flutter ships prebuilt engines for x64 and ARM64 only; other arches
+# (armhf/ppc64el/s390x/riscv64) can never build, so don't attempt them.
+# NOTE: core22 grammar takes a plain list; the build-on/run-on dict form
+# is core24+ and crashes snapcraft 9 with a pydantic ValidationError.
+architectures:
+  - amd64
+  - arm64
+summary: Ludo and Snakes & Ladders board games
+description: |
+  Game Club plays Ludo and Snakes & Ladders: hot-seat on one device
+  against friends or bots, and online rooms with chat. Fully offline
+  for local play, no ads, no tracking. Free and open source (GPL-3.0).
+confinement: strict
+base: core22
+grade: stable
+
+slots:
+  dbus-gameclub:
+    interface: dbus
+    bus: session
+    name: com.gameclub.game_club
+
+apps:
+  game-club:
+    command: game_club
+    extensions: [gnome]
+    plugs:
+      - network
+    slots:
+      - dbus-gameclub
+
+parts:
+  game-club:
+    source: .
+    plugin: flutter
+    flutter-target: lib/main.dart

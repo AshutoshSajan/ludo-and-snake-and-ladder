@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Game Club
+GenericName=Ludo and Snakes & Ladders
+Comment=Play Ludo and Snakes & Ladders offline or online
+Exec=game-club
+Icon=game-club
+Terminal=false
+Type=Application
+Categories=Game;BoardGame;
+Keywords=ludo;snakes;ladders;board;game;
