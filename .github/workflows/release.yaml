@@ -277,7 +277,7 @@ jobs:
 
   build-windows:
     needs: resolve-version
-    runs-on: windows-latest
+    runs-on: windows-2025
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
       BUILD_NUMBER: ${{ needs.resolve-version.outputs.build-number }}
