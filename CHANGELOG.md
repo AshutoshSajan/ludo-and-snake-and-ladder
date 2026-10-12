@@ -6,11 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
+### Added
+- Add CodeQL analysis workflow configuration
+### Documentation
+- Docs: redesign banner and restructure README
+- Docs: add Play Online, room, leaderboard & settings screenshots
+- Docs: replace placeholder screenshots with real Playwright captures
+- Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ci): give release-prep pull-requests write so its PR can be opened
 - Fix(ui): align title bars to the content column and pull the dice in
 - Fix(online): spend the cold-start budget on refused first connections
 - Fix(extension): grant wss:// so online play can reach the game server
 ### Other
+- Ci: add automated screenshot capture + local script
+- Ci: add automated screenshot capture workflow
 - Stop running the full suite on PRs into dev
 - Ci: make release prep open a PR and run before the changelog check
 ## [v1.2.1] - 2026-10-02
