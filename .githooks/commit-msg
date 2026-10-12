@@ -1,0 +1,26 @@
+#!/bin/sh
+# Enforces Conventional Commits so git-cliff can group the changelog.
+# Enable with: git config core.hooksPath .githooks
+# Format: type(scope): subject   e.g.  feat(ludo): let a 6 unblock the last pawn
+# Types: feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert
+#
+# Note this repo's cliff.toml parses subjects itself (conventional_commits is
+# off, because the early history predates the convention) — the hook is what
+# keeps NEW commits readable by those parsers, not a requirement of git-cliff.
+
+msg_file="$1"
+subject=$(head -n1 "$msg_file")
+
+# Allow merge commits: main's head must stay a merge commit (guard-main), and
+# GitHub writes "Merge pull request #123 from ...".
+case "$subject" in
+  Merge\ *) exit 0 ;;
+esac
+
+if ! printf '%s' "$subject" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+'; then
+  echo "❌ Commit rejected: message must follow Conventional Commits." >&2
+  echo "   type(scope): subject   (scope optional)" >&2
+  echo "   types: feat fix docs style refactor perf test build ci chore revert" >&2
+  echo "   got: $subject" >&2
+  exit 1
+fi
