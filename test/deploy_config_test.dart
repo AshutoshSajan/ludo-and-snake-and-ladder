@@ -343,19 +343,15 @@ void main() {
               'not just contents: write');
     });
 
-    test('a tag push triggers the workflow, and publishing can run there', () {
-      // Two separate defects made the release path unreachable while the
-      // workflow still looked correct on screen.
-      //
-      // 1. on.push listed only branches, so `git push origin v1.0.0` ran no
-      //    workflow at all and no publishing job could ever be reached.
-      // 2. publish-firefox had `needs: test`. `test` is scoped to pull
-      //    requests, so on a tag it is skipped, and a job whose dependency was
-      //    skipped never starts - which is what displayed as "waiting for
-      //    approval".
+    test('an ext-v* tag push triggers the workflow, and publishing can run there', () {
+      // The release workflow is triggered by ext-v* tags (extension releases).
+      // The ci.yml workflow no longer runs on v* tags to avoid duplicate runs
+      // with release.yaml. The publish-firefox job now runs on ext-v* tags.
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
-      expect(workflow, contains("tags: ['v*']"),
-          reason: 'release tags must trigger the workflow');
+      expect(workflow, isNot(contains("tags: ['v*']")),
+          reason: 'v* tags no longer trigger ci.yml (release.yaml handles them)');
+      expect(workflow, contains('startsWith(github.ref, \'refs/tags/ext-v\')'),
+          reason: 'ext-v* tags must trigger the publish-firefox job');
       expect(workflow, contains('needs: [release-prep, verify-release]'),
           reason: 'publishing must wait on a job that runs on tags');
       // Scoped to publish-firefox, not the whole file. `test` is legitimately

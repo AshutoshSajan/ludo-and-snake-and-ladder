@@ -7,7 +7,7 @@ on:
     # change ships.
     branches: [main]
     # Release tags are handled by release.yaml workflow
-    # tags: ['v*']  <-- removed to avoid duplicate runs with release.yaml
+    tags: ['ext-v*']
   pull_request:
     # Only PRs that target main. Without this filter the workflow runs for a PR
     # into dev too, which is the whole point of a cheap integration branch: the
