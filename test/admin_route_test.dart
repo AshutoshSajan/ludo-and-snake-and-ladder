@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/main.dart';
 import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/screens/admin/admin_login_screen.dart';
+import 'package:game_club/ui/admin_badge.dart';
+import 'package:game_club/ui/page_app_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -133,5 +135,42 @@ void main() {
     await tester.tap(find.byTooltip('Show').first);
     await tester.pumpAndSettle();
     expect(find.text('s3cr3t-pass'), findsOneWidget);
+  });
+
+  testWidgets('admin badge ends where the page content ends', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const marker = Key('body-marker');
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            appBar: PageAppBar(title: 'T'),
+            body: ContentColumn(
+              child: SizedBox(
+                key: marker,
+                width: double.infinity,
+                height: 40,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final ctx = tester.element(find.text('T'));
+    ProviderScope.containerOf(ctx).read(adminSessionProvider.notifier).signIn(
+      const AdminSession(
+        token: 't',
+        email: 'root@x.io',
+        name: 'Root',
+        serverUrl: 'ws://localhost:8080/ws',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The bar's row honors the same 16px body inset: the badge must not
+    // overhang the content column the way a full-bleed row did.
+    final badgeRight = tester.getRect(find.byType(AdminBadge)).right;
+    final columnRight = tester.getRect(find.byKey(marker)).right;
+    expect(columnRight - badgeRight, closeTo(16, 0.5));
   });
 }

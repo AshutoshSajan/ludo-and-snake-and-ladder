@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_providers.dart';
-import '../screens/admin/admin_dashboard_screen.dart';
-import '../services/admin_client.dart';
+import 'admin_badge.dart';
 
 /// The reading-width column every full-screen page is laid out in.
 ///
@@ -70,85 +69,33 @@ class PageAppBar extends ConsumerWidget implements PreferredSizeWidget {
       automaticallyImplyLeading: false,
       backgroundColor: backgroundColor,
       foregroundColor: foregroundColor,
-      // The column's own left edge, not the default 16px gutter. With a back
-      // button present that gutter would push the title 16px right of the body
-      // content it labels — the exact misalignment this removes.
+      // No AppBar gutter of our own: the inner Padding below owns the
+      // horizontal inset, matching the page bodies exactly.
       titleSpacing: 0,
       title: ContentColumn(
-        child: Row(
-          children: [
-            if (canPop)
-              BackButton(onPressed: () => Navigator.of(context).maybePop())
-            else
-              const SizedBox(width: 16),
-            // The title takes the slack, so it stays left-aligned with the
-            // content instead of drifting to the middle of the bar the way a
-            // centred title would on a wide window.
-            Expanded(
-              child: title is String
-                  ? Text(title as String, overflow: TextOverflow.ellipsis)
-                  : title as Widget,
-            ),
-            ...?actions,
-            // Visible only while signed in at /admin: every PageAppBar
-            // screen then carries the admin identity, and tapping it opens
-            // the dashboard. Game views skip this bar, so boards stay clean.
-            if (admin != null)
-              _AdminBadge(
-                email: admin.email,
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => AdminDashboardScreen(
-                      client: AdminClient(
-                        serverUrl: admin.serverUrl,
-                        token: admin.token,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Compact shield + truncated email for the app bar's trailing slot.
-class _AdminBadge extends StatelessWidget {
-  const _AdminBadge({required this.email, required this.onTap});
-
-  final String email;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: 'Admin: $email — open dashboard',
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          margin: const EdgeInsets.only(left: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.amber.shade700),
-            borderRadius: BorderRadius.circular(12),
-          ),
+        // Same 16px inset the page bodies use (their ListView padding), so
+        // the bar's content starts and ends where the page content does. A
+        // full-bleed row previously let trailing badges overhang the cards
+        // below by exactly that padding.
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.verified_user, size: 14),
-              const SizedBox(width: 4),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 120),
-                child: Text(
-                  email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11),
-                ),
+              if (canPop)
+                BackButton(onPressed: () => Navigator.of(context).maybePop()),
+              // The title takes the slack, so it stays left-aligned with the
+              // content instead of drifting to the middle of the bar the way a
+              // centred title would on a wide window.
+              Expanded(
+                child: title is String
+                    ? Text(title as String, overflow: TextOverflow.ellipsis)
+                    : title as Widget,
               ),
+              ...?actions,
+              // Visible only while signed in at /admin: every PageAppBar
+              // screen then carries the admin identity, and tapping it opens
+              // the dashboard. Game views skip this bar, so boards stay clean.
+              if (admin != null) AdminBadge(session: admin, compact: true),
             ],
           ),
         ),
