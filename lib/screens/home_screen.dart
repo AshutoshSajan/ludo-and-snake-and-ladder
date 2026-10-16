@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/core/player_profiles.dart';
+import '../providers/app_providers.dart';
+import '../services/admin_client.dart';
 import '../ui/ludo/ludo_board_painter.dart';
 import '../ui/snakes/snakes_board_painter.dart';
 import '../ui/theme.dart';
+import 'admin/admin_dashboard_screen.dart';
 import 'home_widgets.dart';
 import 'online_lobby_screen.dart';
 import 'scoreboard_screen.dart';
@@ -17,6 +20,7 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final admin = ref.watch(adminSessionProvider);
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -36,6 +40,55 @@ class HomeScreen extends ConsumerWidget {
                 children: [
                   const SizedBox(height: 12),
                   const ClubHeader(),
+                  // Signed-in admins get a visible identity chip (and a way
+                  // back to the dashboard). Nobody else sees anything: there
+                  // is deliberately no admin entry point for signed-out users.
+                  if (admin != null) ...[
+                    const SizedBox(height: 12),
+                    Center(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => AdminDashboardScreen(
+                              client: AdminClient(
+                                serverUrl: admin.serverUrl,
+                                token: admin.token,
+                              ),
+                            ),
+                          ),
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: AppColors.gold),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.verified_user,
+                                size: 16,
+                                color: AppColors.gold,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Admin · ${admin.email}',
+                                style: const TextStyle(
+                                  color: AppColors.ivory,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 28),
                   GameCard(
                     title: 'Ludo',

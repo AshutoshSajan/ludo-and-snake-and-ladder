@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../providers/app_providers.dart';
+import '../screens/admin/admin_dashboard_screen.dart';
+import '../services/admin_client.dart';
 
 /// The reading-width column every full-screen page is laid out in.
 ///
@@ -34,7 +39,7 @@ class ContentColumn extends StatelessWidget {
 /// The in-game views deliberately do NOT use this. A Ludo board and a 10-seat
 /// Snakes grid both want the full width; a fixed column would letterbox the very
 /// thing the player is looking at.
-class PageAppBar extends StatelessWidget implements PreferredSizeWidget {
+class PageAppBar extends ConsumerWidget implements PreferredSizeWidget {
   const PageAppBar({
     super.key,
     required this.title,
@@ -58,8 +63,9 @@ class PageAppBar extends StatelessWidget implements PreferredSizeWidget {
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final canPop = Navigator.of(context).canPop();
+    final admin = ref.watch(adminSessionProvider);
     return AppBar(
       automaticallyImplyLeading: false,
       backgroundColor: backgroundColor,
@@ -84,7 +90,67 @@ class PageAppBar extends StatelessWidget implements PreferredSizeWidget {
                   : title as Widget,
             ),
             ...?actions,
+            // Visible only while signed in at /admin: every PageAppBar
+            // screen then carries the admin identity, and tapping it opens
+            // the dashboard. Game views skip this bar, so boards stay clean.
+            if (admin != null)
+              _AdminBadge(
+                email: admin.email,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AdminDashboardScreen(
+                      client: AdminClient(
+                        serverUrl: admin.serverUrl,
+                        token: admin.token,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact shield + truncated email for the app bar's trailing slot.
+class _AdminBadge extends StatelessWidget {
+  const _AdminBadge({required this.email, required this.onTap});
+
+  final String email;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Admin: $email — open dashboard',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          margin: const EdgeInsets.only(left: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.amber.shade700),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.verified_user, size: 14),
+              const SizedBox(width: 4),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 120),
+                child: Text(
+                  email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

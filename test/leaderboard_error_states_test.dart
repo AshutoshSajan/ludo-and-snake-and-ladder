@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/screens/scoreboard_screen.dart';
 import 'package:game_club/services/online_client.dart';
@@ -19,10 +20,12 @@ void main() {
     WidgetTester tester,
     Future<LeaderboardData> Function(String) load,
   ) async {
-    await tester.pumpWidget(MaterialApp(
-      home: ScoreboardScreen(
-        serverUrl: 'ws://localhost:8080/ws',
-        load: load,
+    await tester.pumpWidget(ProviderScope(
+      child: MaterialApp(
+        home: ScoreboardScreen(
+          serverUrl: 'ws://localhost:8080/ws',
+          load: load,
+        ),
       ),
     ));
     await tester.pumpAndSettle();
@@ -241,10 +244,12 @@ void main() {
         // and from the error that follows it - which is exactly how "is it
         // broken?" becomes the question instead of "is it waking?".
         final gate = Completer<LeaderboardData>();
-        await tester.pumpWidget(MaterialApp(
-          home: ScoreboardScreen(
-            serverUrl: 'ws://localhost:8080/ws',
-            load: (_) => gate.future,
+        await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+            home: ScoreboardScreen(
+              serverUrl: 'ws://localhost:8080/ws',
+              load: (_) => gate.future,
+            ),
           ),
         ));
         await tester.pump();

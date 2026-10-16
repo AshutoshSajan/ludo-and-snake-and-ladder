@@ -36,6 +36,7 @@ import 'package:shelf_static/shelf_static.dart';
 import 'package:shelf_web_socket/shelf_web_socket.dart';
 
 import 'package:game_club/engine/ludo/ludo_models.dart';
+import 'package:game_club/server/admin_store.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
@@ -44,6 +45,15 @@ import 'package:game_club/server/turso_leaderboard_store.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
+
+/// Durable admin history (presence, bans, audit, room lifecycle). Tests
+/// swap in an in-memory store; main() points it at the same SQLite file
+/// as the leaderboard so one DB holds everything the dashboard shows.
+AdminStore adminStore = AdminStore.inMemory();
+
+/// Bearer token guarding /admin/*. Empty = admin disabled (all denied).
+/// Set via ADMIN_TOKEN env. Not final so tests can set it.
+String adminToken = '';
 
 /// Not final so tests can swap in an in-memory store. main() replaces this
 /// with the Turso store (when TURSO_DATABASE_URL is set) or the file-backed
@@ -93,22 +103,42 @@ Future<Room> _createClaimedRoom(
     try {
       claimed = await roomRegistry.register(code, instanceId, owner: token);
     } on RoomRegistryException catch (_) {
-      return authority.createRoom(
+      final room = authority.createRoom(
         host,
         game: game,
       ); // registry down — host locally
+      unawaited(
+        adminStore
+            .recordRoomCreated(
+              code: room.code,
+              game: room.gameType,
+              instance: instanceId,
+            )
+            .catchError((Object _) {}),
+      );
+      return room;
     }
     if (!claimed) {
       token = newRegistryToken(); // the row belongs to another replica
       continue;
     }
     try {
-      return authority.createRoom(
+      final room = authority.createRoom(
         host,
         game: game,
         code: code,
         registryToken: token,
       );
+      unawaited(
+        adminStore
+            .recordRoomCreated(
+              code: room.code,
+              game: room.gameType,
+              instance: instanceId,
+            )
+            .catchError((Object _) {}),
+      );
+      return room;
     } on StateError catch (_) {
       // Astronomically rare: a concurrent local creation took the code
       // while the remote claim was in flight (only reachable when the
@@ -194,6 +224,20 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           );
           return;
         }
+        if (await adminStore.isBanned(seatId)) {
+          webSocket.sink.add(
+            jsonEncode({'type': 'error', 'text': 'banned'}),
+          );
+          return;
+        }
+        unawaited(
+          adminStore
+              .recordPresence(
+                seatId: seatId,
+                name: name.isEmpty ? 'Player' : name,
+              )
+              .catchError((Object _) {}),
+        );
         final color = LudoColor.values.firstWhere(
           (c) => c.name == msg['color'],
           orElse: () => LudoColor.red,
@@ -261,6 +305,9 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           }
           if (!room.started && room.members.length >= 2) {
             room.start();
+            unawaited(
+              adminStore.recordRoomStarted(room.code).catchError((Object _) {}),
+            );
             // Push the initial snapshot to everyone — most importantly
             // the first player who has been waiting in the lobby.
             room.broadcastState();
@@ -612,6 +659,456 @@ Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
   );
 }
 
+/// True when [req] carries the configured admin bearer token. Empty
+/// [adminToken] disables the whole admin surface (deny-all).
+bool _legacyTokenMatch(shelf.Request req) {
+  if (adminToken.isEmpty) return false;
+  final header = req.headers['authorization'] ?? '';
+  const prefix = 'Bearer ';
+  if (!header.startsWith(prefix)) return false;
+  final presented = header.substring(prefix.length).trim();
+  if (presented.length != adminToken.length) return false;
+  var diff = 0;
+  for (var i = 0; i < presented.length; i++) {
+    diff |= presented.codeUnitAt(i) ^ adminToken.codeUnitAt(i);
+  }
+  return diff == 0;
+}
+
+String? _presentedToken(shelf.Request req) {
+  final header = req.headers['authorization'] ?? '';
+  const prefix = 'Bearer ';
+  if (!header.startsWith(prefix)) return null;
+  final token = header.substring(prefix.length).trim();
+  return token.isEmpty ? null : token;
+}
+
+/// The session's admin user, or null. Legacy ADMIN_TOKEN callers have no
+/// identity — use 'admin-token' when auditing their actions.
+Future<AuthUser?> adminIdentity(shelf.Request req) async {
+  final token = _presentedToken(req);
+  if (token == null) return null;
+  try {
+    final user = await adminStore.validateSession(token);
+    if (user != null && user.isAdmin) return user;
+  } catch (_) {}
+  return null;
+}
+
+/// Authorized when the request carries a live admin session OR the legacy
+/// ADMIN_TOKEN service token. The legacy path stays for automation and
+/// backwards compatibility; interactive logins use sessions.
+Future<bool> isAdminAuthorized(shelf.Request req) async {
+  if (await adminIdentity(req) != null) return true;
+  return _legacyTokenMatch(req);
+}
+
+// ------------------------------------------------------------------ login
+// rate limiting: per-IP sliding window on FAILED logins only. Successes
+// never count, so a correct password always works. Test-only reset via
+// [resetLoginAttempts].
+const _loginWindow = Duration(seconds: 60);
+const _maxLoginFailures = 10;
+
+final _loginFailures = <String, List<int>>{};
+
+bool loginRateLimited(String ip) {
+  final now = DateTime.now().millisecondsSinceEpoch;
+  final cutoff = now - _loginWindow.inMilliseconds;
+  final hits = (_loginFailures[ip] ?? []).where((t) => t > cutoff).toList();
+  _loginFailures[ip] = hits;
+  return hits.length >= _maxLoginFailures;
+}
+
+void _recordLoginFailure(String ip) {
+  final now = DateTime.now().millisecondsSinceEpoch;
+  _loginFailures.update(ip, (hits) => [...hits, now], ifAbsent: () => [now]);
+}
+
+/// Test-only: clears the in-memory login failure buckets.
+void resetLoginAttempts() => _loginFailures.clear();
+
+String _clientIp(shelf.Request req) {
+  final info = req.context['shelf.io.connection_info'];
+  try {
+    final addr = (info as dynamic).remoteAddress;
+    return addr?.address as String? ?? 'unknown';
+  } catch (_) {
+    return 'unknown';
+  }
+}
+
+Future<shelf.Response> adminStatusHandler(shelf.Request req) async {
+  return shelf.Response.ok(
+    jsonEncode({'ok': true, 'setupRequired': await adminStore.needsSetup}),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+/// One-time bootstrap: creates the FIRST account (role admin). Allowed
+/// only while no users exist. When ADMIN_TOKEN is set it doubles as the
+/// setup secret; with no users and no token (fresh local dev) it is open
+/// once — the row it creates closes the hole.
+Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
+  if (!await adminStore.needsSetup) {
+    return shelf.Response.forbidden(
+      jsonEncode({'ok': false, 'text': 'setup already complete'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final body = await _readJsonBody(req);
+  if (adminToken.isNotEmpty &&
+      (body['setupToken'] as String? ?? '') != adminToken) {
+    return shelf.Response.forbidden(
+      jsonEncode({'ok': false, 'text': 'invalid setup token'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final email = (body['email'] as String? ?? '').trim();
+  final name = (body['name'] as String? ?? '').trim();
+  final password = (body['password'] as String? ?? '');
+  try {
+    final user = await adminStore.createUser(
+      email: email,
+      name: name.isEmpty ? email : name,
+      password: password,
+      role: 'admin',
+      by: 'setup',
+    );
+    final session = await adminStore.createSession(user.id);
+    return shelf.Response.ok(
+      jsonEncode({
+        'ok': true,
+        'token': session.token,
+        'expiresAt': session.expiresAt,
+        'user': user.toJson(),
+      }),
+      headers: {'content-type': 'application/json'},
+    );
+  } on ArgumentError catch (e) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': e.message}),
+      headers: {'content-type': 'application/json'},
+    );
+  } on StateError catch (e) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': e.message}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+}
+
+Future<shelf.Response> adminLoginHandler(shelf.Request req) async {
+  final ip = _clientIp(req);
+  if (loginRateLimited(ip)) {
+    return shelf.Response(
+      429,
+      body: jsonEncode({'ok': false, 'text': 'too many attempts — wait a minute'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final body = await _readJsonBody(req);
+  final user = await adminStore.checkCredentials(
+    (body['email'] as String? ?? ''),
+    (body['password'] as String? ?? ''),
+  );
+  if (user == null) {
+    _recordLoginFailure(ip);
+    return shelf.Response(
+      401,
+      body: jsonEncode({'ok': false, 'text': 'invalid credentials'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final session = await adminStore.createSession(user.id);
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'token': session.token,
+      'expiresAt': session.expiresAt,
+      'user': user.toJson(),
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+Future<shelf.Response> adminLogoutHandler(shelf.Request req) async {
+  final token = _presentedToken(req);
+  if (token != null) {
+    await adminStore.revokeSession(token);
+  }
+  return shelf.Response.ok(
+    jsonEncode({'ok': true}),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+/// The calling session's account. Session-only: the legacy service token
+/// carries no identity, so it gets a 401 here by design.
+Future<shelf.Response> adminMeHandler(shelf.Request req) async {
+  final user = await adminIdentity(req);
+  if (user == null) {
+    return shelf.Response(
+      401,
+      body: jsonEncode({'ok': false, 'text': 'session required'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  return shelf.Response.ok(
+    jsonEncode({'ok': true, 'user': user.toJson()}),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+Future<shelf.Response> adminUsersHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  if (req.method == 'GET') {
+    final users = await adminStore.listUsers();
+    return shelf.Response.ok(
+      jsonEncode({
+        'ok': true,
+        'users': [for (final u in users) u.toJson()],
+      }),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final by = (await adminIdentity(req))?.email ?? 'admin-token';
+  final body = await _readJsonBody(req);
+  try {
+    final user = await adminStore.createUser(
+      email: (body['email'] as String? ?? ''),
+      name: (body['name'] as String? ?? ''),
+      password: (body['password'] as String? ?? ''),
+      role: (body['role'] as String? ?? 'user'),
+      by: by,
+    );
+    return shelf.Response.ok(
+      jsonEncode({'ok': true, 'user': user.toJson()}),
+      headers: {'content-type': 'application/json'},
+    );
+  } on ArgumentError catch (e) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': e.message}),
+      headers: {'content-type': 'application/json'},
+    );
+  } on StateError catch (e) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': e.message}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+}
+
+shelf.Response _adminDenied() => shelf.Response.forbidden(
+  jsonEncode({'ok': false, 'text': 'admin disabled or unauthorized'}),
+  headers: {'content-type': 'application/json'},
+);
+
+Future<shelf.Response> adminOverviewHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  var spectators = 0;
+  for (final room in authority.rooms.values) {
+    spectators += room.spectators.length;
+  }
+  final overview = await adminStore.overview();
+  final games = await leaderboardStore.totalGames();
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'instance': instanceId,
+      'live': {
+        'connections': _openConnections.length,
+        'rooms': authority.rooms.length,
+        'spectators': spectators,
+      },
+      'stored': {
+        ...overview.toJson(),
+        'finishedGames': games,
+        'gamesByGame': {
+          'ludo': await leaderboardStore.totalGames(game: 'ludo'),
+          'snakes': await leaderboardStore.totalGames(game: 'snakes'),
+        },
+      },
+      'leaderboardBackend': leaderboardBackend,
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+Future<shelf.Response> adminPlayersHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final limit =
+      int.tryParse(req.url.queryParameters['limit'] ?? '')?.clamp(1, 500) ??
+      100;
+  final players = await adminStore.allPlayers(limit: limit);
+  final out = <Map<String, dynamic>>[];
+  for (final p in players) {
+    out.add({
+      'seatId': p.seatId,
+      'name': p.name,
+      'firstSeen': p.firstSeen,
+      'lastSeen': p.lastSeen,
+      'banned': await adminStore.isBanned(p.seatId),
+    });
+  }
+  return shelf.Response.ok(
+    jsonEncode({'ok': true, 'players': out}),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+Future<shelf.Response> adminRoomsHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final limit =
+      int.tryParse(req.url.queryParameters['limit'] ?? '')?.clamp(1, 200) ??
+      50;
+  final live = [
+    for (final room in authority.rooms.values)
+      {
+        'code': room.code,
+        'game': room.gameType,
+        'started': room.started,
+        'members': room.members.length,
+        'spectators': room.spectators.length,
+      },
+  ];
+  final recent = await adminStore.recentRooms(limit: limit);
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'live': live,
+      'recent': [for (final r in recent) r.toJson()],
+      'totalRooms': await adminStore.totalRooms(),
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+Future<shelf.Response> adminAuditHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final limit =
+      int.tryParse(req.url.queryParameters['limit'] ?? '')?.clamp(1, 200) ??
+      50;
+  final log = await adminStore.auditLog(limit: limit);
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'audit': [
+        for (final e in log)
+          {
+            'action': e.action,
+            'seatId': e.seatId,
+            'by': e.by,
+            'at': e.at,
+            if (e.detail != null) 'detail': e.detail,
+          },
+      ],
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+Future<Map<String, dynamic>> _readJsonBody(shelf.Request req) async {
+  try {
+    return jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+  } catch (_) {
+    return const {};
+  }
+}
+
+Future<shelf.Response> adminActionHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final by = (await adminIdentity(req))?.email ?? 'admin-token';
+  final action = req.url.path.startsWith('admin/')
+      ? req.url.path.substring('admin/'.length)
+      : req.url.path;
+  final body = await _readJsonBody(req);
+  switch (action) {
+    case 'ban':
+      final seatId = (body['seatId'] as String? ?? '').trim();
+      if (seatId.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'ok': false, 'text': 'seatId required'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      await adminStore.ban(
+        seatId: seatId,
+        reason: (body['reason'] as String?) ?? 'banned',
+        by: by,
+        untilMs: (body['untilMs'] as num?)?.toInt(),
+      );
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
+    case 'unban':
+      final seatId = (body['seatId'] as String? ?? '').trim();
+      await adminStore.unban(seatId, by: by);
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
+    case 'rename':
+      final seatId = (body['seatId'] as String? ?? '').trim();
+      final name = (body['name'] as String? ?? '').trim();
+      if (seatId.isEmpty || name.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'ok': false, 'text': 'seatId + name required'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      await adminStore.renamePlayer(seatId: seatId, name: name, by: by);
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
+    case 'delete-game':
+      final gameId = (body['gameId'] as String? ?? '').trim();
+      if (gameId.isEmpty) {
+        return shelf.Response(
+          400,
+          body: jsonEncode({'ok': false, 'text': 'gameId required'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      await adminStore.deleteGame(gameId, by: by);
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
+    case 'rooms/close':
+      final code = (body['code'] as String? ?? '').trim().toUpperCase();
+      final room = authority.rooms[code];
+      if (room == null) {
+        return shelf.Response(
+          404,
+          body: jsonEncode({'ok': false, 'text': "room '$code' not found"}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      for (final connId in room.members.keys.toList()) {
+        authority.leaveRoom(code, connId);
+      }
+      await adminStore.recordRoomClosed(code, playerCount: 0);
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
+  }
+  return shelf.Response(
+    404,
+    body: jsonEncode({'ok': false, 'text': 'unknown admin action'}),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
 Future<void> main(List<String> args) async {
   var port = 8080;
   var dbPath = 'ludo_leaderboard.db';
@@ -645,6 +1142,16 @@ Future<void> main(List<String> args) async {
   // swap the globals.
   final turso = TursoLeaderboardStore.fromEnvironment(env);
   leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
+  // Admin history lives in the same SQLite file so one DB holds players,
+  // bans, audit and room lifecycle beside the leaderboard rows. When the
+  // leaderboard is Turso-backed the file still exists locally for admin
+  // history (single-replica deployments); multi-replica admin history
+  // needs a shared store.
+  try {
+    adminStore.close();
+  } catch (_) {}
+  adminStore = AdminStore(dbPath);
+  adminToken = (env['ADMIN_TOKEN'] ?? '').trim();
   authority = GameAuthority(
     leaderboard: leaderboardStore,
     // Closing a room unregisters it from the cluster registry at once, so
@@ -656,6 +1163,47 @@ Future<void> main(List<String> args) async {
       roomRegistry
           .unregister(code, owner: registryToken)
           .catchError((Object _) {});
+      unawaited(
+        adminStore.recordRoomClosed(code).catchError((Object _) {}),
+      );
+    },
+    onRoomStarted: (room) {
+      unawaited(
+        adminStore.recordRoomStarted(room.code).catchError((Object _) {}),
+      );
+    },
+    onGameFinished: ({required String gameId, required results}) async {
+      for (final r in results) {
+        await adminStore.recordResult(
+          gameId: gameId,
+          seatId: r.seatId,
+          name: r.name,
+          game: r.game,
+          rank: r.rank,
+          color: r.color,
+        );
+      }
+      Room? finished;
+      for (final rm in authority.rooms.values) {
+        if (rm.gameId == gameId) {
+          finished = rm;
+          break;
+        }
+      }
+      String? winner;
+      for (final r in results) {
+        if (r.rank == 1) {
+          winner = r.seatId;
+          break;
+        }
+      }
+      if (finished != null) {
+        await adminStore.recordRoomClosed(
+          finished.code,
+          winnerSeat: winner,
+          playerCount: results.length,
+        );
+      }
     },
   );
 
@@ -695,6 +1243,60 @@ Future<void> main(List<String> args) async {
             return roomLookupHandler(req);
           case 'health':
             return healthHandler(req);
+          case 'admin/status':
+            return adminStatusHandler(req);
+          case 'admin/me':
+            return adminMeHandler(req);
+          case 'admin/users':
+            return adminUsersHandler(req);
+          case 'admin/setup':
+            if (req.method != 'POST') {
+              return shelf.Response(
+                405,
+                body: jsonEncode({'ok': false, 'text': 'POST only'}),
+                headers: {'content-type': 'application/json'},
+              );
+            }
+            return adminSetupHandler(req);
+          case 'admin/login':
+            if (req.method != 'POST') {
+              return shelf.Response(
+                405,
+                body: jsonEncode({'ok': false, 'text': 'POST only'}),
+                headers: {'content-type': 'application/json'},
+              );
+            }
+            return adminLoginHandler(req);
+          case 'admin/logout':
+            if (req.method != 'POST') {
+              return shelf.Response(
+                405,
+                body: jsonEncode({'ok': false, 'text': 'POST only'}),
+                headers: {'content-type': 'application/json'},
+              );
+            }
+            return adminLogoutHandler(req);
+          case 'admin/overview':
+            return adminOverviewHandler(req);
+          case 'admin/players':
+            return adminPlayersHandler(req);
+          case 'admin/rooms':
+            return adminRoomsHandler(req);
+          case 'admin/audit':
+            return adminAuditHandler(req);
+          case 'admin/ban':
+          case 'admin/unban':
+          case 'admin/rename':
+          case 'admin/delete-game':
+          case 'admin/rooms/close':
+            if (req.method != 'POST') {
+              return shelf.Response(
+                405,
+                body: jsonEncode({'ok': false, 'text': 'POST only'}),
+                headers: {'content-type': 'application/json'},
+              );
+            }
+            return adminActionHandler(req);
         }
         // Serve the Flutter web build when one ships with the image, so a
         // single deployed service hosts both the game UI and the server
@@ -751,7 +1353,22 @@ shelf.Handler? _webStaticHandler() {
   final inner = createStaticHandler(dir, defaultDocument: 'index.html');
   return (req) async {
     final resp = await inner(req);
-    return resp.change(headers: webCacheHeaders(req.url.path));
+    if (resp.statusCode != 404) {
+      return resp.change(headers: webCacheHeaders(req.url.path));
+    }
+    // SPA fallback for client routes (/admin): an extensionless path is a
+    // route, not a missing asset — answer with the shell so a refresh or
+    // deep link boots the app and Flutter's '/admin' route takes over.
+    // Paths with an extension (/assets/x, /canvaskit/y) stay 404.
+    final path = req.url.path;
+    final name = path.split('/').last;
+    if (name.contains('.')) {
+      return resp.change(headers: webCacheHeaders(path));
+    }
+    final shellResp = await inner(
+      shelf.Request(req.method, Uri.parse('http://localhost/index.html')),
+    );
+    return shellResp.change(headers: webCacheHeaders('index.html'));
   };
 }
 
