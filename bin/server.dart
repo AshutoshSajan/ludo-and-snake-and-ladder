@@ -756,9 +756,17 @@ Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
       headers: {'content-type': 'application/json'},
     );
   }
+  if (adminToken.isEmpty) {
+    return shelf.Response.forbidden(
+      jsonEncode({
+        'ok': false,
+        'text': 'setup disabled: ADMIN_TOKEN is not configured',
+      }),
+      headers: {'content-type': 'application/json'},
+    );
+  }
   final body = await _readJsonBody(req);
-  if (adminToken.isNotEmpty &&
-      (body['setupToken'] as String? ?? '') != adminToken) {
+  if ((body['setupToken'] as String? ?? '') != adminToken) {
     return shelf.Response.forbidden(
       jsonEncode({'ok': false, 'text': 'invalid setup token'}),
       headers: {'content-type': 'application/json'},
