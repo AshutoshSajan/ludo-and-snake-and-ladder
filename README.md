@@ -440,7 +440,9 @@ moving parts.
 
 Both games ship in one **Manifest V3** package for **Chrome, Edge, Opera and
 Firefox**. Local play works fully offline; the launcher's online button is only
-a navigation affordance to the hosted game.
+a navigation affordance to the hosted game. The packaged add-on carries no
+admin screens: `/admin` stays registered only on http(s) origins, and an
+extension page loads under an extension origin.
 
 ```bash
 flutter build web --release              # once, or when the game changed

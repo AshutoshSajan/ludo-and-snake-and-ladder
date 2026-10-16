@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 
 import 'providers/app_providers.dart';
-import 'screens/admin/admin_login_screen.dart';
+import 'screens/admin/admin_gate.dart';
+import 'screens/admin/admin_login_screen.dart'
+    if (dart.library.io) 'screens/admin/admin_login_stub.dart';
 import 'screens/home_screen.dart';
 import 'ui/theme.dart';
 
@@ -29,12 +31,14 @@ class GameClubApp extends ConsumerWidget {
       title: 'Game Club',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
-      // Web-only admin lives at /admin (no in-game entry point).
+      // The admin UI lives only in the hosted web app ([isAdminUiAvailable]):
+      // native builds never compile the screens and packaged add-ons run
+      // under an extension origin, so /admin is registered nowhere else.
       // Anything else falls back to home — a mistyped deep link is a
       // home screen, never a blank page.
       routes: {
         '/': (_) => const HomeScreen(),
-        '/admin': (_) => const AdminLoginScreen(),
+        if (isAdminUiAvailable) '/admin': (_) => const AdminLoginScreen(),
       },
       onUnknownRoute: (_) =>
           MaterialPageRoute(builder: (_) => const HomeScreen()),
