@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/main.dart';
 import 'package:game_club/providers/app_providers.dart';
+import 'package:game_club/screens/admin/admin_login_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -93,5 +95,43 @@ void main() {
     notifier.signOut();
     await tester.pumpAndSettle();
     expect(find.textContaining('Admin ·'), findsNothing);
+  });
+
+  testWidgets('password field menu offers Paste and it fills the field', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    // Widget tests run with no clipboard plugin: answer the channel
+    // directly instead of setData (whose future never completes here).
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') return {'text': 's3cr3t-pass'};
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AdminLoginScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.widgetWithText(TextField, 'Password');
+    expect(field, findsOneWidget);
+    await tester.longPress(field);
+    await tester.pumpAndSettle();
+
+    // The framework-built menu must carry a Paste entry (this is the
+    // mouse/touch path, independent of the browser's Ctrl+V delivery).
+    expect(find.text('Paste'), findsOneWidget);
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+
+    // Reveal the obscured field to verify what landed.
+    await tester.tap(find.byTooltip('Show').first);
+    await tester.pumpAndSettle();
+    expect(find.text('s3cr3t-pass'), findsOneWidget);
   });
 }

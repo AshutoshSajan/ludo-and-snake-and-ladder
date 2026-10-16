@@ -135,7 +135,7 @@ void main() {
       final savedStore = adminStore;
       final savedToken = adminToken;
       adminStore = AdminStore.inMemory();
-      adminToken = '';
+      adminToken = 'test-secret';
       addTearDown(() {
         adminStore = savedStore;
         adminToken = savedToken;
@@ -146,7 +146,11 @@ void main() {
 
       // Weak password rejected, no user created.
       final weak = await adminSetupHandler(
-        _post('admin/setup', {'email': 'r@x.io', 'password': 'short'}),
+        _post('admin/setup', {
+          'email': 'r@x.io',
+          'password': 'short',
+          'setupToken': 'test-secret',
+        }),
       );
       expect(weak.statusCode, 400);
 
@@ -155,6 +159,7 @@ void main() {
           'email': 'Root@x.io',
           'name': 'Root',
           'password': 'long-enough-1',
+          'setupToken': 'test-secret',
         }),
       );
       expect(setup.statusCode, 200);
@@ -166,7 +171,11 @@ void main() {
 
       // Setup is one-time.
       final again = await adminSetupHandler(
-        _post('admin/setup', {'email': 'r2@x.io', 'password': 'long-enough-1'}),
+        _post('admin/setup', {
+          'email': 'r2@x.io',
+          'password': 'long-enough-1',
+          'setupToken': 'test-secret',
+        }),
       );
       expect(again.statusCode, 403);
 
@@ -229,6 +238,31 @@ void main() {
         }),
       );
       expect(ok.statusCode, 200);
+    });
+
+    test('setup is disabled without ADMIN_TOKEN (fail closed)', () async {
+      // Regression lock for the GHAS finding: an open first-run setup lets
+      // anyone who reaches /admin/setup first claim the instance. With no
+      // token configured the endpoint must refuse — even with no users yet.
+      final savedStore = adminStore;
+      final savedToken = adminToken;
+      adminStore = AdminStore.inMemory();
+      adminToken = '';
+      addTearDown(() {
+        adminStore = savedStore;
+        adminToken = savedToken;
+      });
+
+      final denied = await adminSetupHandler(
+        _post('admin/setup', {
+          'email': 'r@x.io',
+          'password': 'long-enough-1',
+        }),
+      );
+      expect(denied.statusCode, 403);
+      expect((await _json(denied))['text'], contains('ADMIN_TOKEN'));
+      // Nothing was created: the hole stays closed.
+      expect(await adminStore.needsSetup, isTrue);
     });
 
     test('non-admin sessions cannot touch admin endpoints', () async {

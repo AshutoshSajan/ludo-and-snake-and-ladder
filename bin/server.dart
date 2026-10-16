@@ -746,9 +746,9 @@ Future<shelf.Response> adminStatusHandler(shelf.Request req) async {
 }
 
 /// One-time bootstrap: creates the FIRST account (role admin). Allowed
-/// only while no users exist. When ADMIN_TOKEN is set it doubles as the
-/// setup secret; with no users and no token (fresh local dev) it is open
-/// once — the row it creates closes the hole.
+/// only while no users exist and only with the ADMIN_TOKEN setup secret —
+/// an open first-run setup lets anyone who reaches /admin first claim the
+/// instance, so the token is always required (fail closed when unset).
 Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
   if (!await adminStore.needsSetup) {
     return shelf.Response.forbidden(
