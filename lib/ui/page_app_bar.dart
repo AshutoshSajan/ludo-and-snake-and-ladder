@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../providers/app_providers.dart';
+import 'admin_badge.dart';
 
 /// The reading-width column every full-screen page is laid out in.
 ///
@@ -34,7 +38,7 @@ class ContentColumn extends StatelessWidget {
 /// The in-game views deliberately do NOT use this. A Ludo board and a 10-seat
 /// Snakes grid both want the full width; a fixed column would letterbox the very
 /// thing the player is looking at.
-class PageAppBar extends StatelessWidget implements PreferredSizeWidget {
+class PageAppBar extends ConsumerWidget implements PreferredSizeWidget {
   const PageAppBar({
     super.key,
     required this.title,
@@ -58,33 +62,42 @@ class PageAppBar extends StatelessWidget implements PreferredSizeWidget {
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final canPop = Navigator.of(context).canPop();
+    final admin = ref.watch(adminSessionProvider);
     return AppBar(
       automaticallyImplyLeading: false,
       backgroundColor: backgroundColor,
       foregroundColor: foregroundColor,
-      // The column's own left edge, not the default 16px gutter. With a back
-      // button present that gutter would push the title 16px right of the body
-      // content it labels — the exact misalignment this removes.
+      // No AppBar gutter of our own: the inner Padding below owns the
+      // horizontal inset, matching the page bodies exactly.
       titleSpacing: 0,
       title: ContentColumn(
-        child: Row(
-          children: [
-            if (canPop)
-              BackButton(onPressed: () => Navigator.of(context).maybePop())
-            else
-              const SizedBox(width: 16),
-            // The title takes the slack, so it stays left-aligned with the
-            // content instead of drifting to the middle of the bar the way a
-            // centred title would on a wide window.
-            Expanded(
-              child: title is String
-                  ? Text(title as String, overflow: TextOverflow.ellipsis)
-                  : title as Widget,
-            ),
-            ...?actions,
-          ],
+        // Same 16px inset the page bodies use (their ListView padding), so
+        // the bar's content starts and ends where the page content does. A
+        // full-bleed row previously let trailing badges overhang the cards
+        // below by exactly that padding.
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              if (canPop)
+                BackButton(onPressed: () => Navigator.of(context).maybePop()),
+              // The title takes the slack, so it stays left-aligned with the
+              // content instead of drifting to the middle of the bar the way a
+              // centred title would on a wide window.
+              Expanded(
+                child: title is String
+                    ? Text(title as String, overflow: TextOverflow.ellipsis)
+                    : title as Widget,
+              ),
+              ...?actions,
+              // Visible only while signed in at /admin: every PageAppBar
+              // screen then carries the admin identity, and tapping it opens
+              // the dashboard. Game views skip this bar, so boards stay clean.
+              if (admin != null) AdminBadge(session: admin, compact: true),
+            ],
+          ),
         ),
       ),
     );

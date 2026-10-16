@@ -288,6 +288,8 @@ class GameAuthority {
     this.emptyRoomGrace = const Duration(minutes: 5),
     this.leaderboard,
     this.onRoomClosed,
+    this.onRoomStarted,
+    this.onGameFinished,
     this.autoStepDelay = const Duration(milliseconds: 800),
   }) : rng = rng ?? Random.secure();
 
@@ -312,6 +314,17 @@ class GameAuthority {
   /// routes to expire; the token scopes the delete so a recycled code's
   /// newer room is never erased by a stale close.
   final void Function(String code, String registryToken)? onRoomClosed;
+
+  /// Notified once when a room's game starts. The admin store uses it to
+  /// mark the lifecycle row live; a null callback keeps engine tests quiet.
+  final void Function(Room room)? onRoomStarted;
+
+  /// Mirrors finished-game results into the admin DB so one database holds
+  /// rooms, presence and results for stats. Fire-and-forget by the caller.
+  final Future<void> Function({
+    required String gameId,
+    required List<GameResult> results,
+  })? onGameFinished;
 
   final Map<String, Room> rooms = {};
 
@@ -597,6 +610,7 @@ class GameAuthority {
       case 'start':
         if (!room.started && member == room.orderedMembers.first) {
           room.start();
+          onRoomStarted?.call(room);
           room.broadcast(room.seatsJson());
           room.broadcastState();
         }
@@ -843,6 +857,14 @@ class GameAuthority {
         stderr.writeln('leaderboard write failed: $e');
       }),
     );
+    final mirror = onGameFinished;
+    if (mirror != null) {
+      unawaited(
+        mirror(gameId: room.gameId!, results: results).catchError((Object e) {
+          stderr.writeln('admin mirror write failed: $e');
+        }),
+      );
+    }
   }
 }
 

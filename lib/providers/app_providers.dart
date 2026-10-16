@@ -9,6 +9,36 @@ import '../services/storage_service.dart';
 
 final storageProvider = Provider<StorageService>((ref) => StorageService());
 
+/// The admin session, when signed in at /admin. In-memory only: a refresh
+/// signs out. Watched by the home screen and [PageAppBar] to badge the UI.
+class AdminSession {
+  const AdminSession({
+    required this.token,
+    required this.email,
+    required this.name,
+    required this.serverUrl,
+  });
+
+  final String token;
+  final String email;
+  final String name;
+  final String serverUrl;
+}
+
+final adminSessionProvider =
+    NotifierProvider<AdminSessionNotifier, AdminSession?>(
+  AdminSessionNotifier.new,
+);
+
+class AdminSessionNotifier extends Notifier<AdminSession?> {
+  @override
+  AdminSession? build() => null;
+
+  void signIn(AdminSession session) => state = session;
+
+  void signOut() => state = null;
+}
+
 final soundEnabledProvider =
     NotifierProvider<SoundToggle, bool>(SoundToggle.new);
 

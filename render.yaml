@@ -28,6 +28,8 @@ services:
         sync: false # your libsql://... URL
       - key: TURSO_AUTH_TOKEN
         sync: false # your database token — keep it out of git
+      - key: ADMIN_TOKEN
+        sync: false # long random value — empty disables /admin/*
       - key: ROOM_TTL_SECONDS
         value: '120'
       - key: INSTANCE_ID

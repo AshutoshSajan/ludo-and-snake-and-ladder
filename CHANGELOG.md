@@ -7,6 +7,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(admin): custom dashboard with DB-backed rooms, auth and stats
 - Add CodeQL analysis workflow configuration
 ### Documentation
 - Docs: redesign banner and restructure README
@@ -14,11 +15,16 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ci): codeql only scans actions and c-cpp with pinned runner
+- Fix: add fetch-depth and sparse-checkout to all checkout actions in release.yaml
+- Fix: remove ext-v* tag trigger from CI workflow to avoid duplicate runs
+- Fix: fix duplicate CI runs and Firefox publishing on ext-v* tags
 - Fix(ci): give release-prep pull-requests write so its PR can be opened
 - Fix(ui): align title bars to the content column and pull the dice in
 - Fix(online): spend the cold-start budget on refused first connections
 - Fix(extension): grant wss:// so online play can reach the game server
 ### Other
+- Potential fix for pull request finding
 - Ci: add automated screenshot capture + local script
 - Ci: add automated screenshot capture workflow
 - Stop running the full suite on PRs into dev

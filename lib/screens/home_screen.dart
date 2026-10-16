@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/core/player_profiles.dart';
+import '../providers/app_providers.dart';
+import '../ui/admin_badge.dart';
 import '../ui/ludo/ludo_board_painter.dart';
 import '../ui/snakes/snakes_board_painter.dart';
 import '../ui/theme.dart';
@@ -17,6 +19,7 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final admin = ref.watch(adminSessionProvider);
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -36,6 +39,13 @@ class HomeScreen extends ConsumerWidget {
                 children: [
                   const SizedBox(height: 12),
                   const ClubHeader(),
+                  // Signed-in admins get a visible identity chip (and a way
+                  // back to the dashboard). Nobody else sees anything: there
+                  // is deliberately no admin entry point for signed-out users.
+                  if (admin != null) ...[
+                    const SizedBox(height: 12),
+                    Center(child: AdminBadge(session: admin)),
+                  ],
                   const SizedBox(height: 28),
                   GameCard(
                     title: 'Ludo',
