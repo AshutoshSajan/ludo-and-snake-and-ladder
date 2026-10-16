@@ -7,6 +7,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(admin): restrict admin UI to the hosted web app
 - Feat(admin): custom dashboard with DB-backed rooms, auth and stats
 - Add CodeQL analysis workflow configuration
 ### Documentation
@@ -15,6 +16,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(admin): unify badge styling and align app bar to content column
+- Fix(admin): keep setup fail-closed, guarantee Paste menu, align tests/docs
 - Fix(ci): codeql only scans actions and c-cpp with pinned runner
 - Fix: add fetch-depth and sparse-checkout to all checkout actions in release.yaml
 - Fix: remove ext-v* tag trigger from CI workflow to avoid duplicate runs
