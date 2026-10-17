@@ -239,62 +239,13 @@ jobs:
   # a hook can be skipped with --no-verify and does not run on merges made from
   # the GitHub UI — so they are worth restoring the moment quota allows.
   #
-  # Note that `prune-branch` only runs for PRs into main, because the whole
-  # workflow is scoped to that base. A PR into the integration branch is
-  # therefore not pruned; delete those branches by hand, or the pile-up returns.
+  # Merged-branch pruning moved to its own workflow,
+  # .github/workflows/prune-branch.yml — it covers PRs into `dev` as well as
+  # `main`, which this file's pull_request trigger (scoped to `main` above)
+  # could never do: widening that trigger here would bill every integration
+  # PR for a full suite, exactly what the meteredRunnerMinutesAre comment
+  # forbids.
 
-  prune-branch:
-    # Remove a merged PR's head branch so merged branches stop piling up. The
-    # repo's own "delete branch on merge" setting is off and cannot simply be
-    # turned on: it deletes the head branch of *every* merged PR, and this repo
-    # promotes through an integration branch, so a promotion would delete it.
-    #
-    # Runs on the "closed" event, for which GitHub reads the workflow file from
-    # the base branch — so this job prunes only once it has landed on the trunk
-    # a PR targets. Three guards: a trunk is never deleted, branch names outside
-    # this repo's prefixes are never touched, and a branch holding commits that
-    # did not reach the base is kept rather than discarded (that also catches a
-    # force-push after review). Fork PRs are skipped: not our branch to delete.
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write # delete the merged branch
-    concurrency:
-      group: prune-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # every branch tip is needed to prove the merge landed
-
-      - name: Delete the merged head branch
-        run: |
-          set -euo pipefail
-          branch="${{ github.event.pull_request.head.ref }}"
-          base="${{ github.base_ref }}"
-          case "$branch" in
-            main | dev)
-              echo "head branch '$branch' is a trunk — keeping it"
-              exit 0
-              ;;
-          esac
-          case "$branch" in
-            feat/* | fix/* | chore/* | ci/* | docs/* | perf/* | refactor/* | test/* | release/*) ;;
-            *)
-              echo "'$branch' does not match a known prefix — leaving it alone"
-              exit 0
-              ;;
-          esac
-          if ! git merge-base --is-ancestor "origin/$branch" "origin/$base"; then
-            echo "::warning::origin/$branch has commits that are not in origin/$base — not deleting"
-            exit 0
-          fi
-          git push origin --delete "$branch"
-          echo "deleted $branch (merged into $base)" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Store publishing

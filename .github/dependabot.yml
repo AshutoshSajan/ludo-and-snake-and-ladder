@@ -1,0 +1,23 @@
+# Dependabot keeps dependencies from aging silently: weekly update PRs land in
+# `dev` like any other task branch (branch prefixes stay conventional, the
+# prune-branch workflow deletes them after merge). The github-actions lane
+# covers the pinned action versions (checkout@v7, flutter-action@v2, …).
+#
+# Why not also `osv-audit`-style scanning here: Dependabot alerts need native
+# pub advisories support it lacks; the OSV scan is its own workflow
+# (.github/workflows/deps-audit.yml) so its failures read as one concern.
+version: 2
+updates:
+  - package-ecosystem: pub
+    directory: /
+    schedule:
+      interval: weekly
+    # PRs always target the integration branch — CONVENTIONS.md's rule holds
+    # for bot branches too.
+    target-branch: dev
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev
