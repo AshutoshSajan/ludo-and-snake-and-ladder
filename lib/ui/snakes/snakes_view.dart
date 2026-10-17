@@ -19,6 +19,8 @@ import 'snakes_board_painter.dart';
 import 'snakes_overlays.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
+import '../shared/bug_report_sheet.dart';
+import '../../services/server_url.dart';
 
 /// Full Snakes & Ladders game screen (2..10 players, human or bot seats).
 class SnakesGameView extends ConsumerStatefulWidget {
@@ -200,6 +202,14 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
             icon: const Icon(Icons.pause),
             onPressed: () => showSnakesPauseMenu(context, ref, session),
             tooltip: 'Pause / players',
+          ),
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: 'Report an issue',
+            onPressed: () => BugReportSheet.show(
+              context,
+              serverUrl: defaultServerUrl(),
+            ),
           ),
         ],
       ),

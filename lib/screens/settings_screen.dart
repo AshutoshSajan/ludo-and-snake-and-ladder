@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_providers.dart';
+import '../services/server_url.dart';
+import '../ui/shared/bug_report_sheet.dart';
+import 'contact_screen.dart';
 
 /// Settings: sound, haptics, animation (battery saver) toggles.
 /// All preferences persist via SharedPreferences and apply instantly.
@@ -45,6 +48,29 @@ class SettingsScreen extends ConsumerWidget {
             value: anims,
             onChanged: (_) =>
                 ref.read(animationsEnabledProvider.notifier).toggle(),
+          ),
+          const Divider(height: 32),
+          ListTile(
+            leading: const Icon(Icons.bug_report),
+            title: const Text('Report an issue'),
+            subtitle: const Text(
+                'Something broken, or an idea? File it — it goes '
+                'straight to the developers.'),
+            onTap: () => BugReportSheet.show(
+              context,
+              serverUrl: defaultServerUrl(),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.mail_outline),
+            title: const Text('Contact us'),
+            subtitle: const Text('Questions and feedback, with an email '
+                'if you want a reply.'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ContactScreen(serverUrl: defaultServerUrl()),
+              ),
+            ),
           ),
           const Divider(height: 32),
           const ListTile(
