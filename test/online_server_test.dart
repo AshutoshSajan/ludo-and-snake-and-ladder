@@ -19,7 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
-import 'package:game_club/server/tenor.dart' show tenorHandler;
+import 'package:game_club/server/gif.dart' show gifSearchHandler;
 import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/leaderboard_store.dart';
@@ -46,8 +46,7 @@ import '../bin/server.dart'
         roomRegistry,
         instanceId,
         serverEnv,
-        tenorApiKey,
-        tenorHttp,
+        gifProvider,
         webDir,
         advertiseRoom;
 
@@ -1006,10 +1005,10 @@ void main() {
       final handler = const shelf.Pipeline().addHandler((req) {
         if (req.url.path == 'ws') return wsHandler()(req);
         if (req.url.path == 'stats') return statsHandler(req);
-        // Same wiring as production: the key (blank in tests unless a test
-        // sets it) gates the proxy.
-        if (req.url.path == 'media/tenor') {
-          return tenorHandler(req, apiKey: tenorApiKey, client: tenorHttp);
+        // Same wiring as production: the configured provider (none in
+        // tests unless a test sets it) gates the proxy.
+        if (req.url.path == 'media/gif' || req.url.path == 'media/tenor') {
+          return gifSearchHandler(req, provider: gifProvider);
         }
         // Voice notes, the same two arms production routes: an upload
         // takes fresh bytes into a live room's store; a playback serves a
@@ -1272,19 +1271,23 @@ void main() {
       );
     });
 
-    test('/media/tenor without a key is a JSON 503, no upstream call', () async {
+    test('/media/gif without a provider is a JSON 503, no upstream call',
+        () async {
       // A keyless deployment's picker degrades to paste-a-link; the route
-      // must still answer as JSON so the client surfaces the reason.
-      final resp = await HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
-        () => http.get(
-          Uri.parse('http://127.0.0.1:${srv.port}/media/tenor?q=dice'),
-        ),
-        _RealHttpOverrides(),
-      );
+      // must still answer as JSON so the client surfaces the reason. The
+      // archived tenor path answers identically — same handler.
+      Future<http.Response> get(String path) =>
+          HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
+            () => http.get(Uri.parse('http://127.0.0.1:${srv.port}$path')),
+            _RealHttpOverrides(),
+          );
+      final resp = await get('/media/gif?q=dice');
       expect(resp.statusCode, 503);
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
       expect(body['ok'], isFalse);
       expect((body['text'] as String).isNotEmpty, isTrue);
+      final alias = await get('/media/tenor?q=dice');
+      expect(alias.statusCode, 503);
     });
 
     test('voice notes ride HTTP into a live room and play back by url', () async {

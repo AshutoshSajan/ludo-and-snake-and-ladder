@@ -4,7 +4,7 @@
 /// 2. [GifPickerSheet] — the paste-a-link path and its validation
 ///
 /// The picker's search path is covered end-to-end at the service level
-/// (test/tenor_gif_test.dart); here the network is injected as a mock so the
+/// (test/gif_test.dart); here the network is injected as a mock so the
 /// picker can be driven deterministically without dialing Tenor.
 library;
 
@@ -21,6 +21,31 @@ Future<void> openPicker(
   required String serverUrl,
   required void Function(String url) onPick,
   http.Client? httpClient,
+}) {
+  // The sheet fetches trending on open; without an injected client a
+  // widget test would dial real IO. The default answers an empty
+  // trending page instead.
+  final transport = httpClient ??
+      MockClient(
+        (_) async => http.Response(
+          '{"ok":true,"gifs":[]}',
+          200,
+          headers: {'content-type': 'application/json'},
+        ),
+      );
+  return _openPickerWith(
+    tester,
+    serverUrl: serverUrl,
+    onPick: onPick,
+    httpClient: transport,
+  );
+}
+
+Future<void> _openPickerWith(
+  WidgetTester tester, {
+  required String serverUrl,
+  required void Function(String url) onPick,
+  required http.Client httpClient,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
