@@ -10,6 +10,8 @@
 ///   GET  /stats       -> capacity metrics {connections, rooms, spectators}
 ///   GET  /rooms/lookup?code=XXXX -> owning instance id (cross-instance routing)
 ///   GET  /leaderboard -> top players + total games recorded
+///   POST /feedback    -> player report: bug / feature request / question /
+///                        other (the contact page posts here too)
 ///   WS   /ws?code=XXXX  -> join/create room, then JSON message protocol
 ///
 /// Client -> server messages:
@@ -46,14 +48,17 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/server/admin_store.dart';
+import 'package:game_club/server/admin_tables.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
+import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
 import 'package:game_club/server/tenor.dart';
 import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
 import 'package:http/http.dart' as http;
+import 'package:sqlite3/sqlite3.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
@@ -62,6 +67,10 @@ GameAuthority authority = GameAuthority();
 /// swap in an in-memory store; main() points it at the same SQLite file
 /// as the leaderboard so one DB holds everything the dashboard shows.
 AdminStore adminStore = AdminStore.inMemory();
+
+/// Player feedback queue (bug reports, feature requests, contact page).
+/// Same SQLite file as [adminStore] in production; in-memory for tests.
+ReportStore reportStore = ReportStore.inMemory();
 
 /// Bearer token guarding /admin/*. Empty = admin disabled (all denied).
 /// Set via ADMIN_TOKEN env. Not final so tests can set it.
@@ -775,6 +784,45 @@ void _recordLoginFailure(String ip) {
 /// Test-only: clears the in-memory login failure buckets.
 void resetLoginAttempts() => _loginFailures.clear();
 
+// Feedback throttling: the report/contact endpoints are unauthenticated,
+// so per-IP buckets keep the queue (and the DB) from being flooded. Two
+// windows: a short burst cap and a daily cap.
+final _feedbackBurst = <String, List<int>>{};
+final _feedbackDaily = <String, List<int>>{};
+const _feedbackBurstWindow = Duration(hours: 1);
+const _feedbackDailyWindow = Duration(days: 1);
+const _maxFeedbackBurst = 5; // per hour per IP
+const _maxFeedbackDaily = 20; // per day per IP
+
+bool _feedbackRateLimited(String ip) {
+  final now = DateTime.now().millisecondsSinceEpoch;
+  bool over(
+    Map<String, List<int>> hits,
+    Duration window,
+    int max,
+  ) {
+    final cutoff = now - window.inMilliseconds;
+    final kept = (hits[ip] ?? []).where((t) => t > cutoff).toList();
+    hits[ip] = kept;
+    return kept.length >= max;
+  }
+
+  return over(_feedbackBurst, _feedbackBurstWindow, _maxFeedbackBurst) ||
+      over(_feedbackDaily, _feedbackDailyWindow, _maxFeedbackDaily);
+}
+
+void _recordFeedbackHit(String ip) {
+  final now = DateTime.now().millisecondsSinceEpoch;
+  _feedbackBurst.update(ip, (h) => [...h, now], ifAbsent: () => [now]);
+  _feedbackDaily.update(ip, (h) => [...h, now], ifAbsent: () => [now]);
+}
+
+/// Test-only: clears the feedback throttling buckets.
+void resetFeedbackAttempts() {
+  _feedbackBurst.clear();
+  _feedbackDaily.clear();
+}
+
 String _clientIp(shelf.Request req) {
   final info = req.context['shelf.io.connection_info'];
   try {
@@ -987,6 +1035,8 @@ Future<shelf.Response> adminOverviewHandler(shelf.Request req) async {
           'ludo': await leaderboardStore.totalGames(game: 'ludo'),
           'snakes': await leaderboardStore.totalGames(game: 'snakes'),
         },
+        'openFeedback': await reportStore.count(status: 'open'),
+        'feedbackByCategory': reportStore.openByCategory(),
       },
       'leaderboardBackend': leaderboardBackend,
     }),
@@ -1075,6 +1125,115 @@ Future<Map<String, dynamic>> _readJsonBody(shelf.Request req) async {
   }
 }
 
+/// Public: files a bug report / feature request / contact message.
+/// Unauthenticated by design — every player can report — so the per-IP
+/// throttle above is the flood guard and validation is strict.
+Future<shelf.Response> feedbackCreateHandler(shelf.Request req) async {
+  if (req.method != 'POST') {
+    return shelf.Response(
+      405,
+      body: jsonEncode({'ok': false, 'text': 'POST only'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final ip = _clientIp(req);
+  if (_feedbackRateLimited(ip)) {
+    return shelf.Response(
+      429,
+      body: jsonEncode({
+        'ok': false,
+        'text': 'too many reports — please try again later',
+      }),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final body = await _readJsonBody(req);
+  try {
+    final entry = await reportStore.create(
+      category: (body['category'] as String? ?? 'other').trim(),
+      source: (body['source'] as String? ?? 'report').trim(),
+      title: (body['title'] as String?) ?? '',
+      message: (body['message'] as String?) ?? '',
+      contact: (body['contact'] as String?),
+      seatId: (body['seatId'] as String?),
+      gameId: (body['gameId'] as String?),
+      appVersion: (body['appVersion'] as String?),
+    );
+    _recordFeedbackHit(ip);
+    return shelf.Response.ok(
+      jsonEncode({'ok': true, 'id': entry.id}),
+      headers: {'content-type': 'application/json'},
+    );
+  } on ArgumentError catch (e) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': e.message.toString()}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+}
+
+/// Admin read: the triage queue. Sorted actionable-first by default
+/// (open, then critical-first priority, then newest); `sort=newest`
+/// flips to pure chronology. Filters: category, status.
+Future<shelf.Response> adminFeedbackHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final q = req.url.queryParameters;
+  final limit = int.tryParse(q['limit'] ?? '')?.clamp(1, 500) ?? 100;
+  final entries = await reportStore.list(
+    category: q['category'],
+    status: q['status'],
+    sort: q['sort'] == 'newest' ? 'newest' : 'priority',
+    limit: limit,
+    offset: int.tryParse(q['offset'] ?? '')?.clamp(0, 100000) ?? 0,
+  );
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'feedback': [for (final e in entries) e.toJson()],
+      'openCount': await reportStore.count(status: 'open'),
+      'totalCount': await reportStore.count(),
+      'openByCategory': reportStore.openByCategory(),
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+/// Admin read: one page of rows from a whitelisted table (the Data tab).
+Future<shelf.Response> adminTableHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final spec = tableSpec(req.url.queryParameters['table'] ?? '');
+  if (spec == null) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': 'unknown table'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final q = req.url.queryParameters;
+  final query = q['q'];
+  final limit = int.tryParse(q['limit'] ?? '')?.clamp(1, 500) ?? 100;
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'table': spec.name,
+      'pk': spec.pk,
+      'columns': spec.columns,
+      'editable': spec.editable.toList(),
+      'insertable': spec.insertable,
+      'deletable': spec.deletable,
+      'rows': adminStore.tableRows(
+        spec,
+        limit: limit,
+        offset: int.tryParse(q['offset'] ?? '')?.clamp(0, 100000) ?? 0,
+        q: query,
+      ),
+      'total': adminStore.tableCount(spec, q: query),
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
 Future<shelf.Response> adminActionHandler(shelf.Request req) async {
   if (!await isAdminAuthorized(req)) return _adminDenied();
   final by = (await adminIdentity(req))?.email ?? 'admin-token';
@@ -1156,6 +1315,123 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
         jsonEncode({'ok': true}),
         headers: {'content-type': 'application/json'},
       );
+    case 'feedback/update':
+      final id = int.tryParse('${body['id']}') ?? -1;
+      if (id < 0) {
+        return _badAdminAction('id required');
+      }
+      final patch = <String, dynamic>{
+        if (body['category'] != null) 'category': body['category'],
+        if (body['status'] != null) 'status': body['status'],
+        if (body['priority'] != null) 'priority': body['priority'],
+        if (body['title'] != null) 'title': body['title'],
+        if (body['message'] != null) 'message': body['message'],
+        if (body['contact'] != null) 'contact': body['contact'],
+        if (body['adminNotes'] != null) 'adminNotes': body['adminNotes'],
+      };
+      try {
+        final updated = await reportStore.update(id, patch);
+        if (updated == null) {
+          return _badAdminAction("feedback '$id' not found", code: 404);
+        }
+        await adminStore.recordAdminAction(
+          action: 'feedbackUpdate',
+          subject: '$id',
+          by: by,
+          detail: patch.keys.join(','),
+        );
+        return shelf.Response.ok(
+          jsonEncode({'ok': true, 'feedback': updated.toJson()}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on ArgumentError catch (e) {
+        return _badAdminAction(e.message.toString());
+      }
+    case 'feedback/delete':
+      final id = int.tryParse('${body['id']}') ?? -1;
+      if (id < 0) {
+        return _badAdminAction('id required');
+      }
+      final deleted = await reportStore.delete(id);
+      if (!deleted) {
+        return _badAdminAction("feedback '$id' not found", code: 404);
+      }
+      await adminStore.recordAdminAction(
+        action: 'feedbackDelete',
+        subject: '$id',
+        by: by,
+      );
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
+    case 'table/insert':
+      final spec = tableSpec(body['table'] as String? ?? '');
+      if (spec == null) return _badAdminAction('unknown table');
+      try {
+        adminStore.insertTableRow(
+          spec,
+          (body['values'] as Map?)?.cast<String, dynamic>() ?? {},
+        );
+        await adminStore.recordAdminAction(
+          action: 'tableInsert',
+          subject: spec.name,
+          by: by,
+        );
+        return shelf.Response.ok(
+          jsonEncode({'ok': true}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on ArgumentError catch (e) {
+        return _badAdminAction(e.message.toString());
+      }
+    case 'table/update':
+      final spec = tableSpec(body['table'] as String? ?? '');
+      final pk = '${body['pk'] ?? ''}';
+      if (spec == null) return _badAdminAction('unknown table');
+      if (pk.isEmpty) return _badAdminAction('pk required');
+      try {
+        final updated = await adminStore.updateTableRow(
+          spec,
+          pk,
+          (body['values'] as Map?)?.cast<String, dynamic>() ?? {},
+        );
+        if (!updated) {
+          return _badAdminAction('row not found', code: 404);
+        }
+        await adminStore.recordAdminAction(
+          action: 'tableUpdate',
+          subject: '${spec.name}#$pk',
+          by: by,
+        );
+        return shelf.Response.ok(
+          jsonEncode({'ok': true}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on ArgumentError catch (e) {
+        return _badAdminAction(e.message.toString());
+      }
+    case 'table/delete':
+      final spec = tableSpec(body['table'] as String? ?? '');
+      final pk = '${body['pk'] ?? ''}';
+      if (spec == null) return _badAdminAction('unknown table');
+      if (pk.isEmpty) return _badAdminAction('pk required');
+      if (!spec.deletable) {
+        return _badAdminAction("table '${spec.name}' is read-only");
+      }
+      final deleted = await adminStore.deleteTableRow(spec, pk);
+      if (!deleted) {
+        return _badAdminAction('row not found', code: 404);
+      }
+      await adminStore.recordAdminAction(
+        action: 'tableDelete',
+        subject: '${spec.name}#$pk',
+        by: by,
+      );
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
   }
   return shelf.Response(
     404,
@@ -1163,6 +1439,13 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
     headers: {'content-type': 'application/json'},
   );
 }
+
+shelf.Response _badAdminAction(String text, {int code = 400}) =>
+    shelf.Response(
+      code,
+      body: jsonEncode({'ok': false, 'text': text}),
+      headers: {'content-type': 'application/json'},
+    );
 
 Future<void> main(List<String> args) async {
   var port = 8080;
@@ -1209,7 +1492,13 @@ Future<void> main(List<String> args) async {
   try {
     adminStore.close();
   } catch (_) {}
-  adminStore = AdminStore(dbPath);
+  // One shared SQLite connection for admin history + feedback: the
+  // generic Data-tab CRUD reaches every whitelisted table through
+  // [adminStore], so the tables must live on the same connection (and
+  // file) the feature stores own.
+  final sharedDb = sqlite3.open(dbPath);
+  adminStore = AdminStore.fromDb(sharedDb);
+  reportStore = ReportStore.fromDb(sharedDb);
   adminToken = (env['ADMIN_TOKEN'] ?? '').trim();
   authority = GameAuthority(
     leaderboard: leaderboardStore,
@@ -1321,6 +1610,8 @@ Future<void> main(List<String> args) async {
               apiKey: tenorApiKey,
               client: tenorHttp,
             );
+          case 'feedback':
+            return feedbackCreateHandler(req);
           case 'admin/status':
             return adminStatusHandler(req);
           case 'admin/me':
@@ -1362,11 +1653,20 @@ Future<void> main(List<String> args) async {
             return adminRoomsHandler(req);
           case 'admin/audit':
             return adminAuditHandler(req);
+          case 'admin/feedback':
+            return adminFeedbackHandler(req);
+          case 'admin/table':
+            return adminTableHandler(req);
           case 'admin/ban':
           case 'admin/unban':
           case 'admin/rename':
           case 'admin/delete-game':
           case 'admin/rooms/close':
+          case 'admin/feedback/update':
+          case 'admin/feedback/delete':
+          case 'admin/table/insert':
+          case 'admin/table/update':
+          case 'admin/table/delete':
             if (req.method != 'POST') {
               return shelf.Response(
                 405,

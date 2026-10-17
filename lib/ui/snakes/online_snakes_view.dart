@@ -17,6 +17,7 @@ import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/bug_report_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
 /// snapshots ([OnlineClient.snakesState]) and forwards intents.
@@ -320,6 +321,14 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
             icon: const Icon(Icons.logout),
             tooltip: 'Leave game',
             onPressed: _leave,
+          ),
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: 'Report an issue',
+            onPressed: () => BugReportSheet.show(
+              context,
+              serverUrl: widget.client.serverUrl,
+            ),
           ),
         ],
       ),
