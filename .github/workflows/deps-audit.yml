@@ -1,0 +1,72 @@
+name: Dependency audit
+
+# Known-vulnerability gate for the packages the game actually ships, against
+# OSV.dev advisories (Dart/pub is a first-class ecosystem there). Weekly on
+# schedule, and once per PR into main that touches the dependency files.
+#
+# Deliberately NO Flutter SDK here: the scan reads the committed pubspec.lock,
+# which is exactly what production will resolve. Keeping the job SDK-free
+# keeps it to seconds (runner minutes are metered in this repo — see ci.yml).
+#
+# Update PRs themselves come from Dependabot (.github/dependabot.yml, weekly,
+# targeted at dev); this workflow is the adverse-side backstop.
+on:
+  schedule:
+    # Weekly, Monday 04:11 UTC — an off-round minute, so the first run isn't
+    # jostling in the top-of-the-hour queue.
+    - cron: '11 4 * * 1'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'tool/deps.sh'
+      - '.github/workflows/deps-audit.yml'
+
+permissions: {}
+
+jobs:
+  deps-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned release + sha256, the same mold as the git-cliff install in
+      # ci.yml: a dependency audit that trusts an unverified download of its
+      # own scanner would be ironic. Digest is the asset digest GitHub records at upload;
+      # if a release is ever re-tagged, this check quietly catches it.
+      - name: Install osv-scanner (pinned)
+        env:
+          OSV_SCANNER_VERSION: 2.7.0
+          OSV_SCANNER_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+        run: |
+          set -euo pipefail
+          url="https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          curl -fsSL "$url" -o /tmp/osv-scanner
+          echo "${OSV_SCANNER_SHA256}  /tmp/osv-scanner" | sha256sum -c -
+          chmod +x /tmp/osv-scanner
+          sudo mv /tmp/osv-scanner /usr/local/bin/
+          osv-scanner --version
+
+      - name: Scan pubspec.lock against OSV
+        env:
+          LOCKFILE: pubspec.lock
+        run: |
+          set -uo pipefail
+          scan_exit=0
+          # Pass the walk root explicitly: without it the scanner walks from
+          # "/", which on dev machines means other projects' caches (false
+          # gates for vulnerabilities we do not ship).
+          osv-scanner scan --lockfile="$LOCKFILE" "$PWD" | tee "$GITHUB_STEP_SUMMARY" || scan_exit=$?
+
+          # Exit 1 = vulnerabilities found (0 clean; >1 tool error). The table
+          # is already in the summary; a nonzero exit is what turns the scan
+          # into a gate instead of a report.
+          if [ "$scan_exit" -eq 1 ]; then
+            echo "::error::Known vulnerabilities in pubspec.lock — patch before merge."
+            echo "::error::Fix: bump the package (pub upgrade <name>), or pin past the advisory."
+          elif [ "$scan_exit" -ne 0 ]; then
+            echo "::error::osv-scanner failed to run (exit $scan_exit) — treat as unscanned."
+          fi
+          exit "$scan_exit"
