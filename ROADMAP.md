@@ -13,22 +13,13 @@ someone picks them up in an actual PR.
 
 ## 🚧 In flight
 
-- **Bug-report feature** (`feat/bug-reports`) — players report issues while
-  playing: text report → `POST /report` → server `bug_reports` table → admin
-  dashboard "Reports" tab. Entry points: Settings/Home + in-game app bar.
-- **Online chat GIFs & Tenor search** — separate session; see the chat/GIF
-  files (`lib/server/tenor.dart`, `lib/ui/shared/gif_picker_sheet.dart`) on
-  its own branch.
-- **Branch-flow simplification** (`chore/agent-conventions`) — retiring the
-  `sandbox`/`staging` tier from the documented flow (branches kept, flow now
-  task → `dev` → `main`), agent-loading rules files, protected-trunk guards,
-  automatic merged-branch cleanup.
+Nothing is mid-flight: bug reports (#164), table chat with GIFs and voice
+chat (#165, #168), agent branch-flow rules (#163), and friends — friend
+codes, requests, 1:1 chat with likes and replies, play invites, block and
+report (#169) — all landed. New sessions pick from **Next up**.
 
 ## 📋 Next up
 
-- **Admin dashboard: reports tab** — reads the same store the bug-report
-  feature writes (resolve/reject actions need a decision: mark-as-fixed vs
-  link-to-issue).
 - **Server-side branch protection** — the doc guard stack (hooks + CI jobs)
   stands in for GitHub branch protection; if the repo's plan ever allows it,
   enable "require PR + no force-push" on `main` and `dev` and drop the CI
