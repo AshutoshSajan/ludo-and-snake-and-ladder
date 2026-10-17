@@ -19,12 +19,17 @@ class PlayerAvatar extends StatelessWidget {
     required this.seed,
     this.size = 28,
     this.background,
+    this.circular = false,
   });
 
   /// The player's id. Any string works.
   final String seed;
   final double size;
   final Color? background;
+
+  /// True renders a circle (chat avatars read as "portrait", WhatsApp
+  /// style) instead of the default layered-square identicon shape.
+  final bool circular;
 
   /// A stable hash, so the same seed always yields the same picture. Exposed
   /// so a test can pin that stability rather than infer it from pixels.
@@ -43,19 +48,10 @@ class PlayerAvatar extends StatelessWidget {
     final h = stableHash(seed);
     // Two hues from the same hash: one for the cells, one for the backdrop, so
     // neighbouring players never blend into the same blob.
-    final fg = HSLColor.fromAHSL(
-      1,
-      (h % 360).toDouble(),
-      0.55,
-      0.55,
-    ).toColor();
-    final bg = background ??
-        HSLColor.fromAHSL(
-          1,
-          ((h ~/ 7) % 360).toDouble(),
-          0.35,
-          0.22,
-        ).toColor();
+    final fg = HSLColor.fromAHSL(1, (h % 360).toDouble(), 0.55, 0.55).toColor();
+    final bg =
+        background ??
+        HSLColor.fromAHSL(1, ((h ~/ 7) % 360).toDouble(), 0.35, 0.22).toColor();
 
     // 5x5, mirrored. Bits are consumed from a copy so the hue stays stable.
     var bits = h;
@@ -75,7 +71,9 @@ class PlayerAvatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(size * 0.22),
+        borderRadius: circular
+            ? BorderRadius.circular(size / 2)
+            : BorderRadius.circular(size * 0.22),
         border: Border.all(color: Colors.white24),
       ),
       child: CustomPaint(painter: _IdenticonPainter(cells, fg)),

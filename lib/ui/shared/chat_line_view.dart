@@ -21,6 +21,9 @@ class ChatLineView extends StatelessWidget {
     required this.line,
     this.myName = '',
     this.compact = false,
+    this.avatar,
+    this.quote,
+    this.liked = false,
   });
 
   final ChatLine line;
@@ -31,6 +34,21 @@ class ChatLineView extends StatelessWidget {
   /// Lobby feed: tighter paddings and a smaller GIF, because up to six
   /// bubbles share the column with the composer.
   final bool compact;
+
+  /// Optional id-identicon for a private (non-table) lane: rendered
+  /// beside the bubble — left of it when theirs, right when mine — the
+  /// way a 1:1 chat shows who spoke. Table chat leaves it null and keeps
+  /// the plain seat-colored byline.
+  final Widget? avatar;
+
+  /// Optional reply context rendered as a framed strip at the top of the
+  /// bubble (the "answered message" card in a 1:1 chat). Table chat
+  /// leaves it null; a strip belongs to a thread where quoting is a
+  /// feature, not an accident.
+  final Widget? quote;
+
+  /// A reaction stamp on the bubble (the liked-heart in a 1:1 chat).
+  final bool liked;
 
   @override
   Widget build(BuildContext context) {
@@ -46,35 +64,52 @@ class ChatLineView extends StatelessWidget {
           ? CrossAxisAlignment.end
           : CrossAxisAlignment.start,
       children: [
-        _Header(line: line, accent: accent, fontSize: fontSize),
+        _Header(line: line, accent: accent, fontSize: fontSize, avatar: avatar),
         const SizedBox(height: 3),
-        Container(
-          constraints: BoxConstraints(maxWidth: compact ? 240 : 320),
-          padding: (line.gif != null || line.note != null)
-              ? EdgeInsets.all(compact ? 5 : 7)
-              : EdgeInsets.symmetric(
-                  horizontal: compact ? 11 : 13,
-                  vertical: compact ? 7 : 9,
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (avatar != null && !mine) ...[avatar!, const SizedBox(width: 6)],
+            Flexible(
+              child: Container(
+                constraints: BoxConstraints(maxWidth: compact ? 240 : 320),
+                padding: (line.gif != null || line.note != null)
+                    ? EdgeInsets.all(compact ? 5 : 7)
+                    : EdgeInsets.symmetric(
+                        horizontal: compact ? 11 : 13,
+                        vertical: compact ? 7 : 9,
+                      ),
+                decoration: BoxDecoration(
+                  color: mine
+                      ? AppColors.gold.withValues(alpha: 0.16)
+                      : Colors.white.withValues(alpha: 0.08),
+                  // A hair of border keeps the tint readable over any felt.
+                  border: Border.all(
+                    width: 1,
+                    color: mine
+                        ? AppColors.gold.withValues(alpha: 0.5)
+                        : Colors.white.withValues(alpha: 0.16),
+                  ),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(15),
+                    topRight: const Radius.circular(15),
+                    bottomLeft: Radius.circular(mine ? 15 : 4),
+                    bottomRight: Radius.circular(mine ? 4 : 15),
+                  ),
                 ),
-          decoration: BoxDecoration(
-            color: mine
-                ? AppColors.gold.withValues(alpha: 0.16)
-                : Colors.white.withValues(alpha: 0.08),
-            // A hair of border keeps the tint readable over any felt.
-            border: Border.all(
-              width: 1,
-              color: mine
-                  ? AppColors.gold.withValues(alpha: 0.5)
-                  : Colors.white.withValues(alpha: 0.16),
+                child: _Content(
+                  line: line,
+                  compact: compact,
+                  accent: accent,
+                  mine: mine,
+                  quote: quote,
+                  liked: liked,
+                ),
+              ),
             ),
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(15),
-              topRight: const Radius.circular(15),
-              bottomLeft: Radius.circular(mine ? 15 : 4),
-              bottomRight: Radius.circular(mine ? 4 : 15),
-            ),
-          ),
-          child: _Content(line: line, compact: compact, accent: accent),
+            if (avatar != null && mine) ...[const SizedBox(width: 6), avatar!],
+          ],
         ),
       ],
     );
@@ -89,57 +124,67 @@ class _Header extends StatelessWidget {
     required this.line,
     required this.accent,
     required this.fontSize,
+    this.avatar,
   });
 
   final ChatLine line;
   final Color accent;
   final double fontSize;
+  final Widget? avatar;
 
   @override
   Widget build(BuildContext context) {
-    final initial = line.from.isEmpty
-        ? '?'
-        : line.from.characters.first.toUpperCase();
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: fontSize + 8,
-          height: fontSize + 8,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
-          child: Text(
-            initial,
-            style: TextStyle(
-              // The yellow seat's ink is dark for legibility on yellow.
-              color: line.color == LudoColor.yellow
-                  ? AppColors.ink
-                  : AppColors.ivory,
-              fontSize: (fontSize - 3).clamp(9, 12),
-              fontWeight: FontWeight.w900,
+    final fontSize = this.fontSize;
+    return Padding(
+      // With an avatar beside the bubble the byline already starts
+      // indented to line up with the bubble; without one it stays flush.
+      padding: EdgeInsets.only(left: avatar == null ? 0 : 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The identicon (private lane) replaces the initial chip: two
+          // avatars for one person reads as clutter.
+          if (avatar == null)
+            Container(
+              width: fontSize + 8,
+              height: fontSize + 8,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+              child: Text(
+                line.from.isEmpty
+                    ? '?'
+                    : line.from.characters.first.toUpperCase(),
+                style: TextStyle(
+                  // The yellow seat's ink is dark for legibility on yellow.
+                  color: line.color == LudoColor.yellow
+                      ? AppColors.ink
+                      : AppColors.ivory,
+                  fontSize: (fontSize - 3).clamp(9, 12),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
             ),
-          ),
-        ),
-        const SizedBox(width: 5),
-        Text(
-          line.from,
-          style: TextStyle(
-            color: AppColors.ivory.withValues(alpha: 0.85),
-            fontSize: fontSize - 1.5,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        if (line.at != null) ...[
-          const SizedBox(width: 7),
+          const SizedBox(width: 5),
           Text(
-            line.clock,
+            line.from,
             style: TextStyle(
-              color: AppColors.ivory.withValues(alpha: 0.4),
-              fontSize: fontSize - 4,
+              color: AppColors.ivory.withValues(alpha: 0.85),
+              fontSize: fontSize - 1.5,
+              fontWeight: FontWeight.w700,
             ),
           ),
+          if (line.at != null) ...[
+            const SizedBox(width: 7),
+            Text(
+              line.clock,
+              style: TextStyle(
+                color: AppColors.ivory.withValues(alpha: 0.4),
+                fontSize: fontSize - 4,
+              ),
+            ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
@@ -149,11 +194,17 @@ class _Content extends StatelessWidget {
     required this.line,
     required this.compact,
     required this.accent,
+    this.mine = false,
+    this.quote,
+    this.liked = false,
   });
 
   final ChatLine line;
   final bool compact;
   final Color accent;
+  final bool mine;
+  final Widget? quote;
+  final bool liked;
 
   @override
   Widget build(BuildContext context) {
@@ -162,6 +213,9 @@ class _Content extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // The reply snapshot rides inside the bubble, above the body —
+        // the quoted card pattern from every big 1:1 messenger.
+        if (quote != null) ...[quote!, const SizedBox(height: 4)],
         if (line.gif != null) ...[
           _GifImage(url: line.gif!, width: compact ? 150 : 230),
           if (line.note != null || line.text.isNotEmpty)
@@ -182,6 +236,20 @@ class _Content extends StatelessWidget {
               color: AppColors.ivory.withValues(alpha: 0.95),
               fontSize: fontSize,
               height: 1.35,
+            ),
+          ),
+        // The reaction: a small heart pinned to the bubble's trailing
+        // edge (right for my own messages, left for theirs).
+        if (liked)
+          Align(
+            alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Icon(
+                Icons.favorite,
+                size: fontSize + 2,
+                color: const Color(0xFFE5607A),
+              ),
             ),
           ),
       ],
