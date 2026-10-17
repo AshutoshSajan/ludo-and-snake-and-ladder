@@ -6,9 +6,13 @@ name: Guard dev
 # of `dev` must a) be a merge commit — it arrived through a pull request — and
 # b) never be force-pushed or deleted.
 #
-# No checkout step on purpose: the guarded facts are already in the push event
-# payload, and starting a runner to run git for two hundred milliseconds is
-# runner minutes for nothing.
+# The first version counted `head_commit.parents` straight from the push event
+# payload and never started a runner. In practice every single merge push this
+# repo has produced arrived with `head_commit` absent (runs 39044836773
+# through 39064557560 all failed on a legitimate PR merge), so the
+# payload-only parent count is proven unreliable here. Parents are now counted
+# from git itself: the shallow 2-commit checkout costs a few seconds of
+# runner, and the check is worth it.
 on:
   push:
     branches: [dev]
@@ -19,26 +23,38 @@ jobs:
   guard-dev:
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # one commit is enough to see its parents
+          persist-credentials: false
+
       - name: Reject non-PR, forced and deleting pushes
         run: |
           set -euo pipefail
 
-          # A deletion never carries head_commit; `// []` turns that into a
-          # violation verdict below rather than a jq crash.
-          parents=$(jq '(.head_commit.parents // []) | length' "$GITHUB_EVENT_PATH")
-
-          # A merge made from the GitHub UI has two parents. A squash merge has
-          # one, exactly like a direct push — both forbid the trunk.
-          if [ "$parents" -lt 2 ]; then
-            echo "::error::Direct push to dev is forbidden."
-            echo "::error::Push your task branch (from dev) and open a pull request into dev."
-            echo "::error::(head_commit.parents = $parents; a PR merge has 2 or more)"
+          # A deletion carries no tree to check out (the job may or may not
+          # even start for one); if it does, refuse before anything else.
+          if [ "$(jq -r '.deleted // false' "$GITHUB_EVENT_PATH")" = "true" ]; then
+            echo "::error::Deleting dev is forbidden."
             exit 1
           fi
 
           forced=$(jq -r '.forced // false' "$GITHUB_EVENT_PATH")
           if [ "$forced" = "true" ]; then
             echo "::error::Force-push to dev is forbidden (rewrite of shared history)."
+            exit 1
+          fi
+
+          # `git rev-list --parents -n 1` prints "<sha> <parent> [<parent>]":
+          # the parent count is the word count minus the sha itself. A merge
+          # commit has 2 or more; a direct push or a squash merge has none
+          # — exactly like the old payload check wanted.
+          words=$(git rev-list --parents -n 1 "$GITHUB_SHA" | awk '{print NF}')
+          parents=$((words - 1))
+          if [ "$parents" -lt 2 ]; then
+            echo "::error::Direct push to dev is forbidden."
+            echo "::error::Push your task branch (from dev) and open a pull request into dev."
+            echo "::error::(parents of $GITHUB_SHA = $parents; a PR merge has 2 or more)"
             exit 1
           fi
 
