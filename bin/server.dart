@@ -52,7 +52,7 @@ import 'package:game_club/server/admin_tables.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/gif.dart';
 import 'package:game_club/server/leaderboard_store.dart';
-import 'package:game_club/server/voice_notes.dart';
+import 'package:game_club/server/media.dart';
 import 'package:game_club/server/report_store.dart';import 'package:game_club/server/room_registry.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
@@ -1585,18 +1585,26 @@ Future<void> main(List<String> args) async {
       .addMiddleware(corsMiddleware)
       .addMiddleware(jsonErrorMiddleware)
       .addHandler((req) async {
-        // Voice notes, the same two arms production routes: an upload
-        // takes fresh bytes into a live room's store; a playback serves a
-        // stored note back out.
+        // Chat media: the uploads (fresh bytes into a live room's store)
+        // and the playback (a stored note out again) are path-family
+        // routes — the id lives in the path, not the switch's labels.
         if (req.url.path == 'media/voice') {
           return voiceNoteUpload(
             req,
-            store: authority.voiceNotes,
+            store: authority.mediaNotes,
             roomIsLive: authority.rooms.containsKey,
           );
         }
-        if (req.url.path.startsWith('media/voice/')) {
-          return voiceNoteServe(req, store: authority.voiceNotes);
+        if (req.url.path == 'media/image') {
+          return imageNoteUpload(
+            req,
+            store: authority.mediaNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/') ||
+            req.url.path.startsWith('media/image/')) {
+          return mediaNoteServe(req, store: authority.mediaNotes);
         }
         switch (req.url.path) {
           case 'ws':

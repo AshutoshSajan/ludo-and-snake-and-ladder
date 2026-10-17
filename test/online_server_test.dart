@@ -20,7 +20,7 @@ import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/gif.dart' show gifSearchHandler;
-import 'package:game_club/server/voice_notes.dart';
+import 'package:game_club/server/media.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
@@ -679,7 +679,8 @@ void main() {
       final room = auth.createRoom(_member(LudoColor.red, on: log.add));
       auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
 
-      auth.voiceNotes.put(
+      auth.mediaNotes.put(
+        kind: MediaKind.voice,
         code: room.code,
         id: 'eadada55',
         data: Uint8List.fromList([1]),
@@ -1010,18 +1011,26 @@ void main() {
         if (req.url.path == 'media/gif' || req.url.path == 'media/tenor') {
           return gifSearchHandler(req, provider: gifProvider);
         }
-        // Voice notes, the same two arms production routes: an upload
-        // takes fresh bytes into a live room's store; a playback serves a
-        // stored note back out.
+        // Chat media, the same four arms production routes: uploads take
+        // fresh bytes into a live room's store; playback serves a stored
+        // note back out.
         if (req.url.path == 'media/voice') {
           return voiceNoteUpload(
             req,
-            store: authority.voiceNotes,
+            store: authority.mediaNotes,
             roomIsLive: authority.rooms.containsKey,
           );
         }
-        if (req.url.path.startsWith('media/voice/')) {
-          return voiceNoteServe(req, store: authority.voiceNotes);
+        if (req.url.path == 'media/image') {
+          return imageNoteUpload(
+            req,
+            store: authority.mediaNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/') ||
+            req.url.path.startsWith('media/image/')) {
+          return mediaNoteServe(req, store: authority.mediaNotes);
         }
         return shelf.Response.ok('ok');
       });

@@ -6,6 +6,7 @@ import '../../services/online_client.dart';
 import '../theme.dart';
 import 'chat_line_view.dart';
 import 'gif_picker_sheet.dart';
+import 'keyboard_content.dart';
 import 'note_composer.dart';
 
 /// In-game chat, as a sheet over the board.
@@ -156,12 +157,22 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
   }
 
   Widget _inputField() {
+    // The keyboard GIF key (Gboard, Samsung Keyboard) commits the media
+    // straight into this field; it becomes the same chat line the GIF
+    // sheet sends, so no one learns a second pathway to a GIF they
+    // already hold in their keyboard.
     return TextField(
       controller: _input,
       onChanged: (_) => setState(() {}),
       style: const TextStyle(color: AppColors.ivory),
       textInputAction: TextInputAction.send,
       onSubmitted: (_) => _send(),
+      contentInsertionConfiguration: keyboardGifInsertion(
+        send: ({required bytes, required mime}) => widget.client
+            .sendKeyboardGif(bytes: bytes, mime: mime),
+        sendLink: widget.client.sendGif,
+        onError: _chatError,
+      ),
       decoration: InputDecoration(
         hintText: 'Message the table',
         hintStyle: TextStyle(color: AppColors.ivory.withValues(alpha: 0.5)),
