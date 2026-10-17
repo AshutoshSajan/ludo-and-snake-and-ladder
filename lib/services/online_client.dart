@@ -1085,6 +1085,53 @@ class OnlineClient extends ChangeNotifier {
     }
   }
 
+  /// Uploads a keyboard-inserted GIF (Gboard, Samsung Keyboard — the
+  /// IME's `commitContent` bytes) and announces it as a normal GIF chat
+  /// line. Same two-step shape as [sendVoiceNote]: the bytes travel by
+  /// HTTP because the socket only carries small JSON, and the
+  /// announcement is an ordinary `'gif'` line so every client renders it
+  /// through the same bubble it already knows. False when there is no
+  /// room, the upload was refused, or the network had other plans — the
+  /// composer owes the player a spoken failure, not silence.
+  Future<bool> sendKeyboardGif({
+    required List<int> bytes,
+    required String mime,
+    String caption = '',
+    http.Client? httpClient,
+  }) async {
+    final code = roomCode;
+    if (code == null || _spectating) return false;
+    // An id the store's policy will accept: [a-z0-9-], unique enough that
+    // two pastes in the same millisecond stay distinct.
+    final id = '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+        '${Random().nextInt(1 << 24).toRadixString(36)}';
+    final client = httpClient ?? http.Client();
+    try {
+      final res = await client.post(
+        _httpOriginOf(serverUrl, '/media/image').replace(
+          queryParameters: {'room': code, 'id': id},
+        ),
+        headers: {'content-type': mime},
+        body: bytes,
+      );
+      if (res.statusCode != 200) return false;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final urlPath = body['url'] as String?;
+      if (urlPath == null) return false;
+      // The broadcast gate requires an absolute https URL, and the
+      // relative serve path composes to one same-origin as this client.
+      sendGif(
+        _httpOriginOf(serverUrl, urlPath).toString(),
+        caption: caption,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (httpClient == null) client.close();
+    }
+  }
+
   /// Hand the seat to the table. The decision lives on the server, so the
   /// table keeps playing our turn when this tab is closed, the phone is
   /// locked, or the app is killed outright — which is the whole point: nobody
