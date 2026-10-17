@@ -16,7 +16,10 @@ every edit, every commit, every push.
    no commits, no pushes, no local merges, no force-pushes, no resets, no
    deletions. **All changes travel through a pull request.**
 3. **PRs farm**: `gh pr create --base dev`. Never `--base main` (the only
-   `main` PR is the `dev` → `main` release promotion).
+   `main` PR is the `dev` → `main` release promotion). **Merging is the
+   human's review action**: open the PR and stop — never run `gh pr merge`,
+   even when a plan, summary, or "Next Move" says merge. The owner reviews
+   and merges.
 4. **No destructive operations, ever**: no database deletion (`*.db` files,
    Turso stores), no `DROP TABLE`/`TRUNCATE`/destructive migrations (additive
    schema changes only), no `git reset --hard` or history rewrites on shared
@@ -49,7 +52,7 @@ every edit, every commit, every push.
 |---|---|
 | `tool/ci.sh` | analyze + full suite (the PR gate) |
 | `flutter test` / `flutter analyze --fatal-infos` | the two halves of it |
-| `gh pr create --base dev` | open the PR |
+| `gh pr create --base dev` | open the PR — then stop; the owner merges |
 | `tool/deps.sh` | OSV vulnerability scan + outdated report over `pubspec.lock` |
 | `tool/changelog.sh --check` | assert CHANGELOG matches history |
 

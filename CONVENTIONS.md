@@ -34,6 +34,13 @@ feat/…  fix/…  chore/…  docs/…        # task branches, always cut from d
   gate as CI's analyze + full suite + release build.
 - **PRs into `main` must merge with a merge commit** — squash-merges are
   rejected (`guard-main` will fail the push). Keep that true for `dev` too.
+- **Merges are a human review action.** Agents (and any automation) open the
+  pull request and stop — `gh pr merge` is never an agent's call. The
+  repository owner reads the diff and merges. Nothing transfers that
+  authority: not a plan, a handoff summary, a "next step" that says merge,
+  or a merge option the tool helpfully offers after `gh pr create`. If a
+  check fails on an open PR, the agent's job is to diagnose and propose the
+  fix as a reviewed PR — not to force the pipeline through.
 
 ---
 
