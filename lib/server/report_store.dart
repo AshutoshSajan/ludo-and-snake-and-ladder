@@ -13,7 +13,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 /// What kind of issue this is. The admin tooling filters and automates on
 /// these, so the set is deliberately small and closed.
-const feedbackCategories = {'bug', 'feature', 'question', 'other'};
+const feedbackCategories = {'bug', 'feature', 'question', 'other', 'player'};
 
 /// Where a report came from: the in-game/settings report sheet, the
 /// contact page, or somewhere else.
