@@ -8,6 +8,13 @@
 # diff is left in the working tree to review and fold into your next commit, so
 # there is still exactly one writer of record (CI) and no bot/human race.
 
+# Branch hygiene: merged task branches are deleted on the remote by the
+# prune-branch workflow (CONVENTIONS.md documents it); pruning our own
+# remote-tracking refs keeps the local `origin/feat/*` view from ghosting.
+# Local branches are never deleted by this hook — `git branch -d` stays a
+# human's call.
+git fetch --prune origin >/dev/null 2>&1 || true
+
 if ! command -v git-cliff >/dev/null 2>&1; then
   echo "⚠️  git-cliff not installed — skipping local CHANGELOG update." >&2
   echo "   see https://git-cliff.org/docs/installation/" >&2

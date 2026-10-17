@@ -10,19 +10,30 @@
 ///   GET  /stats       -> capacity metrics {connections, rooms, spectators}
 ///   GET  /rooms/lookup?code=XXXX -> owning instance id (cross-instance routing)
 ///   GET  /leaderboard -> top players + total games recorded
+///   POST /feedback    -> player report: bug / feature request / question /
+///                        other (the contact page posts here too)
 ///   WS   /ws?code=XXXX  -> join/create room, then JSON message protocol
 ///
 /// Client -> server messages:
-///   {type: 'hello', seatId, name, color?, game?, code?, match?}  first
+///   {type: 'hello', seatId, name, color?, game?, code?, match?, players?}  first
 ///   {type: 'start'}
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
-///   {type: 'chat', text}
+///   {type: 'chat', text, gif?, note?}  gif is an https image URL\n///       (text may be empty); note is the id of an uploaded voice note —
+///       see POST /media/voice. Invalid ids/notes are dropped
+///       server-side, never broadcast.
+///   {type: 'voice', k, to, s}  P2P audio signalling: k is one of
+///       offer/answer/ice/hangup, `to` is the target seatId, and `s` the
+///       opaque payload. Routed only between seated members.
 /// Server -> client:
 ///   {type: 'joined', code, color, game}
-///   {type: 'lobby', seats: [{name, color}...]}
+///   {type: 'lobby', capacity, seats: [{name, color}...]}
 ///   {type: 'state', game, state: LudoStateJson | SnakesStateJson}
-///   {type: 'chat', from, text}
+///   {type: 'chat', from, color, text, gif?, note?, at}
+///       from is the sender name, color their seat color ('red'…), note
+///       the voice note {url, dur} when one rides the line, at the epoch
+///       ms it was said — clients use these to paint chat bubbles.
+///   {type: 'voice', k, from, s}  relayed signalling; from is the sender seatId
 ///   {type: 'error', text}
 library;
 
@@ -37,11 +48,17 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/server/admin_store.dart';
+import 'package:game_club/server/admin_tables.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
+import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
+import 'package:game_club/server/tenor.dart';
+import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
+import 'package:http/http.dart' as http;
+import 'package:sqlite3/sqlite3.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
@@ -51,9 +68,21 @@ GameAuthority authority = GameAuthority();
 /// as the leaderboard so one DB holds everything the dashboard shows.
 AdminStore adminStore = AdminStore.inMemory();
 
+/// Player feedback queue (bug reports, feature requests, contact page).
+/// Same SQLite file as [adminStore] in production; in-memory for tests.
+ReportStore reportStore = ReportStore.inMemory();
+
 /// Bearer token guarding /admin/*. Empty = admin disabled (all denied).
 /// Set via ADMIN_TOKEN env. Not final so tests can set it.
 String adminToken = '';
+
+/// Tenor API key backing the chat GIF picker's search. Empty = search off:
+/// the picker then offers paste-a-link only. Set via TENOR_API_KEY env.
+/// Not final so tests can set it.
+String tenorApiKey = '';
+
+/// Outbound client for the Tenor proxy. Swappable for tests.
+http.Client tenorHttp = http.Client();
 
 /// Not final so tests can swap in an in-memory store. main() replaces this
 /// with the Turso store (when TURSO_DATABASE_URL is set) or the file-backed
@@ -95,6 +124,7 @@ int _connCounter = 0;
 Future<Room> _createClaimedRoom(
   ServerMember host, {
   required String game,
+  int capacity = 4,
 }) async {
   var token = newRegistryToken();
   for (var attempt = 0; attempt < 3; attempt++) {
@@ -106,6 +136,7 @@ Future<Room> _createClaimedRoom(
       final room = authority.createRoom(
         host,
         game: game,
+        capacity: capacity,
       ); // registry down — host locally
       unawaited(
         adminStore
@@ -126,6 +157,7 @@ Future<Room> _createClaimedRoom(
       final room = authority.createRoom(
         host,
         game: game,
+        capacity: capacity,
         code: code,
         registryToken: token,
       );
@@ -246,6 +278,14 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
         final spectate = msg['spectate'] as bool? ?? false;
         final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
         final match = msg['match'] as bool? ?? false;
+        // Table size the host asks to close a created room at (2..4; the
+        // seats are the board's corners). Sent only by room creators —
+        // joiners inherit the room's size, so an absent/odd value or any
+        // join-with-code stays at today's open four-seat default.
+        final players = switch (msg['players']) {
+          final int n when n >= 2 && n <= 4 => n,
+          _ => 4,
+        };
 
         member = ServerMember(
           id: connId,
@@ -292,8 +332,12 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           // room.
           try {
             room =
-                authority.matchExisting(member!, game: game) ??
-                await _createClaimedRoom(member!, game: game);
+                authority.matchExisting(
+                  member!,
+                  game: game,
+                  capacity: players,
+                ) ??
+                await _createClaimedRoom(member!, game: game, capacity: players);
           } on RoomRegistryException catch (_) {
             webSocket.sink.add(
               jsonEncode({
@@ -314,7 +358,11 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           }
         } else if (code.isEmpty) {
           try {
-            room = await _createClaimedRoom(member!, game: game);
+            room = await _createClaimedRoom(
+              member!,
+              game: game,
+              capacity: players,
+            );
           } on RoomRegistryException catch (_) {
             webSocket.sink.add(
               jsonEncode({
@@ -446,6 +494,11 @@ void _lobby(Room room) {
     'type': 'lobby',
     'code': room.code,
     'started': room.started,
+    // Table size the room closes at: the lobby's "Waiting for players…
+    // (n/size)" line reads this. Fine to list next to the roster — a size
+    // never changes after creation, so unlike the seats it cannot disagree
+    // with itself between arrivals.
+    'capacity': room.capacity,
     // The same entries the `seats` feed carries, so whichever of the two
     // arrives last cannot wipe the seat ids and statuses the other one
     // reported — two shapes for one roster is how badges start disappearing
@@ -498,10 +551,13 @@ String get leaderboardBackend {
 }
 
 /// CORS for the read-only JSON API (`/health`, `/leaderboard`, `/stats`,
-/// `/rooms/lookup`): the Flutter web dev server runs on another origin, so
+/// `/rooms/lookup`) and the chat voice-note endpoints (`POST/GET
+/// /media/voice`): the Flutter web dev server runs on another origin, so
 /// without these headers a browser would fetch the data fine and then refuse
 /// to hand the response to the app. WebSockets do not need a preflight, so
-/// `/ws` is unaffected; writes stay rejected with 405, so `*` is safe here.
+/// `/ws` is unaffected; writes stay rejected with 405, so `*` is safe here —
+/// voice-note uploads are the one deliberate POST, gated by size caps and a
+/// live room check rather than auth, matching the room chat they belong to.
 /// No auth or cookies ride on these routes (Turso uses its own Bearer token
 /// server-side), which is exactly the case `*` is meant for.
 ///
@@ -728,6 +784,45 @@ void _recordLoginFailure(String ip) {
 /// Test-only: clears the in-memory login failure buckets.
 void resetLoginAttempts() => _loginFailures.clear();
 
+// Feedback throttling: the report/contact endpoints are unauthenticated,
+// so per-IP buckets keep the queue (and the DB) from being flooded. Two
+// windows: a short burst cap and a daily cap.
+final _feedbackBurst = <String, List<int>>{};
+final _feedbackDaily = <String, List<int>>{};
+const _feedbackBurstWindow = Duration(hours: 1);
+const _feedbackDailyWindow = Duration(days: 1);
+const _maxFeedbackBurst = 5; // per hour per IP
+const _maxFeedbackDaily = 20; // per day per IP
+
+bool _feedbackRateLimited(String ip) {
+  final now = DateTime.now().millisecondsSinceEpoch;
+  bool over(
+    Map<String, List<int>> hits,
+    Duration window,
+    int max,
+  ) {
+    final cutoff = now - window.inMilliseconds;
+    final kept = (hits[ip] ?? []).where((t) => t > cutoff).toList();
+    hits[ip] = kept;
+    return kept.length >= max;
+  }
+
+  return over(_feedbackBurst, _feedbackBurstWindow, _maxFeedbackBurst) ||
+      over(_feedbackDaily, _feedbackDailyWindow, _maxFeedbackDaily);
+}
+
+void _recordFeedbackHit(String ip) {
+  final now = DateTime.now().millisecondsSinceEpoch;
+  _feedbackBurst.update(ip, (h) => [...h, now], ifAbsent: () => [now]);
+  _feedbackDaily.update(ip, (h) => [...h, now], ifAbsent: () => [now]);
+}
+
+/// Test-only: clears the feedback throttling buckets.
+void resetFeedbackAttempts() {
+  _feedbackBurst.clear();
+  _feedbackDaily.clear();
+}
+
 String _clientIp(shelf.Request req) {
   final info = req.context['shelf.io.connection_info'];
   try {
@@ -940,6 +1035,8 @@ Future<shelf.Response> adminOverviewHandler(shelf.Request req) async {
           'ludo': await leaderboardStore.totalGames(game: 'ludo'),
           'snakes': await leaderboardStore.totalGames(game: 'snakes'),
         },
+        'openFeedback': await reportStore.count(status: 'open'),
+        'feedbackByCategory': reportStore.openByCategory(),
       },
       'leaderboardBackend': leaderboardBackend,
     }),
@@ -1028,6 +1125,115 @@ Future<Map<String, dynamic>> _readJsonBody(shelf.Request req) async {
   }
 }
 
+/// Public: files a bug report / feature request / contact message.
+/// Unauthenticated by design — every player can report — so the per-IP
+/// throttle above is the flood guard and validation is strict.
+Future<shelf.Response> feedbackCreateHandler(shelf.Request req) async {
+  if (req.method != 'POST') {
+    return shelf.Response(
+      405,
+      body: jsonEncode({'ok': false, 'text': 'POST only'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final ip = _clientIp(req);
+  if (_feedbackRateLimited(ip)) {
+    return shelf.Response(
+      429,
+      body: jsonEncode({
+        'ok': false,
+        'text': 'too many reports — please try again later',
+      }),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final body = await _readJsonBody(req);
+  try {
+    final entry = await reportStore.create(
+      category: (body['category'] as String? ?? 'other').trim(),
+      source: (body['source'] as String? ?? 'report').trim(),
+      title: (body['title'] as String?) ?? '',
+      message: (body['message'] as String?) ?? '',
+      contact: (body['contact'] as String?),
+      seatId: (body['seatId'] as String?),
+      gameId: (body['gameId'] as String?),
+      appVersion: (body['appVersion'] as String?),
+    );
+    _recordFeedbackHit(ip);
+    return shelf.Response.ok(
+      jsonEncode({'ok': true, 'id': entry.id}),
+      headers: {'content-type': 'application/json'},
+    );
+  } on ArgumentError catch (e) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': e.message.toString()}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+}
+
+/// Admin read: the triage queue. Sorted actionable-first by default
+/// (open, then critical-first priority, then newest); `sort=newest`
+/// flips to pure chronology. Filters: category, status.
+Future<shelf.Response> adminFeedbackHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final q = req.url.queryParameters;
+  final limit = int.tryParse(q['limit'] ?? '')?.clamp(1, 500) ?? 100;
+  final entries = await reportStore.list(
+    category: q['category'],
+    status: q['status'],
+    sort: q['sort'] == 'newest' ? 'newest' : 'priority',
+    limit: limit,
+    offset: int.tryParse(q['offset'] ?? '')?.clamp(0, 100000) ?? 0,
+  );
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'feedback': [for (final e in entries) e.toJson()],
+      'openCount': await reportStore.count(status: 'open'),
+      'totalCount': await reportStore.count(),
+      'openByCategory': reportStore.openByCategory(),
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+/// Admin read: one page of rows from a whitelisted table (the Data tab).
+Future<shelf.Response> adminTableHandler(shelf.Request req) async {
+  if (!await isAdminAuthorized(req)) return _adminDenied();
+  final spec = tableSpec(req.url.queryParameters['table'] ?? '');
+  if (spec == null) {
+    return shelf.Response(
+      400,
+      body: jsonEncode({'ok': false, 'text': 'unknown table'}),
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  final q = req.url.queryParameters;
+  final query = q['q'];
+  final limit = int.tryParse(q['limit'] ?? '')?.clamp(1, 500) ?? 100;
+  return shelf.Response.ok(
+    jsonEncode({
+      'ok': true,
+      'table': spec.name,
+      'pk': spec.pk,
+      'columns': spec.columns,
+      'editable': spec.editable.toList(),
+      'insertable': spec.insertable,
+      'deletable': spec.deletable,
+      'rows': adminStore.tableRows(
+        spec,
+        limit: limit,
+        offset: int.tryParse(q['offset'] ?? '')?.clamp(0, 100000) ?? 0,
+        q: query,
+      ),
+      'total': adminStore.tableCount(spec, q: query),
+    }),
+    headers: {'content-type': 'application/json'},
+  );
+}
+
 Future<shelf.Response> adminActionHandler(shelf.Request req) async {
   if (!await isAdminAuthorized(req)) return _adminDenied();
   final by = (await adminIdentity(req))?.email ?? 'admin-token';
@@ -1109,6 +1315,123 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
         jsonEncode({'ok': true}),
         headers: {'content-type': 'application/json'},
       );
+    case 'feedback/update':
+      final id = int.tryParse('${body['id']}') ?? -1;
+      if (id < 0) {
+        return _badAdminAction('id required');
+      }
+      final patch = <String, dynamic>{
+        if (body['category'] != null) 'category': body['category'],
+        if (body['status'] != null) 'status': body['status'],
+        if (body['priority'] != null) 'priority': body['priority'],
+        if (body['title'] != null) 'title': body['title'],
+        if (body['message'] != null) 'message': body['message'],
+        if (body['contact'] != null) 'contact': body['contact'],
+        if (body['adminNotes'] != null) 'adminNotes': body['adminNotes'],
+      };
+      try {
+        final updated = await reportStore.update(id, patch);
+        if (updated == null) {
+          return _badAdminAction("feedback '$id' not found", code: 404);
+        }
+        await adminStore.recordAdminAction(
+          action: 'feedbackUpdate',
+          subject: '$id',
+          by: by,
+          detail: patch.keys.join(','),
+        );
+        return shelf.Response.ok(
+          jsonEncode({'ok': true, 'feedback': updated.toJson()}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on ArgumentError catch (e) {
+        return _badAdminAction(e.message.toString());
+      }
+    case 'feedback/delete':
+      final id = int.tryParse('${body['id']}') ?? -1;
+      if (id < 0) {
+        return _badAdminAction('id required');
+      }
+      final deleted = await reportStore.delete(id);
+      if (!deleted) {
+        return _badAdminAction("feedback '$id' not found", code: 404);
+      }
+      await adminStore.recordAdminAction(
+        action: 'feedbackDelete',
+        subject: '$id',
+        by: by,
+      );
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
+    case 'table/insert':
+      final spec = tableSpec(body['table'] as String? ?? '');
+      if (spec == null) return _badAdminAction('unknown table');
+      try {
+        adminStore.insertTableRow(
+          spec,
+          (body['values'] as Map?)?.cast<String, dynamic>() ?? {},
+        );
+        await adminStore.recordAdminAction(
+          action: 'tableInsert',
+          subject: spec.name,
+          by: by,
+        );
+        return shelf.Response.ok(
+          jsonEncode({'ok': true}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on ArgumentError catch (e) {
+        return _badAdminAction(e.message.toString());
+      }
+    case 'table/update':
+      final spec = tableSpec(body['table'] as String? ?? '');
+      final pk = '${body['pk'] ?? ''}';
+      if (spec == null) return _badAdminAction('unknown table');
+      if (pk.isEmpty) return _badAdminAction('pk required');
+      try {
+        final updated = await adminStore.updateTableRow(
+          spec,
+          pk,
+          (body['values'] as Map?)?.cast<String, dynamic>() ?? {},
+        );
+        if (!updated) {
+          return _badAdminAction('row not found', code: 404);
+        }
+        await adminStore.recordAdminAction(
+          action: 'tableUpdate',
+          subject: '${spec.name}#$pk',
+          by: by,
+        );
+        return shelf.Response.ok(
+          jsonEncode({'ok': true}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on ArgumentError catch (e) {
+        return _badAdminAction(e.message.toString());
+      }
+    case 'table/delete':
+      final spec = tableSpec(body['table'] as String? ?? '');
+      final pk = '${body['pk'] ?? ''}';
+      if (spec == null) return _badAdminAction('unknown table');
+      if (pk.isEmpty) return _badAdminAction('pk required');
+      if (!spec.deletable) {
+        return _badAdminAction("table '${spec.name}' is read-only");
+      }
+      final deleted = await adminStore.deleteTableRow(spec, pk);
+      if (!deleted) {
+        return _badAdminAction('row not found', code: 404);
+      }
+      await adminStore.recordAdminAction(
+        action: 'tableDelete',
+        subject: '${spec.name}#$pk',
+        by: by,
+      );
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
   }
   return shelf.Response(
     404,
@@ -1116,6 +1439,13 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
     headers: {'content-type': 'application/json'},
   );
 }
+
+shelf.Response _badAdminAction(String text, {int code = 400}) =>
+    shelf.Response(
+      code,
+      body: jsonEncode({'ok': false, 'text': text}),
+      headers: {'content-type': 'application/json'},
+    );
 
 Future<void> main(List<String> args) async {
   var port = 8080;
@@ -1144,6 +1474,10 @@ Future<void> main(List<String> args) async {
       ? env['INSTANCE_ID']!.trim()
       : instanceId;
 
+  // GIF search for table chat: without a key the picker degrades to
+  // paste-a-link (see lib/server/tenor.dart).
+  tenorApiKey = (env['TENOR_API_KEY'] ?? '').trim();
+
   // Persistence for production runs: a hosted Turso database when
   // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
   // survives on ephemeral hosts), otherwise the local SQLite file. Tests
@@ -1158,7 +1492,13 @@ Future<void> main(List<String> args) async {
   try {
     adminStore.close();
   } catch (_) {}
-  adminStore = AdminStore(dbPath);
+  // One shared SQLite connection for admin history + feedback: the
+  // generic Data-tab CRUD reaches every whitelisted table through
+  // [adminStore], so the tables must live on the same connection (and
+  // file) the feature stores own.
+  final sharedDb = sqlite3.open(dbPath);
+  adminStore = AdminStore.fromDb(sharedDb);
+  reportStore = ReportStore.fromDb(sharedDb);
   adminToken = (env['ADMIN_TOKEN'] ?? '').trim();
   authority = GameAuthority(
     leaderboard: leaderboardStore,
@@ -1240,6 +1580,19 @@ Future<void> main(List<String> args) async {
       .addMiddleware(corsMiddleware)
       .addMiddleware(jsonErrorMiddleware)
       .addHandler((req) async {
+        // Voice notes: the upload (fresh bytes into a live room's store)
+        // and the playback (a stored note out again) are path-family
+        // routes — the id lives in the path, not the switch's labels.
+        if (req.url.path == 'media/voice') {
+          return voiceNoteUpload(
+            req,
+            store: authority.voiceNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/')) {
+          return voiceNoteServe(req, store: authority.voiceNotes);
+        }
         switch (req.url.path) {
           case 'ws':
             return wsHandler()(req);
@@ -1251,6 +1604,14 @@ Future<void> main(List<String> args) async {
             return roomLookupHandler(req);
           case 'health':
             return healthHandler(req);
+          case 'media/tenor':
+            return tenorHandler(
+              req,
+              apiKey: tenorApiKey,
+              client: tenorHttp,
+            );
+          case 'feedback':
+            return feedbackCreateHandler(req);
           case 'admin/status':
             return adminStatusHandler(req);
           case 'admin/me':
@@ -1292,11 +1653,20 @@ Future<void> main(List<String> args) async {
             return adminRoomsHandler(req);
           case 'admin/audit':
             return adminAuditHandler(req);
+          case 'admin/feedback':
+            return adminFeedbackHandler(req);
+          case 'admin/table':
+            return adminTableHandler(req);
           case 'admin/ban':
           case 'admin/unban':
           case 'admin/rename':
           case 'admin/delete-game':
           case 'admin/rooms/close':
+          case 'admin/feedback/update':
+          case 'admin/feedback/delete':
+          case 'admin/table/insert':
+          case 'admin/table/update':
+          case 'admin/table/delete':
             if (req.method != 'POST') {
               return shelf.Response(
                 405,

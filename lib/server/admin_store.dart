@@ -10,6 +10,7 @@ library;
 
 import 'package:sqlite3/sqlite3.dart';
 
+import 'admin_tables.dart';
 import 'auth.dart';
 import 'leaderboard_store.dart';
 
@@ -758,6 +759,144 @@ class AdminStore {
 
   Future<void> revokeUserSessions(int userId) async {
     _db.execute('DELETE FROM auth_sessions WHERE user_id = ?', [userId]);
+  }
+
+  // ------------------------------------------------- generic table CRUD
+  //
+  // Powers the dashboard's Data tab: list/insert/update/delete on the
+  // whitelisted tables from [adminTableSpecs]. Identifiers come only from
+  // the specs; request values are always bound parameters, so no request
+  // input ever becomes SQL structure.
+
+  /// One page of rows. [q] is a naive substring match across every
+  /// column (text-cast) — enough for a triage/lookup tool.
+  List<Map<String, dynamic>> tableRows(
+    AdminTableSpec spec, {
+    int limit = 100,
+    int offset = 0,
+    String? q,
+  }) {
+    final where = <String>[];
+    final args = <dynamic>[];
+    if (q != null && q.trim().isNotEmpty) {
+      final needle = '%${q.trim()}%';
+      where.add(
+        [
+          for (final c in spec.columns) "CAST($c AS TEXT) LIKE ?",
+        ].join(' OR '),
+      );
+      args.addAll([for (final _ in spec.columns) needle]);
+    }
+    final rows = _db.select(
+      'SELECT ${spec.columns.join(', ')} FROM ${spec.name} '
+      '${where.isEmpty ? '' : 'WHERE (${where.first}) '}'
+      'ORDER BY ${spec.orderBy} LIMIT ? OFFSET ?',
+      [...args, limit, offset],
+    );
+    return [for (final r in rows) Map<String, dynamic>.of(r)];
+  }
+
+  int tableCount(AdminTableSpec spec, {String? q}) {
+    final where = <String>[];
+    final args = <dynamic>[];
+    if (q != null && q.trim().isNotEmpty) {
+      final needle = '%${q.trim()}%';
+      where.add(
+        [for (final c in spec.columns) "CAST($c AS TEXT) LIKE ?"].join(' OR '),
+      );
+      args.addAll([for (final _ in spec.columns) needle]);
+    }
+    return _db
+        .select(
+          'SELECT COUNT(*) AS n FROM ${spec.name} '
+          '${where.isEmpty ? '' : 'WHERE (${where.first})'}',
+          args,
+        )
+        .first['n'] as int;
+  }
+
+  /// Only [AdminTableSpec.editable] columns are accepted; text primary
+  /// keys may also be set ON INSERT (a row needs its identity) but never
+  /// RENAMED by a later edit — editing pks breaks the cross-table seat
+  /// references. DB defaults fill the rest (status/priority/timestamps);
+  /// values are bound, never inlined. Throws [ArgumentError] on an
+  /// unknown column.
+  void insertTableRow(AdminTableSpec spec, Map<String, dynamic> values) {
+    if (!spec.insertable) {
+      throw ArgumentError("table '${spec.name}' does not allow inserts");
+    }
+    final writable = {...spec.editable, spec.pk};
+    final cols = <String>[];
+    final args = <dynamic>[];
+    for (final e in values.entries) {
+      if (!writable.contains(e.key)) {
+        throw ArgumentError("column '${e.key}' is not writable");
+      }
+      cols.add(e.key);
+      args.add(_sqliteValue(e.value));
+    }
+    if (cols.isEmpty) throw ArgumentError('no values to insert');
+    _db.execute(
+      'INSERT INTO ${spec.name} (${cols.join(', ')}) '
+      'VALUES (${cols.map((_) => '?').join(', ')})',
+      args,
+    );
+  }
+
+  /// Updates one row by primary key. Returns false when no row matched.
+  Future<bool> updateTableRow(
+    AdminTableSpec spec,
+    String pkValue,
+    Map<String, dynamic> values,
+  ) async {
+    final sets = <String>[];
+    final args = <dynamic>[];
+    for (final e in values.entries) {
+      if (!spec.editable.contains(e.key)) {
+        throw ArgumentError("column '${e.key}' is not writable");
+      }
+      sets.add('${e.key} = ?');
+      args.add(_sqliteValue(e.value));
+    }
+    if (sets.isEmpty) return true;
+    args.add(_coercePk(spec, pkValue));
+    _db.execute(
+      'UPDATE ${spec.name} SET ${sets.join(', ')} '
+      'WHERE ${spec.pk} = ?',
+      args,
+    );
+    return _db.updatedRows > 0;
+  }
+
+  /// Deletes one row by primary key. Returns false when no row matched.
+  Future<bool> deleteTableRow(AdminTableSpec spec, String pkValue) async {
+    _db.execute(
+      'DELETE FROM ${spec.name} WHERE ${spec.pk} = ?',
+      [_coercePk(spec, pkValue)],
+    );
+    return _db.updatedRows > 0;
+  }
+
+  dynamic _coercePk(AdminTableSpec spec, String raw) =>
+      spec.pkIsText ? raw : (int.tryParse(raw) ?? -1);
+
+  /// JSON values arrive as String/num/bool/null; booleans become ints so
+  /// SQLite stores 0/1 rather than failing to bind.
+  dynamic _sqliteValue(dynamic v) => switch (v) {
+    final bool b => b ? 1 : 0,
+    final num n => n.toInt() == n ? n.toInt() : n.toDouble(),
+    _ => v,
+  };
+
+  /// Public audit hook for actions outside this store (the feedback
+  /// triage lives in [ReportStore] and still belongs in the log).
+  Future<void> recordAdminAction({
+    required String action,
+    required String subject,
+    required String by,
+    String? detail,
+  }) async {
+    await _audit(action: action, seatId: subject, by: by, detail: detail);
   }
 
   void close() {

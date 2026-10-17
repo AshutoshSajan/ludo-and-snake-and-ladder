@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../shared/voice_button.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
@@ -16,6 +17,7 @@ import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/bug_report_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
 /// snapshots ([OnlineClient.snakesState]) and forwards intents.
@@ -294,6 +296,11 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                 : 'Table chat',
             onPressed: () => GameChatSheet.show(context, widget.client),
           ),
+          // Voice is seated-only; a spectator has no seat for the mesh.
+          if (!widget.client.isSpectator) ...[
+            VoiceButton(client: widget.client),
+            MicButton(client: widget.client),
+          ],
           IconButton(
             icon: Icon(
               widget.client.iAmAuto
@@ -314,6 +321,14 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
             icon: const Icon(Icons.logout),
             tooltip: 'Leave game',
             onPressed: _leave,
+          ),
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: 'Report an issue',
+            onPressed: () => BugReportSheet.show(
+              context,
+              serverUrl: widget.client.serverUrl,
+            ),
           ),
         ],
       ),

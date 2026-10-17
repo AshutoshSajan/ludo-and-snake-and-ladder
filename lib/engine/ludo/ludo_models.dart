@@ -7,7 +7,21 @@
 ///   56        : home (finished)
 library;
 
-enum LudoColor { red, green, yellow, blue }
+enum LudoColor {
+  red,
+  green,
+  yellow,
+  blue;
+
+  /// The seat color from its wire name, null for anything that is not a
+  /// table seat ('', a newer game color).
+  static LudoColor? tryParse(String name) {
+    for (final c in LudoColor.values) {
+      if (c.name == name) return c;
+    }
+    return null;
+  }
+}
 
 extension LudoColorX on LudoColor {
   String get label => switch (this) {

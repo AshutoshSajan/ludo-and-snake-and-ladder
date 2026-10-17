@@ -47,8 +47,11 @@ class AdminClient {
     );
   }
 
-  Future<Map<String, dynamic>> _get(String path) async {
-    final resp = await _client.get(_uri(path), headers: _headers);
+  Future<Map<String, dynamic>> _get(
+    String path, [
+    Map<String, String>? query,
+  ]) async {
+    final resp = await _client.get(_uri(path, query), headers: _headers);
     if (resp.statusCode != 200) {
       throw AdminException(resp.statusCode, resp.body);
     }
@@ -156,6 +159,55 @@ class AdminClient {
 
   Future<void> closeRoom(String code) =>
       _post('/admin/rooms/close', {'code': code});
+
+  // ------------------------------------------------------- feedback lane
+
+  /// The triage queue. Sorted actionable-first (open, priority-ranked,
+  /// newest tiebreak) unless `sort: 'newest'`.
+  Future<Map<String, dynamic>> feedback({
+    String? status,
+    String? category,
+    String sort = 'priority',
+    int limit = 100,
+  }) =>
+      _get('/admin/feedback', {
+        if (status != null && status.isNotEmpty) 'status': status,
+        if (category != null && category.isNotEmpty) 'category': category,
+        'sort': sort,
+        'limit': '$limit',
+      });
+
+  /// Partial update: present keys only. Known keys: category, status,
+  /// priority, title, message, contact, adminNotes.
+  Future<void> updateFeedback(int id, Map<String, dynamic> fields) =>
+      _post('/admin/feedback/update', {'id': id, ...fields});
+
+  Future<void> deleteFeedback(int id) =>
+      _post('/admin/feedback/delete', {'id': id});
+
+  // ------------------------------------------------------- Data tab CRUD
+
+  Future<Map<String, dynamic>> table(
+    String name, {
+    int limit = 100,
+    int offset = 0,
+    String? q,
+  }) =>
+      _get('/admin/table', {
+        'table': name,
+        'limit': '$limit',
+        'offset': '$offset',
+        if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+      });
+
+  Future<void> insertTableRow(String table, Map<String, dynamic> values) =>
+      _post('/admin/table/insert', {'table': table, 'values': values});
+
+  Future<void> updateTableRow(String table, String pk, Map<String, dynamic> values) =>
+      _post('/admin/table/update', {'table': table, 'pk': pk, 'values': values});
+
+  Future<void> deleteTableRow(String table, String pk) =>
+      _post('/admin/table/delete', {'table': table, 'pk': pk});
 
   void close() {
     if (_ownsClient) _client.close();

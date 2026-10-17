@@ -1,6 +1,12 @@
-import '../ui/page_app_bar.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+
+import '../ui/page_app_bar.dart';
+import '../ui/shared/chat_line_view.dart';
+import '../ui/shared/gif_picker_sheet.dart';
+import '../ui/shared/note_composer.dart';
+import '../ui/shared/voice_button.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../services/online_client.dart';
@@ -75,11 +81,20 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   final _codeCtrl = TextEditingController();
   final _chatCtrl = TextEditingController();
 
+  /// Whether the voice-note control currently owns the composer row —
+  /// the field, GIF and send step aside while the mic is live.
+  bool _chatRecording = false;
+
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
 
   /// Game the host picks when creating a room; joiners inherit the room's.
   String _gameType = 'ludo';
+
+  /// Table size the host asks a created room to close at. Join-with-code
+  /// ignores it — joiners inherit the room's size — and the default keeps
+  /// today's open four-seat table.
+  int _players = 4;
 
   /// The persisted online identity: a stable player id plus a display name.
   ///
@@ -168,6 +183,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       seatId: _seatId,
       name: name,
       gameType: _gameType,
+      // The table size rides only when this hello creates (or matches
+      // into) a room; a join submits a code and inherits the room's size
+      // on the first lobby feed.
+      capacity: createRoom ? _players : 4,
     )..addListener(() => setState(() {}));
     setState(() => _client = client);
     client.connect(
@@ -316,6 +335,28 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           ],
           selected: {_gameType},
           onSelectionChanged: (sel) => setState(() => _gameType = sel.first),
+        ),
+        const SizedBox(height: 16),
+        // The table size the room closes at — the same "chip row" the
+        // offline setup screen uses, for one shared visual language. It
+        // applies to the Create path: a join submits a code and inherits
+        // the room's size, so a two-seat room stays a two-seat room no
+        // matter who fills the second chair.
+        const Text(
+          'Players at the table',
+          style: TextStyle(color: AppColors.ivory, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (var n = 2; n <= 4; n++)
+              ChoiceChip(
+                label: Text('$n'),
+                selected: _players == n,
+                onSelected: (_) => setState(() => _players = n),
+              ),
+          ],
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
@@ -504,38 +545,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               ),
             ),
           ),
-        Card(
-          color: AppColors.feltLight,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                const Text(
-                  'Room code',
-                  style: TextStyle(color: AppColors.ivory, fontSize: 13),
-                ),
-                const SizedBox(height: 4),
-                SelectableText(
-                  client.roomCode ?? '····',
-                  style: const TextStyle(
-                    color: AppColors.gold,
-                    fontSize: 34,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 8,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Share it so friends can join',
-                  style: TextStyle(
-                    color: AppColors.ivory.withAlpha(150),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        RoomCodeCard(code: client.roomCode),
         const SizedBox(height: 12),
         if (client.errorText != null)
           Padding(
@@ -589,13 +599,16 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
             ),
             title: Text('${seat.name} left the room', style: muted),
           ),
-        if (seats.length < 4 && !spectating)
+        // Seating stops at the room's table size, so the wait line tracks
+        // the host's chosen size — (1/3) for a three-seat room, and gone
+        // entirely once the room is full.
+        if (seats.length < client.capacity && !spectating)
           ListTile(
             leading: const CircleAvatar(
               child: Icon(Icons.person_add_alt, size: 18),
             ),
             title: Text(
-              'Waiting for players… (${seats.length}/4)',
+              'Waiting for players… (${seats.length}/${client.capacity})',
               style: TextStyle(color: AppColors.ivory.withAlpha(150)),
             ),
           ),
@@ -632,34 +645,78 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         for (final line in client.chat.reversed.take(6))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(
-              '${line.from}: ${line.text}',
-              style: TextStyle(
-                color: AppColors.ivory.withAlpha(200),
-                fontSize: 13,
+            child: ChatLineView(line: line, compact: true, myName: client.name),
+          ),
+        const SizedBox(height: 16),
+        // Table voice: peer-to-peer audio through the room's WebSocket
+        // signalling. Spectators have no seat, so no mic.
+        if (!spectating)
+          Row(
+            children: [
+              VoiceButton(client: client),
+              MicButton(client: client),
+              const SizedBox(width: 8),
+              Text(
+                client.voiceJoined
+                    ? (client.voiceMuted ? 'Voice — muted' : 'Table voice on')
+                    : 'Voice',
+                style: TextStyle(
+                  color: AppColors.ivory.withAlpha(150),
+                  fontSize: 12,
+                ),
               ),
-            ),
+            ],
           ),
         if (!spectating)
           Row(
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _chatCtrl,
-                  style: const TextStyle(color: AppColors.ivory),
-                  onSubmitted: (_) => _sendChat(client),
-                  decoration: InputDecoration(
-                    labelText: 'Say something…',
-                    labelStyle: const TextStyle(color: AppColors.ivory),
-                    enabledBorder: _border(AppColors.ivory.withAlpha(90)),
-                    focusedBorder: _border(AppColors.gold),
+              if (!_chatRecording) ...[
+                IconButton(
+                  icon: const Icon(Icons.gif_box, color: AppColors.gold),
+                  tooltip: 'Send a GIF',
+                  onPressed: () => GifPickerSheet.show(
+                    context,
+                    serverUrl: client.serverUrl,
+                    onPick: (url) => client.sendGif(url),
                   ),
                 ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.send, color: AppColors.gold),
-                tooltip: 'Send chat',
-                onPressed: () => _sendChat(client),
+                Expanded(
+                  child: TextField(
+                    controller: _chatCtrl,
+                    style: const TextStyle(color: AppColors.ivory),
+                    onSubmitted: (_) => _sendChat(client),
+                    decoration: InputDecoration(
+                      labelText: 'Say something…',
+                      labelStyle: const TextStyle(color: AppColors.ivory),
+                      enabledBorder: _border(AppColors.ivory.withAlpha(90)),
+                      focusedBorder: _border(AppColors.gold),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send, color: AppColors.gold),
+                  tooltip: 'Send chat',
+                  onPressed: () => _sendChat(client),
+                ),
+              ],
+              // The voice control must not be rebuilt while it holds a mic
+              // session — see [NoteComposer]; the row's other members make
+              // way while it records.
+              Flexible(
+                child: NoteComposer(
+                  send: (recording) => client.sendVoiceNote(
+                    bytes: recording.bytes,
+                    mime: recording.mime,
+                    durMs: recording.durMs,
+                  ),
+                  onError: (message) =>
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(message)),
+                      ),
+                  onRecordingChanged: (recording) => setState(() {
+                    _chatRecording = recording;
+                  }),
+                ),
               ),
             ],
           ),
@@ -680,4 +737,94 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     LudoColor.yellow => AppColors.ludoYellow,
     LudoColor.green => AppColors.ludoGreen,
   };
+}
+
+/// The lobby's room-code card. Copying is a first-class button, not a hope:
+/// the code used to be the only thing in the card, with copying left to the
+/// platform's text selection — and a long-press selection on big,
+/// letter-spaced text is unreliable on phone browsers, so mobile players
+/// could not share the code at all. The button copies through the clipboard
+/// channel, which browsers honour for a user tap.
+class RoomCodeCard extends StatelessWidget {
+  const RoomCodeCard({super.key, required this.code});
+
+  /// The room's code, or null while the server has not confirmed a room yet.
+  final String? code;
+
+  Future<void> _copy(BuildContext context) async {
+    final value = code;
+    if (value == null) return;
+    try {
+      await Clipboard.setData(ClipboardData(text: value));
+    } catch (_) {
+      // Clipboard write can be denied (insecure origin, old browser). The
+      // code is still selectable by hand — say so instead of failing silent.
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Could not copy — please select the code by hand'),
+            ),
+          );
+      }
+      return;
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('$value copied — send it to your friends')),
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: AppColors.feltLight,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            const Text(
+              'Room code',
+              style: TextStyle(color: AppColors.ivory, fontSize: 13),
+            ),
+            const SizedBox(height: 4),
+            Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SelectableText(
+                    code ?? '····',
+                    style: const TextStyle(
+                      color: AppColors.gold,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 8,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.copy, color: AppColors.gold),
+                    tooltip: 'Copy room code',
+                    onPressed: code == null ? null : () => _copy(context),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Share it so friends can join',
+              style: TextStyle(
+                color: AppColors.ivory.withAlpha(150),
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

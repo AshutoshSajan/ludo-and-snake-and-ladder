@@ -406,7 +406,7 @@ void main() {
     test('hooks are shipped executable, or git silently ignores them', () {
       // A non-executable hook is not a weaker check, it is no check at all,
       // and git reports nothing when it skips one.
-      for (final f in ['tool/ci.sh', 'tool/changelog.sh', '.githooks/pre-push']) {
+      for (final f in ['tool/ci.sh', 'tool/changelog.sh', 'tool/deps.sh', '.githooks/pre-push']) {
         expect(File(f).existsSync(), isTrue, reason: '$f is missing');
         expect(File(f).statSync().mode & 0x111, isNot(0),
             reason: '$f is not executable — git will ignore it silently');
@@ -679,6 +679,156 @@ void main() {
           reason: 'the retry loop belonged to the push that no longer happens');
       // The verification it used to race against is still there.
       expect(workflow, contains('tool/changelog.sh --check'));
+    });
+  });
+
+  group('conventions — trunk guards, branch pruning, agent rules', () {
+    // CONVENTIONS.md is the rule book this group mechanically enforces:
+    // main/dev advance only via pull requests, merged branches clean
+    // themselves up, and every agent harness loads the same rules.
+
+    test('the pre-push hook rejects a push that targets dev or main', () {
+      // Runs the real script with the colon ref shape (the same shape the
+      // staging bulk test above uses). The guard must fail the push BEFORE the
+      // analyze/test half — a trunk push should be refused for free, which is
+      // what SKIP_LOCAL_CI=1 proves here: even with the suite disabled the
+      // push does not pass.
+      for (final ref in ['refs/heads/dev:refs/heads/dev', 'refs/heads/main:refs/heads/main']) {
+        final result = Process.runSync(
+          '.githooks/pre-push',
+          [ref],
+          environment: {'SKIP_LOCAL_CI': '1', 'PATH': '/usr/bin:/bin:/usr/local/bin'},
+          workingDirectory: Directory.current.path,
+        );
+        final out = '${result.stdout}${result.stderr}';
+        expect(result.exitCode, isNot(0),
+            reason: '$ref is a protected trunk and must be refused: $out');
+        expect(out, contains('protected trunk'),
+            reason: 'the refusal must name the rule, not just fail: $out');
+      }
+    }, skip: !File('.githooks/pre-push').existsSync());
+
+    test('dev pushes are guarded in CI by a workflow of their own', () {
+      // ci.yml deliberately bills the full suite only on main (see its own
+      // comments), so a dev push would go unseen there. The guard lives in its
+      // own file and stays cheap: the facts it asserts (merge-commitness,
+      // no force-push, no deletion) are in the push event payload, so it never
+      // checkout-drives the runner at all.
+      final guard = File('.github/workflows/guard-dev.yml');
+      expect(guard.existsSync(), isTrue, reason: 'guard-dev.yml is missing');
+      final text = guard.readAsStringSync();
+      expect(text, contains('branches: [dev]'),
+          reason: 'the guard must trigger on pushes to dev');
+      expect(text, contains('head_commit.parents'),
+          reason: 'the merge-commit rule reads the event payload, not a checkout');
+      expect(text, contains(".forced"),
+          reason: 'a forced push to dev rewrites shared history — forbidden');
+    });
+
+    test('merged task branches prune themselves', () {
+      // The pruner moved out of ci.yml whose pull_request trigger is scoped to
+      // main: a job there could never see PRs into dev. Its own workflow has
+      // both bases, plus the same three protections the inline job carried.
+      final pruner = File('.github/workflows/prune-branch.yml');
+      expect(pruner.existsSync(), isTrue, reason: 'prune-branch.yml is missing');
+      final text = pruner.readAsStringSync();
+      expect(text, contains('branches: [dev, main]'),
+          reason: 'both trunk PRs must prune');
+      expect(text, contains('merge-base --is-ancestor'),
+          reason: 'a branch whose commits did not land must be kept');
+      expect(text, isNot(contains('git push origin --force')),
+          reason: 'pruning deletes the branch, it must not rewrite anything');
+
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      expect(workflow, isNot(contains('  prune-branch:')),
+          reason: 'the inline job is gone — one writer, as with the changelog');
+    });
+
+    test('agent rules are loaded by every harness, not just the README prose', () {
+      // The convention files must exist AND carry their hard rules inline:
+      // a harness that reads only AGENTS.md (Codex, Crush, OpenCode) still
+      // sees the trunk rule, the PR target and the destructiveness ban —
+      // following the pointer to CONVENTIONS.md must add depth, not be
+      // required for compliance.
+      final agents = File('AGENTS.md').readAsStringSync();
+      expect(agents, contains('git checkout -b <name> dev'),
+          reason: 'task branches are cut from dev, spelled out in the loaded copy');
+      expect(agents, contains('gh pr create --base dev'),
+          reason: 'the PR target is a rule, not advice');
+      expect(agents, contains('are never worked on directly'),
+          reason: 'the trunk rule is stated in the loaded copy');
+      expect(agents, contains('No destructive operations'),
+          reason: 'the destructive-ops ban is stated in the loaded copy');
+
+      // CLAUDE.md imports rather than duplicates the rules: two copies drift.
+      expect(File('CLAUDE.md').readAsStringSync(), contains('@AGENTS.md'));
+
+      final conventions = File('CONVENTIONS.md').readAsStringSync();
+      expect(conventions, contains('No database destruction'),
+          reason: 'the full rule book names the database ban explicitly');
+      expect(conventions, contains('prune-branch.yml'),
+          reason: 'the full rule book documents the branch-cleanup workflow');
+    });
+
+    test('README is product facts only; process lives in CONVENTIONS.md', () {
+      // The branch-flow narrative moved out of the README — keeping two
+      // versions of the rules is two places to drift. The README may speak
+      // about running and building, not about how the git graph behaves.
+      final readme = File('README.md').readAsStringSync();
+      expect(readme, isNot(contains('sandbox')),
+          reason: 'the sandbox tier is gone from the flow and from the README');
+      expect(readme, isNot(contains('staging')),
+          reason: 'staging is no longer part of the flow');
+      expect(readme, isNot(contains('## 🌲 Branches, PRs & CI')),
+          reason: 'process documentation lives in CONVENTIONS.md now');
+      expect(readme, contains('CONVENTIONS.md'),
+          reason: 'the README must point contributors at the rule book');
+      expect(readme, contains('ROADMAP.md'),
+          reason: 'roadmap/todos live in their own file, not the README');
+    });
+    test('dependency health: Dependabot raises PRs, the OSV scan gates them', () {
+      // Two lanes, one concern: version drift arrives as Dependabot PRs into
+      // dev (bot branches are task work), known advisories fail their own
+      // cheap workflow — and a PR that tries to merge a vulnerable lock into
+      // main fails before it gets there.
+      final dependabot = File('.github/dependabot.yml').readAsStringSync();
+      expect(dependabot, contains('package-ecosystem: pub'),
+          reason: 'pub is the ecosystem this repo ships from');
+      expect(dependabot, contains('package-ecosystem: github-actions'),
+          reason: 'pinned action versions drift too');
+      expect("target-branch: dev".allMatches(dependabot).length, 2,
+          reason: 'both lanes follow the PRs-into-dev rule, CONVENTIONS.md');
+      expect("interval: weekly".allMatches(dependabot).length, 2,
+          reason: 'both lanes refresh weekly, not fine-grained noise');
+    });
+
+    test('deps-audit.yml scans pubspec.lock against OSV, pinned binary', () {
+      // The scanner itself must not become the vulnerability: it is pinned
+      // version+sha256 the same way git-cliff is in ci.yml. And the gate is
+      // source+all: pubspec.lock is what production resolves, which is ALSO
+      // what the pre-push hook and CONVENTIONS.md tell agents to scan with
+      // tool/deps.sh — one lock, one truth.
+      final audit = File('.github/workflows/deps-audit.yml').readAsStringSync();
+      expect(audit, contains('osv-scanner/releases/download/'),
+          reason: 'the scanner is downloaded from its official release page');
+      expect(audit, contains('OSV_SCANNER_SHA256: '),
+          reason: 'the binary is sha256-verified before use');
+      expect(audit, contains('sha256sum -c -'), reason: '…and the verification actually runs');
+      expect(audit, contains('scan --lockfile='),
+          reason: 'the scan covers the lockfile production resolves');
+      expect(audit, contains('cron: '),
+          reason: 'staleness cannot rely on someone remembering to look');
+      final paths = RegExp(r'pull_request:[\s\S]*?branches: \[main\]');
+      expect(paths.hasMatch(audit), isTrue,
+          reason: 'a dependency PR into main runs the scan before it ships');
+    });
+
+    test('the prune allowlist covers the bots that now open PRs', () {
+      // Dependabot PRs merge into dev like any task branch; if the pruner
+      // ignored them its cleanup promise silently half-applied.
+      final pruner = File('.github/workflows/prune-branch.yml').readAsStringSync();
+      expect(pruner, contains('dependabot/*'),
+          reason: 'merged dependabot branches must clean up too');
     });
   });
 }
