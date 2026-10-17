@@ -364,4 +364,53 @@ void main() {
       expect(client.capacity, 2);
     });
   });
+
+  test('sending a GIF carries the url and caption in the chat intent', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+      client.connect();
+      async.flushMicrotasks();
+
+      client.sendGif('https://media.tenor.com/x/abc.gif', caption: 'look');
+      async.flushMicrotasks();
+      expect(factory.last.sent.last, {
+        'type': 'chat',
+        'text': 'look',
+        'gif': 'https://media.tenor.com/x/abc.gif',
+      });
+    });
+  });
+
+  test('an incoming chat GIF lands in the feed as a ChatLine', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+      client.connect();
+      async.flushMicrotasks();
+
+      factory.last.serverAdd({
+        'type': 'chat',
+        'from': 'Bo',
+        'gif': 'https://media.tenor.com/y/def.gif',
+      });
+      factory.last.serverAdd({
+        'type': 'chat',
+        'from': 'Ana',
+        'text': 'nice',
+        'gif': 'https://media.tenor.com/z/ghi.gif',
+      });
+      async.flushMicrotasks();
+
+      final [gifOnly, captioned] = client.chat.toList();
+      expect(gifOnly.from, 'Bo');
+      expect(gifOnly.text, isEmpty);
+      expect(gifOnly.gif, 'https://media.tenor.com/y/def.gif');
+      expect(captioned.from, 'Ana');
+      expect(captioned.text, 'nice');
+      expect(captioned.gif, 'https://media.tenor.com/z/ghi.gif');
+    });
+  });
 }

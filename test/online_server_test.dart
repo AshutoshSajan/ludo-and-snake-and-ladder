@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
+import 'package:game_club/server/tenor.dart' show tenorHandler;
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
@@ -43,6 +44,8 @@ import '../bin/server.dart'
         roomRegistry,
         instanceId,
         serverEnv,
+        tenorApiKey,
+        tenorHttp,
         webDir,
         advertiseRoom;
 
@@ -608,6 +611,66 @@ void main() {
       }
       expect(room.started, isFalse, reason: 'chat must not start a game');
     });
+
+    test('a GIF line carries the https url and an optional caption', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {
+          'type': 'chat',
+          'text': 'look at this',
+          'gif': 'https://media.tenor.com/x/abc.gif',
+        },
+      );
+      final line = _lastSent(log, 'chat')!;
+      expect(line['gif'], 'https://media.tenor.com/x/abc.gif');
+      expect(line['text'], 'look at this');
+    });
+
+    test('a GIF with no caption still reads as a message', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+
+      auth.handleIntent(
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'chat', 'text': '', 'gif': 'https://tenor.com/g.gif'},
+      );
+      final line = _lastSent(log, 'chat')!;
+      expect(line['gif'], 'https://tenor.com/g.gif');
+    });
+
+    test('non-https or broken GIF links are refused', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+      for (final bad in [
+        'http://insecure.example/x.gif', // plain http is mixed content on web
+        'javascript:alert(1)', // no https scheme — junk
+        '//cdn.example/x.gif', // scheme-less, no host parse
+        'https://spaces are not a url.gif', // a space is a typo, not a link
+        'https://${'a' * 2000}.gif', // oversized
+      ]) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'chat', 'text': '', 'gif': bad},
+        );
+      }
+      // No broadcast carries any GIF at all.
+      for (final m
+          in log.map((j) => jsonDecode(j) as Map<String, dynamic>)) {
+        expect(m['gif'], isNull, reason: 'refused links must not broadcast');
+      }
+    });
   });
 
   group('GameAuthority: gameplay', () {
@@ -767,6 +830,11 @@ void main() {
       final handler = const shelf.Pipeline().addHandler((req) {
         if (req.url.path == 'ws') return wsHandler()(req);
         if (req.url.path == 'stats') return statsHandler(req);
+        // Same wiring as production: the key (blank in tests unless a test
+        // sets it) gates the proxy.
+        if (req.url.path == 'media/tenor') {
+          return tenorHandler(req, apiKey: tenorApiKey, client: tenorHttp);
+        }
         return shelf.Response.ok('ok');
       });
       srv = await shelf_io.serve(handler, InternetAddress.loopbackIPv4, 0);
@@ -975,8 +1043,7 @@ void main() {
       },
     );
 
-    test('/stats counts live WebSockets and drops them after close', () async {
-      // The test binding stubs every HTTP client with empty 400 responses
+    test('/stats counts live WebSockets and drops them after close', () async {      // The test binding stubs every HTTP client with empty 400 responses
       // via a global HttpOverrides; a zone-local no-op override opts back
       // into real networking (the base createHttpClient builds the real
       // HttpClient) without touching the global mock.
@@ -1014,6 +1081,21 @@ void main() {
         before,
         reason: 'closing the socket must decrement the gauge',
       );
+    });
+
+    test('/media/tenor without a key is a JSON 503, no upstream call', () async {
+      // A keyless deployment's picker degrades to paste-a-link; the route
+      // must still answer as JSON so the client surfaces the reason.
+      final resp = await HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
+        () => http.get(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/tenor?q=dice'),
+        ),
+        _RealHttpOverrides(),
+      );
+      expect(resp.statusCode, 503);
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      expect(body['ok'], isFalse);
+      expect((body['text'] as String).isNotEmpty, isTrue);
     });
 
     test('hello -> joined -> lobby -> start -> state, full protocol', () async {

@@ -290,6 +290,22 @@ class Room {
 
 /// Server-side game logic shared by the transport layer (websockets) and
 /// tests (direct function calls).
+/// Chat messages may carry a GIF: a single https URL shown inline by the
+/// clients. The gate is deliberately narrow — https only (a plain http
+/// image is mixed content on the hosted site and renders broken), no
+/// spaces/control characters (a URL with a space is a typo, not a share),
+/// and a hard length cap. Anything else is silently dropped: a chat feed
+/// is not a foreign-body parser.
+String? _chatGif(Object? raw) {
+  final value = raw as String?;
+  if (value == null || value.isEmpty) return null;
+  final url = Uri.tryParse(value.trim());
+  if (url == null || url.scheme != 'https' || url.host.isEmpty) return null;
+  if (value.length > 2000) return null;
+  if (value.contains(RegExp(r'\s'))) return null;
+  return value;
+}
+
 class GameAuthority {
   GameAuthority({
     Random? rng,
@@ -596,8 +612,17 @@ class GameAuthority {
     switch (msg['type'] as String?) {
       case 'chat':
         final text = (msg['text'] as String? ?? '').trim();
-        if (text.isEmpty || text.length > 200) return;
-        room.broadcast({'type': 'chat', 'from': member.name, 'text': text});
+        final gif = _chatGif(msg['gif'] as String?);
+        // A line is either a sentence, a GIF, or both (a GIF plus a
+        // caption). Nothing at all is not a message.
+        if (text.isEmpty && gif == null) return;
+        if (text.length > 200) return;
+        room.broadcast({
+          'type': 'chat',
+          'from': member.name,
+          'text': text,
+          'gif': ?gif,
+        });
         return;
 
       case 'autoplay':

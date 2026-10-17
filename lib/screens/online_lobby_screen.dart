@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import '../ui/page_app_bar.dart';
+import '../ui/shared/chat_line_view.dart';
+import '../ui/shared/gif_picker_sheet.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../services/online_client.dart';
@@ -637,17 +639,20 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         for (final line in client.chat.reversed.take(6))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(
-              '${line.from}: ${line.text}',
-              style: TextStyle(
-                color: AppColors.ivory.withAlpha(200),
-                fontSize: 13,
-              ),
-            ),
+            child: ChatLineView(line: line, compact: true),
           ),
         if (!spectating)
           Row(
             children: [
+              IconButton(
+                icon: const Icon(Icons.gif_box, color: AppColors.gold),
+                tooltip: 'Send a GIF',
+                onPressed: () => GifPickerSheet.show(
+                  context,
+                  serverUrl: client.serverUrl,
+                  onPick: (url) => client.sendGif(url),
+                ),
+              ),
               Expanded(
                 child: TextField(
                   controller: _chatCtrl,

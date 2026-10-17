@@ -20,6 +20,23 @@ import '../engine/snakes/snakes_engine.dart';
 /// playing for them, or they have walked out.
 enum SeatStatus { connected, auto, left }
 
+/// One table-chat line: a sentence, and/or an inline GIF someone shared.
+/// The `gif` is the full-resolution https URL; the room's server refuses
+/// anything else (see `_chatGif`), so this is trustworthy to render.
+class ChatLine {
+  const ChatLine({required this.from, this.text = '', this.gif});
+
+  factory ChatLine.fromJson(Map<String, dynamic> j) => ChatLine(
+    from: j['from'] as String,
+    text: j['text'] as String? ?? '',
+    gif: j['gif'] as String?,
+  );
+
+  final String from;
+  final String text;
+  final String? gif;
+}
+
 /// One lobby seat as reported by the server.
 class LobbySeat {
   LobbySeat({
@@ -406,7 +423,7 @@ class OnlineClient extends ChangeNotifier {
   int _seenRollSeq = 0;
 
   /// Fire-and-forget chat lines: (from, text).
-  final chat = <({String from, String text})>[];
+  final chat = <ChatLine>[];
 
   /// Set when the server announces a walk-out, cleared by [clearLeftNotice]
   /// once the screen has shown it. Kept on the client rather than folded into
@@ -772,7 +789,7 @@ class OnlineClient extends ChangeNotifier {
         started = true;
         status = OnlineStatus.playing;
       case 'chat':
-        final line = (from: msg['from'] as String, text: msg['text'] as String);
+        final line = ChatLine.fromJson(msg);
         chat.add(line);
         // Unread only accumulates while the chat surface is closed. A message
         // that arrives while the reader is looking at it is read by
@@ -827,7 +844,7 @@ class OnlineClient extends ChangeNotifier {
 
   /// Fired for each incoming chat line, with its sender and text, so the
   /// screen can raise a notification and repaint the unread dot.
-  void Function(({String from, String text}) message)? onChat;
+  void Function(ChatLine message)? onChat;
 
   /// Whether the chat surface is on screen. The sheet sets this while it is
   /// open; the client only needs it to decide whether an arriving line is
@@ -841,7 +858,7 @@ class OnlineClient extends ChangeNotifier {
   /// Called for each line that arrives while the chat is closed, so the view
   /// can play the notification. Separate from [onChat] on purpose: [onChat]
   /// fires for every line, and only the unread ones should make a noise.
-  void Function(({String from, String text}) message)? onMessageArrived;
+  void Function(ChatLine message)? onMessageArrived;
 
   /// Show the chat. Reading and opening are the same act, so opening clears
   /// the unread count immediately rather than waiting for the sheet to close.
@@ -869,6 +886,12 @@ class OnlineClient extends ChangeNotifier {
   void sendSnakesMove() => _spectating ? _noop() : _send({'type': 'move'});
   void sendChat(String text) =>
       _spectating ? _noop() : _send({'type': 'chat', 'text': text});
+
+  /// Sends a GIF chat line: the GIF's https URL, optionally with a caption
+  /// (both go over the same 'chat' intent).
+  void sendGif(String url, {String caption = ''}) => _spectating
+      ? _noop()
+      : _send({'type': 'chat', 'text': caption.trim(), 'gif': url});
 
   /// Hand the seat to the table. The decision lives on the server, so the
   /// table keeps playing our turn when this tab is closed, the phone is

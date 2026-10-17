@@ -17,12 +17,12 @@
 ///   {type: 'start'}
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
-///   {type: 'chat', text}
+///   {type: 'chat', text, gif?}  gif is an https image URL (text may be empty)
 /// Server -> client:
 ///   {type: 'joined', code, color, game}
-///   {type: 'lobby', seats: [{name, color}...]}
+///   {type: 'lobby', capacity, seats: [{name, color}...]}
 ///   {type: 'state', game, state: LudoStateJson | SnakesStateJson}
-///   {type: 'chat', from, text}
+///   {type: 'chat', from, text, gif?}
 ///   {type: 'error', text}
 library;
 
@@ -40,8 +40,10 @@ import 'package:game_club/server/admin_store.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
+import 'package:game_club/server/tenor.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
+import 'package:http/http.dart' as http;
 
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
@@ -54,6 +56,14 @@ AdminStore adminStore = AdminStore.inMemory();
 /// Bearer token guarding /admin/*. Empty = admin disabled (all denied).
 /// Set via ADMIN_TOKEN env. Not final so tests can set it.
 String adminToken = '';
+
+/// Tenor API key backing the chat GIF picker's search. Empty = search off:
+/// the picker then offers paste-a-link only. Set via TENOR_API_KEY env.
+/// Not final so tests can set it.
+String tenorApiKey = '';
+
+/// Outbound client for the Tenor proxy. Swappable for tests.
+http.Client tenorHttp = http.Client();
 
 /// Not final so tests can swap in an in-memory store. main() replaces this
 /// with the Turso store (when TURSO_DATABASE_URL is set) or the file-backed
@@ -1168,6 +1178,10 @@ Future<void> main(List<String> args) async {
       ? env['INSTANCE_ID']!.trim()
       : instanceId;
 
+  // GIF search for table chat: without a key the picker degrades to
+  // paste-a-link (see lib/server/tenor.dart).
+  tenorApiKey = (env['TENOR_API_KEY'] ?? '').trim();
+
   // Persistence for production runs: a hosted Turso database when
   // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
   // survives on ephemeral hosts), otherwise the local SQLite file. Tests
@@ -1275,6 +1289,12 @@ Future<void> main(List<String> args) async {
             return roomLookupHandler(req);
           case 'health':
             return healthHandler(req);
+          case 'media/tenor':
+            return tenorHandler(
+              req,
+              apiKey: tenorApiKey,
+              client: tenorHttp,
+            );
           case 'admin/status':
             return adminStatusHandler(req);
           case 'admin/me':

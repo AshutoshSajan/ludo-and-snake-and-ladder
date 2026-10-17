@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/online_client.dart';
 import '../theme.dart';
+import 'chat_line_view.dart';
+import 'gif_picker_sheet.dart';
 
 /// In-game chat, as a sheet over the board.
 ///
@@ -107,6 +109,18 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
               child: Row(
                 children: [
+                  IconButton(
+                    icon: const Icon(
+                      Icons.gif_box,
+                      color: AppColors.gold,
+                    ),
+                    tooltip: 'Send a GIF',
+                    onPressed: () => GifPickerSheet.show(
+                      context,
+                      serverUrl: widget.client.serverUrl,
+                      onPick: (url) => widget.client.sendGif(url),
+                    ),
+                  ),
                   Expanded(child: _inputField()),
                   const SizedBox(width: 10),
                   IconButton.filled(
@@ -142,7 +156,7 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     );
   }
 
-  Widget _history(List<({String from, String text})> lines) {
+  Widget _history(List<ChatLine> lines) {
     if (lines.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
@@ -159,27 +173,11 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
       shrinkWrap: true,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: lines.length,
-      itemBuilder: (_, i) {
-        final line = lines[lines.length - 1 - i];
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: RichText(
-            text: TextSpan(
-              style: const TextStyle(color: AppColors.ivory, fontSize: 14),
-              children: [
-                TextSpan(
-                  text: '${line.from}: ',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.gold,
-                  ),
-                ),
-                TextSpan(text: line.text),
-              ],
-            ),
+      itemBuilder: (_, i) =>
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: ChatLineView(line: lines[lines.length - 1 - i]),
           ),
-        );
-      },
     );
   }
 }
