@@ -24,6 +24,8 @@ import 'ludo_token_layer.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/bug_report_sheet.dart';
+import '../../services/server_url.dart';
 
 /// Full Ludo game screen: board, tokens, dice, HUD and pause menu.
 class LudoGameView extends ConsumerStatefulWidget {
@@ -407,6 +409,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             icon: const Icon(Icons.pause),
             onPressed: _showPauseMenu,
             tooltip: 'Pause / players',
+          ),
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: 'Report an issue',
+            onPressed: () => BugReportSheet.show(
+              context,
+              serverUrl: widget.onlineClient?.serverUrl ?? defaultServerUrl(),
+              seatId: widget.onlineClient?.seatId,
+            ),
           ),
         ],
       ),
