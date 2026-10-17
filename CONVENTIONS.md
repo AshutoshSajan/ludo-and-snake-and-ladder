@@ -223,6 +223,48 @@ committed `.greptile/config.json` (`{"includeBranches": ["main"]}`). Notes:
 
 ---
 
+## 🎨 Product craft — UX is part of done
+
+A feature is not finished when the tests pass; it is finished when the
+player can use it without puzzling over anything. Implementation that only
+works "when everything goes right" is an incomplete feature, and a UX
+complaint is fixed with the same severity discipline as a crash. Every
+player-facing change answers all of these before its PR opens:
+
+- **Every state is designed.** Loading (progress on the actual action),
+  empty ("No messages yet — say hi"), error (what happened, plus a retry),
+  and offline ("Reconnecting…"). No white rectangles, no raw exception
+  text, no spinner that can spin forever.
+- **Every tap answers.** Controls acknowledge instantly (ripple/pressed
+  state); networked actions disable their button and show progress while
+  waiting so they cannot double-fire — waiting without feedback reads as
+  a frozen app.
+- **No dead ends.** From any screen there is a way forward or back.
+  Destructive actions (leave a table, admin deletes) confirm first, with
+  the consequence spelled out in the button's own wording.
+- **Copy is player-facing.** Brief, friendly, plain language; errors name
+  the fix ("Room code not found — check the four letters"), never the
+  machine ("Bad request: 400").
+- **Accessible by default.** Touch targets ≥ 44 logical px, contrast that
+  survives outdoors, a label or `Semantics` on every icon-only button, and
+  color never the *only* signal (seat colors also carry player names).
+- **One visual language.** New screens reuse the shared widgets
+  (chat bubbles, sheets, buttons) and the existing palette and spacing;
+  a bespoke second way to do the same thing is a review finding.
+- **Motion serves comprehension.** Purposeful, short animations (a dice
+  roll, a mover hop, a bubble arriving) at 150–300 ms; nothing decorative,
+  and the platform's reduced-motion setting is respected.
+- **Try the flow, not only the function.** Run the affected screens once
+  before pushing, and pin new UI states with widget tests (the chat-bubble
+  suite is the pattern to extend).
+
+**The UX signal loop is a first-class lane:** in-app player reports
+(`BugReportSheet` → the server's `feedback` route) land in the admin
+dashboard triage; recurring report themes are treated as UX defects with a
+fix branch like any other bug.
+
+---
+
 ## ✅ Pull-request checklist
 
 1. Branch cut **from `dev`**, prefixed `feat/|fix/|chore/|docs/|ci/|test/|perf/|refactor/|release/`.
@@ -234,3 +276,6 @@ committed `.greptile/config.json` (`{"includeBranches": ["main"]}`). Notes:
 5. `gh pr create --base dev` — never `--base main`.
 6. New or bumped dependencies pass `tool/deps.sh` (OSV scan + outdated
    report); `deps-audit.yml` re-checks and blocks a known-vulnerable lock.
+7. Player-facing changes meet the [Product craft](#-product-craft--ux-is-part-of-done)
+   bar: designed states, acknowledged taps, player-facing copy,
+   accessibility, one visual language.
