@@ -18,7 +18,7 @@ import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
 import '../engine/snakes/snakes_engine.dart' as snakes;
 import 'leaderboard_store.dart';
-import 'voice_notes.dart';
+import 'media.dart';
 
 /// One connected participant.
 class ServerMember {
@@ -329,15 +329,16 @@ String? _chatGif(Object? raw) {
 /// A voice note rides the intent as its uploaded id and becomes a
 /// broadcast url from the store's own record. An id for a note that was
 /// never uploaded — to this room, on this instance — is dropped: chat
-/// carries nothing a room's own uploads cannot explain.
-VoiceNote? _chatNote(
-  VoiceNoteStore store,
+/// carries nothing a room's own uploads cannot explain. Only the voice
+/// kind is addressable here; a keyboard image goes the `'gif'` route.
+MediaNote? _chatNote(
+  MediaNoteStore store,
   String roomCode,
   Map<String, dynamic> msg,
 ) {
   final id = msg['note'] as String?;
-  if (id == null || id.isEmpty || !voiceNoteIdPattern.hasMatch(id)) return null;
-  return store.get(roomCode, id);
+  if (id == null || id.isEmpty || !mediaNoteIdPattern.hasMatch(id)) return null;
+  return store.get(MediaKind.voice, roomCode, id);
 }
 
 class GameAuthority {
@@ -349,16 +350,17 @@ class GameAuthority {
     this.onRoomStarted,
     this.onGameFinished,
     this.autoStepDelay = const Duration(milliseconds: 800),
-    VoiceNoteStore? voiceNotes,
+    MediaNoteStore? mediaNotes,
   }) : rng = rng ?? Random.secure(),
-       voiceNotes = voiceNotes ?? VoiceNoteStore();
+       mediaNotes = mediaNotes ?? MediaNoteStore();
 
   final Random rng;
 
-  /// Chat voice-note store: uploads land here and wait to be announced
-  /// through a chat line. One authority per process owns one shared
-  /// store, matching how the rooms themselves live per-instance.
-  final VoiceNoteStore voiceNotes;
+  /// Chat media store: voice-note uploads land here and wait to be
+  /// announced through a chat line; keyboard-image uploads share the
+  /// same budget. One authority per process owns one shared store,
+  /// matching how the rooms themselves live per-instance.
+  final MediaNoteStore mediaNotes;
 
   /// How long a started room with no connected members stays recoverable.
   final Duration emptyRoomGrace;
@@ -654,7 +656,7 @@ class GameAuthority {
       case 'chat':
         final text = (msg['text'] as String? ?? '').trim();
         final gif = _chatGif(msg['gif'] as String?);
-        final note = _chatNote(voiceNotes, room.code, msg);
+        final note = _chatNote(mediaNotes, room.code, msg);
         // A line is any of a sentence, a GIF, a voice note — or a caption
         // riding one. Nothing at all is not a message.
         if (text.isEmpty && gif == null && note == null) return;

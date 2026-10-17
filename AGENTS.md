@@ -36,6 +36,12 @@ every edit, every commit, every push.
 9. **Dependencies**: when adding or bumping packages, run
    `tool/deps.sh` first — a `pubspec.lock` with a known-vulnerable version
    never merges (`deps-audit.yml` re-checks it in CI).
+10. **UX is part of done** for anything player-facing: design every state
+    (loading/empty/error/offline), acknowledge every tap, phrase errors
+    with the fix, label icon-only buttons and keep touch targets ≥ 44 px,
+    and reuse the shared widgets instead of a second bespoke pattern. Run
+    the affected screens once before pushing — the full bar is
+    **[CONVENTIONS.md](CONVENTIONS.md) → "Product craft"**.
 
 ## Command map
 

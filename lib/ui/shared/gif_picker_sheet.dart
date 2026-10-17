@@ -1,18 +1,22 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../../services/gif_search.dart';
 import '../theme.dart';
 
-/// The GIF picker: search (through the game server's Tenor proxy) with a
-/// paste-a-link fallback that needs no API key at all.
+/// The GIF picker: trending-first search (through the game server's
+/// provider-neutral proxy) with a paste-a-link fallback that needs no
+/// API key at all.
 ///
-/// Why the fallback is a first-class citizen rather than an error state:
-/// `/media/tenor` answers 503 on servers without `TENOR_API_KEY` — that is
-/// configuration, not breakage — so the sheet presents the link path as the
-/// remaining way to share, with the reason spelled out.
+/// Why the fallback is a first-class citizen rather than an error
+/// state: `/media/gif` answers 503 on servers without a provider key —
+/// that is configuration, not breakage — so the sheet presents the link
+/// path as the remaining way to share, with the reason spelled out.
+///
+/// The sheet opens on the provider's trending feed so the first screen
+/// is content, not a dead prompt; searching swaps to results, and a
+/// load-more row keeps pulling pages back from the cursor the server
+/// remembers per provider.
 class GifPickerSheet extends StatefulWidget {
   const GifPickerSheet({
     super.key,
@@ -23,12 +27,12 @@ class GifPickerSheet extends StatefulWidget {
 
   final String serverUrl;
 
-  /// Called with the chosen GIF's full-resolution URL. The caller owns the
-  /// send (and any feedback), so the sheet stays a pure picker.
+  /// Called with the chosen GIF's full-resolution URL. The caller owns
+  /// the send (and any feedback), so the sheet stays a pure picker.
   final void Function(String url) onPick;
 
   /// Injectable transport for tests; production uses the default `http`
-  /// client against the game server's `/media/tenor`.
+  /// client against the game server's `/media/gif`.
   final http.Client? httpClient;
 
   static Future<void> show(
@@ -58,8 +62,18 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
   final _linkCtrl = TextEditingController();
 
   List<GifItem>? _results;
+  String? _next;
+  String _provider = '';
+  bool _loadingMore = false;
   String? _error;
-  bool _searching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // The first screen is the provider's trending feed: content before
+    // any typing, on the sheet's one designed fetch.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fetch());
+  }
 
   @override
   void dispose() {
@@ -68,45 +82,62 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
     super.dispose();
   }
 
-  Future<void> _runSearch() async {
+  /// One page, trending or searched. With a cursor this is a
+  /// load-more: results append instead of replacing, so a player never
+  /// loses their place in the grid.
+  Future<void> _fetch() async {
+    if (_loadingMore) return;
     final query = _searchCtrl.text.trim();
-    if (query.isEmpty || _searching) return;
+    final cursor = _next;
     setState(() {
-      _searching = true;
-      _error = null;
+      _loadingMore = true;
+      if (cursor == null) _error = null;
     });
     try {
-      final results = await searchGifs(
+      final page = await searchGifsPage(
         widget.serverUrl,
         query,
+        pos: cursor,
         httpClient: widget.httpClient,
       );
       if (!mounted) return;
       setState(() {
-        _results = results;
-        _searching = false;
-        if (results.isEmpty) _error = 'Nothing found — try another word';
+        _provider = page.provider;
+        _next = page.next;
+        _results = cursor == null
+            ? page.gifs
+            : [...?_results, ...page.gifs];
+        _loadingMore = false;
+        if (_results!.isEmpty && cursor == null) {
+          _error = 'Nothing found — try another word';
+        }
       });
     } on GifSearchException catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.text;
-        _results = null;
-        _searching = false;
+        _loadingMore = false;
+        if (cursor == null) _results = null;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _error = 'GIF search failed — paste an image link instead';
-        _results = null;
-        _searching = false;
+        _loadingMore = false;
+        if (cursor == null) _results = null;
       });
     }
   }
 
+  void _runSearch() {
+    if (_loadingMore) return;
+    setState(() => _next = null);
+    _fetch();
+  }
+
   /// A pasted link only needs to be a usable https image URL; the room's
-  /// server applies the same https check, so this is a pre-flight mirror of
-  /// it, not the authority.
+  /// server applies the same https check, so this is a pre-flight mirror
+  /// of it, not the authority.
   bool get _linkLooksValid {
     final value = _linkCtrl.text.trim();
     if (value.isEmpty) return false;
@@ -186,12 +217,12 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
                 IconButton(
                   icon: const Icon(Icons.search, color: AppColors.gold),
                   tooltip: 'Search',
-                  onPressed: _searching ? null : _runSearch,
+                  onPressed: _runSearch,
                 ),
               ],
             ),
           ),
-          if (_searching)
+          if (_results == null && _error == null && _loadingMore)
             const Padding(
               padding: EdgeInsets.all(24),
               child: CircularProgressIndicator(),
@@ -217,7 +248,33 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
                       for (final item in _results!) _GifTile(item: item, onPick: _pickResult),
                     ],
                   ),
+                  // Load more rides the server's opaque cursor; gone when
+                  // the provider runs out of pages.
+                  if (_next != null || _loadingMore) ...[
+                    const SizedBox(height: 12),
+                    Center(
+                      child: _loadingMore
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : OutlinedButton.icon(
+                              icon: const Icon(Icons.expand_more, size: 16),
+                              label: const Text('More GIFs'),
+                              onPressed: _fetch,
+                            ),
+                    ),
+                  ],
+                  // Provider attribution lives inside the content area,
+                  // the spot the attribution guides call out.
                   const SizedBox(height: 12),
+                  Center(
+                    child: Text(
+                      _provider.isEmpty ? '' : 'Powered by $_provider',
+                      style: const TextStyle(color: Colors.white38, fontSize: 10),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -265,7 +322,7 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
   }
 }
 
-/// One search result: the still preview, tap to send.
+/// One search result: the animated preview, tap to send.
 class _GifTile extends StatelessWidget {
   const _GifTile({required this.item, required this.onPick});
 

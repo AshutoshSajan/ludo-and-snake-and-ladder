@@ -68,11 +68,11 @@ import 'package:game_club/server/admin_store.dart';
 import 'package:game_club/server/admin_tables.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/friend_store.dart';
+import 'package:game_club/server/gif.dart';
 import 'package:game_club/server/leaderboard_store.dart';
+import 'package:game_club/server/media.dart';
 import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
-import 'package:game_club/server/tenor.dart';
-import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
 import 'package:http/http.dart' as http;
@@ -94,13 +94,14 @@ ReportStore reportStore = ReportStore.inMemory();
 /// Set via ADMIN_TOKEN env. Not final so tests can set it.
 String adminToken = '';
 
-/// Tenor API key backing the chat GIF picker's search. Empty = search off:
-/// the picker then offers paste-a-link only. Set via TENOR_API_KEY env.
-/// Not final so tests can set it.
-String tenorApiKey = '';
+/// The configured GIF provider behind the chat GIF picker — chosen at
+/// startup from KLIPY_API_KEY / GIPHY_API_KEY (+ the optional
+/// GIF_PROVIDER pin). Null = search off: the picker then offers
+/// paste-a-link only. Not final so tests can swap it.
+GifProvider? gifProvider;
 
-/// Outbound client for the Tenor proxy. Swappable for tests.
-http.Client tenorHttp = http.Client();
+/// Outbound client for GIF-provider calls. Swappable for tests.
+http.Client gifHttp = http.Client();
 
 /// Not final so tests can swap in an in-memory store. main() replaces this
 /// with the Turso store (when TURSO_DATABASE_URL is set) or the file-backed
@@ -2000,9 +2001,14 @@ Future<void> main(List<String> args) async {
       ? env['INSTANCE_ID']!.trim()
       : instanceId;
 
-  // GIF search for table chat: without a key the picker degrades to
-  // paste-a-link (see lib/server/tenor.dart).
-  tenorApiKey = (env['TENOR_API_KEY'] ?? '').trim();
+  // GIF search for table chat: the provider layer picks Klipy or GIPHY
+  // from the environment (GIF_PROVIDER pins one explicitly). Without
+  // any key the picker degrades to paste-a-link (see lib/server/gif.dart).
+  gifProvider = selectGifProvider(
+    klipyKey: (env['KLIPY_API_KEY'] ?? '').trim(),
+    giphyKey: (env['GIPHY_API_KEY'] ?? '').trim(),
+    preferred: env['GIF_PROVIDER'] ?? '',
+  );
 
   // Persistence for production runs: a hosted Turso database when
   // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
@@ -2109,18 +2115,26 @@ Future<void> main(List<String> args) async {
       .addMiddleware(corsMiddleware)
       .addMiddleware(jsonErrorMiddleware)
       .addHandler((req) async {
-        // Voice notes: the upload (fresh bytes into a live room's store)
+        // Chat media: the uploads (fresh bytes into a live room's store)
         // and the playback (a stored note out again) are path-family
         // routes — the id lives in the path, not the switch's labels.
         if (req.url.path == 'media/voice') {
           return voiceNoteUpload(
             req,
-            store: authority.voiceNotes,
+            store: authority.mediaNotes,
             roomIsLive: authority.rooms.containsKey,
           );
         }
-        if (req.url.path.startsWith('media/voice/')) {
-          return voiceNoteServe(req, store: authority.voiceNotes);
+        if (req.url.path == 'media/image') {
+          return imageNoteUpload(
+            req,
+            store: authority.mediaNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/') ||
+            req.url.path.startsWith('media/image/')) {
+          return mediaNoteServe(req, store: authority.mediaNotes);
         }
         switch (req.url.path) {
           case 'ws':
@@ -2133,8 +2147,11 @@ Future<void> main(List<String> args) async {
             return roomLookupHandler(req);
           case 'health':
             return healthHandler(req);
+          case 'media/gif':
+          // Compat alias for clients already shipped on the Tenor era —
+          // the same provider serves them; nothing client-side breaks.
           case 'media/tenor':
-            return tenorHandler(req, apiKey: tenorApiKey, client: tenorHttp);
+            return gifSearchHandler(req, provider: gifProvider);
           case 'feedback':
             return feedbackCreateHandler(req);
           case 'friends/state':

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import '../ui/page_app_bar.dart';
 import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/gif_picker_sheet.dart';
+import '../ui/shared/keyboard_content.dart';
 import '../ui/shared/note_composer.dart';
 import '../ui/shared/voice_button.dart';
 
@@ -719,6 +720,17 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                     controller: _chatCtrl,
                     style: const TextStyle(color: AppColors.ivory),
                     onSubmitted: (_) => _sendChat(client),
+                    // Same keyboard-GIF story the table chat sheet has:
+                    // one insertion behavior across every chat surface.
+                    contentInsertionConfiguration: keyboardGifInsertion(
+                      send: ({required bytes, required mime}) =>
+                          client.sendKeyboardGif(bytes: bytes, mime: mime),
+                      sendLink: client.sendGif,
+                      onError: (message) =>
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(message)),
+                          ),
+                    ),
                     decoration: InputDecoration(
                       labelText: 'Say something…',
                       labelStyle: const TextStyle(color: AppColors.ivory),
