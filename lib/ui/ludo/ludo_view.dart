@@ -376,26 +376,32 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             VoiceButton(client: widget.onlineClient!),
             MicButton(client: widget.onlineClient!),
           ],
-          IconButton(
-            icon: const Icon(Icons.undo),
-            tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
-            onPressed: session.canUndo
-                ? () {
-                    Haptics.light();
-                    setState(() => _hintToken = null);
-                    session.undo();
-                  }
-                : null,
-          ),
-          IconButton(
-            icon: const Icon(Icons.lightbulb_outline),
-            tooltip: _hintToken == null
-                ? 'Hint (best move)'
-                : 'Hint shown — tap a glowing pawn',
-            onPressed: session.canHint
-                ? () => setState(() => _hintToken = session.hintTokenIndex())
-                : null,
-          ),
+          // Undo and hint are device-local conveniences for a turn nobody
+          // else is watching; online play is server-authoritative, so a
+          // disabled undo telling you "nothing to undo" is just clutter —
+          // they only render for local tables.
+          if (widget.onlineClient == null) ...[
+            IconButton(
+              icon: const Icon(Icons.undo),
+              tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
+              onPressed: session.canUndo
+                  ? () {
+                      Haptics.light();
+                      setState(() => _hintToken = null);
+                      session.undo();
+                    }
+                  : null,
+            ),
+            IconButton(
+              icon: const Icon(Icons.lightbulb_outline),
+              tooltip: _hintToken == null
+                  ? 'Hint (best move)'
+                  : 'Hint shown — tap a glowing pawn',
+              onPressed: session.canHint
+                  ? () => setState(() => _hintToken = session.hintTokenIndex())
+                  : null,
+            ),
+          ],
           IconButton(
             icon: Icon(
               session.autoPlayOn ? Icons.auto_mode : Icons.auto_mode_outlined,
