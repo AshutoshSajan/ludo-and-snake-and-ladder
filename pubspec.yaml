@@ -48,6 +48,15 @@ dependencies:
   sqlite3: ^3.5.2
   http: ^1.6.0
   crypto: ^3.0.0
+  # Table voice chat: WebRTC peer-to-peer audio, signalled over the game's
+  # WebSocket. dart_webrtc + web are the browser side of that glue
+  # (MediaStreamWeb / HTMLAudioElement); both are direct deps because the
+  # voice code imports them itself, not only via flutter_webrtc.
+  flutter_webrtc: ^1.6.2+hotfix.4
+  dart_webrtc: ^1.8.2
+  web: ^1.1.1
+  record: ^7.1.2
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

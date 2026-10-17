@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../services/note_recorder.dart';
 import '../../services/online_client.dart';
 import '../theme.dart';
+import 'chat_line_view.dart';
+import 'gif_picker_sheet.dart';
+import 'note_composer.dart';
 
 /// In-game chat, as a sheet over the board.
 ///
@@ -34,6 +38,10 @@ class GameChatSheet extends ConsumerStatefulWidget {
 class _GameChatSheetState extends ConsumerState<GameChatSheet> {
   final _input = TextEditingController();
 
+  /// True while [NoteComposer] holds the row — the field, GIF and send
+  /// make way for the recording bar.
+  bool _recording = false;
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +71,17 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     _input.clear();
   }
 
+  Future<bool> _sendNote(NoteRecording recording) => widget.client
+      .sendVoiceNote(bytes: recording.bytes, mime: recording.mime, durMs: recording.durMs);
+
+  void _chatError(String message) {
+    // The root ScaffoldMessenger sits above the navigator, so snackbars
+    // work from inside a modal route as well as from the lobby screen.
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final lines = widget.client.chat;
@@ -77,42 +96,40 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 10),
-            Container(
-              width: 42,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Row(
-                children: [
-                  Icon(Icons.forum, size: 18, color: AppColors.gold),
-                  SizedBox(width: 8),
-                  Text(
-                    'Table chat',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 16,
-                      color: AppColors.ivory,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            const _Header(),
             Flexible(child: _history(lines)),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
               child: Row(
                 children: [
-                  Expanded(child: _inputField()),
-                  const SizedBox(width: 10),
-                  IconButton.filled(
-                    icon: const Icon(Icons.send),
-                    onPressed: _send,
-                    tooltip: 'Send',
+                  if (!_recording) ...[
+                    IconButton(
+                      icon: const Icon(
+                        Icons.gif_box,
+                        color: AppColors.gold,
+                      ),
+                      tooltip: 'Send a GIF',
+                      onPressed: () => GifPickerSheet.show(
+                        context,
+                        serverUrl: widget.client.serverUrl,
+                        onPick: (url) => widget.client.sendGif(url),
+                      ),
+                    ),
+                    Expanded(child: _inputField()),
+                    const SizedBox(width: 10),
+                    _sendButton(),
+                  ],
+                  // The composer is the one child that must survive the swap —
+                  // see [NoteComposer]; rebuilding it would kill the mic
+                  // session mid-recording.
+                  Flexible(
+                    child: NoteComposer(
+                      send: _sendNote,
+                      onError: _chatError,
+                      onRecordingChanged: (r) {
+                        if (mounted) setState(() => _recording = r);
+                      },
+                    ),
                   ),
                 ],
               ),
@@ -123,9 +140,25 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     );
   }
 
+  Widget _sendButton() {
+    final enabled = _input.text.trim().isNotEmpty;
+    return IconButton.filled(
+      icon: const Icon(Icons.send),
+      onPressed: enabled ? _send : null,
+      tooltip: 'Send',
+      style: IconButton.styleFrom(
+        backgroundColor: enabled
+            ? AppColors.gold
+            : Colors.white.withValues(alpha: 0.1),
+        foregroundColor: enabled ? AppColors.ink : AppColors.ivory.withValues(alpha: 0.4),
+      ),
+    );
+  }
+
   Widget _inputField() {
     return TextField(
       controller: _input,
+      onChanged: (_) => setState(() {}),
       style: const TextStyle(color: AppColors.ivory),
       textInputAction: TextInputAction.send,
       onSubmitted: (_) => _send(),
@@ -133,23 +166,39 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
         hintText: 'Message the table',
         hintStyle: TextStyle(color: AppColors.ivory.withValues(alpha: 0.5)),
         filled: true,
-        fillColor: AppColors.felt,
+        fillColor: Colors.white.withValues(alpha: 0.07),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(22),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(22),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(22),
+          borderSide: const BorderSide(color: AppColors.gold),
         ),
       ),
     );
   }
 
-  Widget _history(List<({String from, String text})> lines) {
+  Widget _history(List<ChatLine> lines) {
     if (lines.isEmpty) {
       return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Text(
-          'No messages yet.\nSay hello to the table.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white54),
+        padding: EdgeInsets.symmetric(vertical: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.chat_bubble_outline, size: 30, color: Colors.white24),
+            SizedBox(height: 10),
+            Text(
+              'No messages yet.\nSay hello to the table.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.5),
+            ),
+          ],
         ),
       );
     }
@@ -157,29 +206,76 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     return ListView.builder(
       reverse: true,
       shrinkWrap: true,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       itemCount: lines.length,
-      itemBuilder: (_, i) {
-        final line = lines[lines.length - 1 - i];
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: RichText(
-            text: TextSpan(
-              style: const TextStyle(color: AppColors.ivory, fontSize: 14),
-              children: [
-                TextSpan(
-                  text: '${line.from}: ',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.gold,
-                  ),
-                ),
-                TextSpan(text: line.text),
-              ],
-            ),
-          ),
-        );
-      },
+      itemBuilder: (_, i) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: ChatLineView(
+          line: lines[lines.length - 1 - i],
+          myName: widget.client.name,
+        ),
+      ),
     );
   }
 }
+
+/// The sheet's title bar: drag handle, a gold chat chip and the title —
+/// unchanged in meaning from when it was a bare icon row, only set-like.
+class _Header extends StatelessWidget {
+  const _Header();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 42,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 10, 16, 2),
+          child: Row(
+            children: [
+              _ChipIcon(icon: Icons.forum),
+              SizedBox(width: 9),
+              Text(
+                'Table chat',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16,
+                  color: AppColors.ivory,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChipIcon extends StatelessWidget {
+  const _ChipIcon({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 30,
+      height: 30,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppColors.gold.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Icon(icon, size: 17, color: AppColors.gold),
+    );
+  }
+}
+

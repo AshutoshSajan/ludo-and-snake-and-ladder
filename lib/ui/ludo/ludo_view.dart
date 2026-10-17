@@ -12,6 +12,7 @@ import '../../engine/ludo/ludo_models.dart';
 import '../../engine/ludo/ludo_rules.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../shared/voice_button.dart';
 import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
@@ -369,26 +370,40 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
               onPressed: () =>
                   GameChatSheet.show(context, widget.onlineClient!),
             ),
-          IconButton(
-            icon: const Icon(Icons.undo),
-            tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
-            onPressed: session.canUndo
-                ? () {
-                    Haptics.light();
-                    setState(() => _hintToken = null);
-                    session.undo();
-                  }
-                : null,
-          ),
-          IconButton(
-            icon: const Icon(Icons.lightbulb_outline),
-            tooltip: _hintToken == null
-                ? 'Hint (best move)'
-                : 'Hint shown — tap a glowing pawn',
-            onPressed: session.canHint
-                ? () => setState(() => _hintToken = session.hintTokenIndex())
-                : null,
-          ),
+          if (widget.onlineClient != null &&
+              !(widget.onlineClient!.isSpectator)) ...[
+            // Voice is seated-only: a watcher has no seat for the mesh to
+            // address, so no controls rather than a control that answers
+            // "no microphone" misleadingly.
+            VoiceButton(client: widget.onlineClient!),
+            MicButton(client: widget.onlineClient!),
+          ],
+          // Undo and hint are device-local conveniences for a turn nobody
+          // else is watching; online play is server-authoritative, so a
+          // disabled undo telling you "nothing to undo" is just clutter —
+          // they only render for local tables.
+          if (widget.onlineClient == null) ...[
+            IconButton(
+              icon: const Icon(Icons.undo),
+              tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
+              onPressed: session.canUndo
+                  ? () {
+                      Haptics.light();
+                      setState(() => _hintToken = null);
+                      session.undo();
+                    }
+                  : null,
+            ),
+            IconButton(
+              icon: const Icon(Icons.lightbulb_outline),
+              tooltip: _hintToken == null
+                  ? 'Hint (best move)'
+                  : 'Hint shown — tap a glowing pawn',
+              onPressed: session.canHint
+                  ? () => setState(() => _hintToken = session.hintTokenIndex())
+                  : null,
+            ),
+          ],
           IconButton(
             icon: Icon(
               session.autoPlayOn ? Icons.auto_mode : Icons.auto_mode_outlined,

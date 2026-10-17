@@ -15,16 +15,25 @@
 ///   WS   /ws?code=XXXX  -> join/create room, then JSON message protocol
 ///
 /// Client -> server messages:
-///   {type: 'hello', seatId, name, color?, game?, code?, match?}  first
+///   {type: 'hello', seatId, name, color?, game?, code?, match?, players?}  first
 ///   {type: 'start'}
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
-///   {type: 'chat', text}
+///   {type: 'chat', text, gif?, note?}  gif is an https image URL\n///       (text may be empty); note is the id of an uploaded voice note —
+///       see POST /media/voice. Invalid ids/notes are dropped
+///       server-side, never broadcast.
+///   {type: 'voice', k, to, s}  P2P audio signalling: k is one of
+///       offer/answer/ice/hangup, `to` is the target seatId, and `s` the
+///       opaque payload. Routed only between seated members.
 /// Server -> client:
 ///   {type: 'joined', code, color, game}
-///   {type: 'lobby', seats: [{name, color}...]}
+///   {type: 'lobby', capacity, seats: [{name, color}...]}
 ///   {type: 'state', game, state: LudoStateJson | SnakesStateJson}
-///   {type: 'chat', from, text}
+///   {type: 'chat', from, color, text, gif?, note?, at}
+///       from is the sender name, color their seat color ('red'…), note
+///       the voice note {url, dur} when one rides the line, at the epoch
+///       ms it was said — clients use these to paint chat bubbles.
+///   {type: 'voice', k, from, s}  relayed signalling; from is the sender seatId
 ///   {type: 'error', text}
 library;
 
@@ -44,8 +53,11 @@ import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
+import 'package:game_club/server/tenor.dart';
+import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
+import 'package:http/http.dart' as http;
 import 'package:sqlite3/sqlite3.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
@@ -63,6 +75,14 @@ ReportStore reportStore = ReportStore.inMemory();
 /// Bearer token guarding /admin/*. Empty = admin disabled (all denied).
 /// Set via ADMIN_TOKEN env. Not final so tests can set it.
 String adminToken = '';
+
+/// Tenor API key backing the chat GIF picker's search. Empty = search off:
+/// the picker then offers paste-a-link only. Set via TENOR_API_KEY env.
+/// Not final so tests can set it.
+String tenorApiKey = '';
+
+/// Outbound client for the Tenor proxy. Swappable for tests.
+http.Client tenorHttp = http.Client();
 
 /// Not final so tests can swap in an in-memory store. main() replaces this
 /// with the Turso store (when TURSO_DATABASE_URL is set) or the file-backed
@@ -104,6 +124,7 @@ int _connCounter = 0;
 Future<Room> _createClaimedRoom(
   ServerMember host, {
   required String game,
+  int capacity = 4,
 }) async {
   var token = newRegistryToken();
   for (var attempt = 0; attempt < 3; attempt++) {
@@ -115,6 +136,7 @@ Future<Room> _createClaimedRoom(
       final room = authority.createRoom(
         host,
         game: game,
+        capacity: capacity,
       ); // registry down — host locally
       unawaited(
         adminStore
@@ -135,6 +157,7 @@ Future<Room> _createClaimedRoom(
       final room = authority.createRoom(
         host,
         game: game,
+        capacity: capacity,
         code: code,
         registryToken: token,
       );
@@ -255,6 +278,14 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
         final spectate = msg['spectate'] as bool? ?? false;
         final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
         final match = msg['match'] as bool? ?? false;
+        // Table size the host asks to close a created room at (2..4; the
+        // seats are the board's corners). Sent only by room creators —
+        // joiners inherit the room's size, so an absent/odd value or any
+        // join-with-code stays at today's open four-seat default.
+        final players = switch (msg['players']) {
+          final int n when n >= 2 && n <= 4 => n,
+          _ => 4,
+        };
 
         member = ServerMember(
           id: connId,
@@ -301,8 +332,12 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           // room.
           try {
             room =
-                authority.matchExisting(member!, game: game) ??
-                await _createClaimedRoom(member!, game: game);
+                authority.matchExisting(
+                  member!,
+                  game: game,
+                  capacity: players,
+                ) ??
+                await _createClaimedRoom(member!, game: game, capacity: players);
           } on RoomRegistryException catch (_) {
             webSocket.sink.add(
               jsonEncode({
@@ -323,7 +358,11 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           }
         } else if (code.isEmpty) {
           try {
-            room = await _createClaimedRoom(member!, game: game);
+            room = await _createClaimedRoom(
+              member!,
+              game: game,
+              capacity: players,
+            );
           } on RoomRegistryException catch (_) {
             webSocket.sink.add(
               jsonEncode({
@@ -455,6 +494,11 @@ void _lobby(Room room) {
     'type': 'lobby',
     'code': room.code,
     'started': room.started,
+    // Table size the room closes at: the lobby's "Waiting for players…
+    // (n/size)" line reads this. Fine to list next to the roster — a size
+    // never changes after creation, so unlike the seats it cannot disagree
+    // with itself between arrivals.
+    'capacity': room.capacity,
     // The same entries the `seats` feed carries, so whichever of the two
     // arrives last cannot wipe the seat ids and statuses the other one
     // reported — two shapes for one roster is how badges start disappearing
@@ -507,10 +551,13 @@ String get leaderboardBackend {
 }
 
 /// CORS for the read-only JSON API (`/health`, `/leaderboard`, `/stats`,
-/// `/rooms/lookup`): the Flutter web dev server runs on another origin, so
+/// `/rooms/lookup`) and the chat voice-note endpoints (`POST/GET
+/// /media/voice`): the Flutter web dev server runs on another origin, so
 /// without these headers a browser would fetch the data fine and then refuse
 /// to hand the response to the app. WebSockets do not need a preflight, so
-/// `/ws` is unaffected; writes stay rejected with 405, so `*` is safe here.
+/// `/ws` is unaffected; writes stay rejected with 405, so `*` is safe here —
+/// voice-note uploads are the one deliberate POST, gated by size caps and a
+/// live room check rather than auth, matching the room chat they belong to.
 /// No auth or cookies ride on these routes (Turso uses its own Bearer token
 /// server-side), which is exactly the case `*` is meant for.
 ///
@@ -1427,6 +1474,10 @@ Future<void> main(List<String> args) async {
       ? env['INSTANCE_ID']!.trim()
       : instanceId;
 
+  // GIF search for table chat: without a key the picker degrades to
+  // paste-a-link (see lib/server/tenor.dart).
+  tenorApiKey = (env['TENOR_API_KEY'] ?? '').trim();
+
   // Persistence for production runs: a hosted Turso database when
   // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
   // survives on ephemeral hosts), otherwise the local SQLite file. Tests
@@ -1529,6 +1580,19 @@ Future<void> main(List<String> args) async {
       .addMiddleware(corsMiddleware)
       .addMiddleware(jsonErrorMiddleware)
       .addHandler((req) async {
+        // Voice notes: the upload (fresh bytes into a live room's store)
+        // and the playback (a stored note out again) are path-family
+        // routes — the id lives in the path, not the switch's labels.
+        if (req.url.path == 'media/voice') {
+          return voiceNoteUpload(
+            req,
+            store: authority.voiceNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/')) {
+          return voiceNoteServe(req, store: authority.voiceNotes);
+        }
         switch (req.url.path) {
           case 'ws':
             return wsHandler()(req);
@@ -1540,6 +1604,12 @@ Future<void> main(List<String> args) async {
             return roomLookupHandler(req);
           case 'health':
             return healthHandler(req);
+          case 'media/tenor':
+            return tenorHandler(
+              req,
+              apiKey: tenorApiKey,
+              client: tenorHttp,
+            );
           case 'feedback':
             return feedbackCreateHandler(req);
           case 'admin/status':

@@ -7,80 +7,14 @@
 /// [fakeAsync] so the backoff timers run instantly and deterministically.
 library;
 
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart'
     show createLudoState;
 import 'package:game_club/services/online_client.dart';
-import 'package:stream_channel/stream_channel.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-
-/// A scripted server side of one WebSocket connection.
-class FakeChannel extends StreamChannelMixin<dynamic>
-    implements WebSocketChannel {
-  final sent = <Map<String, dynamic>>[];
-  final toClient = StreamController<dynamic>.broadcast();
-  bool dropped = false;
-
-  @override
-  int? get closeCode => dropped ? 1006 : null;
-  @override
-  String? get closeReason => null;
-  @override
-  String? get protocol => null;
-  @override
-  Future<void> get ready => Future.value();
-  @override
-  Stream<dynamic> get stream => toClient.stream;
-  @override
-  WebSocketSink get sink => _FakeSink(this);
-
-  /// Server -> client message.
-  void serverAdd(Map<String, dynamic> msg) => toClient.add(jsonEncode(msg));
-
-  /// Simulate a network failure: the client's stream errors and closes.
-  void dropConnection() {
-    dropped = true;
-    toClient.addError(const SocketException('connection reset'));
-    toClient.close();
-  }
-}
-
-class _FakeSink implements WebSocketSink {
-  _FakeSink(this.channel);
-  final FakeChannel channel;
-
-  @override
-  Future<void> get done => Future.value();
-  @override
-  void add(dynamic data) => channel.sent.add(jsonDecode(data as String));
-  @override
-  void addError(Object error, [StackTrace? stackTrace]) {}
-  @override
-  Future<void> addStream(Stream<dynamic> stream) async {}
-  @override
-  Future close([int? closeCode, String? closeReason]) async {
-    channel.dropped = true;
-  }
-}
-
-class FakeChannelFactory {
-  final channels = <FakeChannel>[];
-  final uris = <Uri>[];
-  FakeChannel create(Uri uri) {
-    uris.add(uri);
-    final ch = FakeChannel();
-    channels.add(ch);
-    return ch;
-  }
-
-  FakeChannel get last => channels.last;
-}
+import 'fake_channel.dart';
+import 'voice_fakes.dart';
 
 /// A minimal valid started game snapshot, as the real server would send.
 Map<String, dynamic> _startedState() => createLudoState([
@@ -309,6 +243,284 @@ void main() {
       async.elapse(const Duration(milliseconds: 500));
       expect(factory.channels, hasLength(2));
       expect(factory.uris.last.queryParameters['code'], 'QK1');
+    });
+  });
+
+  test('creating a room carries the requested table size in hello', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient(
+        'ws://test/ws',
+        seatId: 'p1',
+        name: 'A',
+        capacity: 3,
+        channelFactory: factory.create,
+      );
+
+      client.connect();
+      async.flushMicrotasks();
+      expect(factory.last.sent.first, {
+        'type': 'hello',
+        'seatId': 'p1',
+        'name': 'A',
+        'game': 'ludo',
+        'players': 3,
+      });
+    });
+  });
+
+  test('a join sends no size, but adopts the room size from the lobby', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+
+      client.connect(code: 'F0UR');
+      async.flushMicrotasks();
+      // The room already exists — its size is the host's to have chosen,
+      // so our hello carries only the code.
+      expect(factory.last.sent.first,
+          {'type': 'hello', 'seatId': 'p1', 'name': 'A', 'game': 'ludo', 'code': 'F0UR'});
+
+      // The room's real size arrives with the lobby feed and the UI reads
+      // it from here.
+      factory.last
+          .serverAdd({'type': 'joined', 'code': 'F0UR', 'color': 'blue'});
+      factory.last.serverAdd({
+        'type': 'lobby',
+        'code': 'F0UR',
+        'started': false,
+        'capacity': 2,
+        'seats': [],
+        'spectators': [],
+      });
+      async.flushMicrotasks();
+      expect(client.capacity, 2);
+    });
+  });
+
+  test('sending a GIF carries the url and caption in the chat intent', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+      client.connect();
+      async.flushMicrotasks();
+
+      client.sendGif('https://media.tenor.com/x/abc.gif', caption: 'look');
+      async.flushMicrotasks();
+      expect(factory.last.sent.last, {
+        'type': 'chat',
+        'text': 'look',
+        'gif': 'https://media.tenor.com/x/abc.gif',
+      });
+    });
+  });
+
+  test('an incoming chat GIF lands in the feed as a ChatLine', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+      client.connect();
+      async.flushMicrotasks();
+
+      factory.last.serverAdd({
+        'type': 'chat',
+        'from': 'Bo',
+        'gif': 'https://media.tenor.com/y/def.gif',
+      });
+      factory.last.serverAdd({
+        'type': 'chat',
+        'from': 'Ana',
+        'text': 'nice',
+        'gif': 'https://media.tenor.com/z/ghi.gif',
+      });
+      async.flushMicrotasks();
+
+      final [gifOnly, captioned] = client.chat.toList();
+      expect(gifOnly.from, 'Bo');
+      expect(gifOnly.text, isEmpty);
+      expect(gifOnly.gif, 'https://media.tenor.com/y/def.gif');
+      expect(captioned.from, 'Ana');
+      expect(captioned.text, 'nice');
+      expect(captioned.gif, 'https://media.tenor.com/z/ghi.gif');
+    });
+  });
+
+  group('table voice', () {
+    test('joining offers the elected peer over the room socket', () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final backend = FakeBackend();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1',
+            name: 'A',
+            voiceBackend: backend,
+            channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+
+        // Seated: we hold 'p1', the table has 'p2' — so 'p1' sorts first
+        // and owns the offer for the pair.
+        factory.last.serverAdd({
+          'type': 'joined',
+          'code': 'CODE',
+          'color': 'red',
+        });
+        factory.last.serverAdd({
+          'type': 'lobby',
+          'code': 'CODE',
+          'started': false,
+          'seats': [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+          ],
+          'spectators': [],
+        });
+        async.flushMicrotasks();
+        expect(client.joinVoice(), completion(isTrue));
+        async.flushMicrotasks();
+
+        expect(client.voiceJoined, isTrue);
+        final frames = factory.last.sent
+            .whereType<Map>()
+            .where((m) => m['type'] == 'voice')
+            .cast<Map<String, dynamic>>();
+        expect(frames, isNotEmpty);
+        expect(frames.single['to'], 'p2');
+        expect(frames.single['k'], 'offer');
+      });
+    });
+
+    test('relay loops back into the voice room', () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final backend = FakeBackend();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1',
+            name: 'A',
+            voiceBackend: backend,
+            channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+        factory.last.serverAdd({'type': 'joined', 'code': 'CODE', 'color': 'red'});
+        factory.last.serverAdd({
+          'type': 'lobby',
+          'code': 'CODE',
+          'started': false,
+          'seats': [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+          ],
+          'spectators': [],
+        });
+        async.flushMicrotasks();
+        client.joinVoice();
+        async.flushMicrotasks();
+
+        // The answer and one trickle candidate, as they arrive from the
+        // relay.
+        factory.last.serverAdd({
+          'type': 'voice',
+          'k': 'answer',
+          'from': 'p2',
+          's': 'REMOTE-ANSWER',
+        });
+        factory.last.serverAdd({
+          'type': 'voice',
+          'k': 'ice',
+          'from': 'p2',
+          's': 'CAND-1',
+        });
+        async.flushMicrotasks();
+        final peer = backend.peers.single;
+        expect(peer.received, [
+          (k: 'answer', s: 'REMOTE-ANSWER'),
+          (k: 'ice', s: 'CAND-1'),
+        ]);
+      });
+    });
+
+    test('leaving voice sends hangups and stops the mic', () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final backend = FakeBackend();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1',
+            name: 'A',
+            voiceBackend: backend,
+            channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+        factory.last.serverAdd({'type': 'joined', 'code': 'CODE', 'color': 'red'});
+        factory.last.serverAdd({
+          'type': 'lobby',
+          'code': 'CODE',
+          'started': false,
+          'seats': [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+          ],
+          'spectators': [],
+        });
+        async.flushMicrotasks();
+        client.joinVoice();
+        async.flushMicrotasks();
+        expect(client.voiceJoined, isTrue);
+
+        client.leaveVoice();
+        async.flushMicrotasks();
+        expect(client.voiceJoined, isFalse);
+        expect(backend.mic!.stopped, isTrue);
+        final hangup = factory.last.sent
+            .whereType<Map>()
+            .lastWhere((m) => m['type'] == 'voice');
+        expect(hangup['k'], 'hangup');
+        expect(hangup['to'], 'p2');
+      });
+    });
+
+    test('muting toggles locally, sending nothing on the wire', () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final backend = FakeBackend();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1',
+            name: 'A',
+            voiceBackend: backend,
+            channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+        factory.last.serverAdd({'type': 'joined', 'code': 'CODE', 'color': 'red'});
+        factory.last.serverAdd({
+          'type': 'lobby',
+          'code': 'CODE',
+          'started': false,
+          'seats': [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+          ],
+          'spectators': [],
+        });
+        async.flushMicrotasks();
+        client.joinVoice();
+        async.flushMicrotasks();
+        final voiceCount = factory.last.sent
+            .whereType<Map>()
+            .where((m) => m['type'] == 'voice')
+            .length;
+
+        client.setVoiceMuted(true);
+        async.flushMicrotasks();
+        expect(client.voiceMuted, isTrue);
+        expect(backend.mic!.muted, isTrue);
+        final now = factory.last.sent
+            .whereType<Map>()
+            .where((m) => m['type'] == 'voice')
+            .length;
+        expect(now, voiceCount);
+      });
     });
   });
 }

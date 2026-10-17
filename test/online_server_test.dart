@@ -12,12 +12,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
+import 'package:game_club/server/tenor.dart' show tenorHandler;
+import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
@@ -43,6 +46,8 @@ import '../bin/server.dart'
         roomRegistry,
         instanceId,
         serverEnv,
+        tenorApiKey,
+        tenorHttp,
         webDir,
         advertiseRoom;
 
@@ -289,6 +294,63 @@ void main() {
         same(first),
         reason: 'the racing creation must never overwrite the original',
       );
+    });
+
+    test('a host-picked table size closes the room at that count', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red),
+        capacity: 2,
+      );
+      expect(room.capacity, 2);
+      expect(room.full, isFalse);
+
+      expect(
+        auth.joinRoom(room.code, _member(LudoColor.blue, seatId: 'guest')),
+        same(room),
+      );
+      expect(
+        room.full,
+        isTrue,
+        reason: 'a two-seat room is full at two players',
+      );
+
+      expect(
+        auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'third')),
+        isNull,
+        reason: 'a full room seats nobody else',
+      );
+    });
+
+    test('quick match pairs only rooms of the same table size', () {
+      final auth = GameAuthority(rng: Random(1));
+      // A host is waiting for one specific friend in a two-seat room.
+      final pairRoom = auth.createRoom(_member(LudoColor.red), capacity: 2);
+
+      // A quick-match seeker who wants four players must not be dropped
+      // into the host's private pair.
+      expect(
+        auth.matchExisting(
+          _member(LudoColor.blue, seatId: 'seeker'),
+          capacity: 4,
+        ),
+        isNull,
+      );
+      expect(
+        pairRoom.members,
+        hasLength(1),
+        reason: 'the seeker must not have silently joined the pair room',
+      );
+
+      // A seeker okay with two seats does land in the pair room.
+      expect(
+        auth.matchExisting(
+          _member(LudoColor.blue, seatId: 'seeker'),
+          capacity: 2,
+        ),
+        same(pairRoom),
+      );
+      expect(pairRoom.members, hasLength(2));
     });
 
     test('joinWithColor honors a free preferred corner', () {
@@ -551,6 +613,240 @@ void main() {
       }
       expect(room.started, isFalse, reason: 'chat must not start a game');
     });
+
+    test('a GIF line carries the https url and an optional caption', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {
+          'type': 'chat',
+          'text': 'look at this',
+          'gif': 'https://media.tenor.com/x/abc.gif',
+        },
+      );
+      final line = _lastSent(log, 'chat')!;
+      expect(line['gif'], 'https://media.tenor.com/x/abc.gif');
+      expect(line['text'], 'look at this');
+    });
+
+    test('a GIF with no caption still reads as a message', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+
+      auth.handleIntent(
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'chat', 'text': '', 'gif': 'https://tenor.com/g.gif'},
+      );
+      final line = _lastSent(log, 'chat')!;
+      expect(line['gif'], 'https://tenor.com/g.gif');
+    });
+
+    test('non-https or broken GIF links are refused', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+      for (final bad in [
+        'http://insecure.example/x.gif', // plain http is mixed content on web
+        'javascript:alert(1)', // no https scheme — junk
+        '//cdn.example/x.gif', // scheme-less, no host parse
+        'https://spaces are not a url.gif', // a space is a typo, not a link
+        'https://${'a' * 2000}.gif', // oversized
+      ]) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'chat', 'text': '', 'gif': bad},
+        );
+      }
+      // No broadcast carries any GIF at all.
+      for (final m
+          in log.map((j) => jsonDecode(j) as Map<String, dynamic>)) {
+        expect(m['gif'], isNull, reason: 'refused links must not broadcast');
+      }
+    });
+
+    test('an uploaded voice note broadcasts with the store url and duration', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+
+      auth.voiceNotes.put(
+        code: room.code,
+        id: 'eadada55',
+        data: Uint8List.fromList([1]),
+        mime: 'audio/mp4',
+        durMs: 1400,
+      );
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'chat', 'text': 'listen to this', 'note': 'eadada55'},
+      );
+
+      final line = _lastSent(log, 'chat')!;
+      expect(line['note']['url'], '/media/voice/${room.code}/eadada55');
+      // The duration comes from the store, not the client's say-so — a
+      // client claiming 90 000 ms is corrected by the file it uploaded.
+      expect(line['note']['dur'], 1400);
+      expect(line['text'], 'listen to this', reason: 'a caption can ride a note');
+      // The bubble painter data rides every broadcast now: the sender's
+      // seat color is whatever the room assigned, not what they claimed
+      // at hello.
+      expect(line['color'], room.members['blue']!.color.name);
+      expect(line['at'], isA<int>());
+    });
+
+    test('an unuploaded or malformed note id is dropped, not announced', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+      for (final note in ['zzzzzz', 'Bad id', 'BAD_ID!!']) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'blue',
+          msg: {'type': 'chat', 'note': note},
+        );
+      }
+      expect(
+        _lastSent(log, 'chat'),
+        isNull,
+        reason: 'chat carries nothing the room could not have uploaded',
+      );
+
+      // A caption in the same intent still flows — only the note dies.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'chat', 'text': 'trust me', 'note': 'zzzzzz'},
+      );
+      final line = _lastSent(log, 'chat')!;
+      expect(line['text'], 'trust me');
+      expect(line['note'], isNull, reason: 'no key for an unexplained audio url');
+    });
+  });
+
+  group('GameAuthority: voice signalling', () {
+    test('a signal routes to the addressed seat, framed with the sender', () {
+      final hostLog = <String>[];
+      final guestLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
+
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {
+          'type': 'voice',
+          'k': 'offer',
+          'to': 'red',
+          's': '{"type":"offer","sdp":"v=0"}',
+        },
+      );
+
+      expect(guestLog, isEmpty, reason: 'the sender is not their own audience');
+      expect(hostLog, hasLength(1));
+      final frame = jsonDecode(hostLog.single) as Map<String, dynamic>;
+      expect(frame['type'], 'voice');
+      expect(frame['k'], 'offer');
+      // The seat, not the connection, is the address: the relay stamps the
+      // sender's stable seatId so the receiver knows which peer it is.
+      expect(frame['from'], 'blue');
+      expect(frame['s'], '{"type":"offer","sdp":"v=0"}');
+    });
+
+    test('junk signals are dropped before anyone hears about them', () {
+      final hostLog = <String>[];
+      final guestLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
+
+      for (final junk in [
+        {'type': 'voice', 'k': 'attack', 'to': 'red', 's': 'x'},
+        {'type': 'voice', 'k': 'offer', 'to': '', 's': 'x'},
+        {'type': 'voice', 'k': 'offer', 'to': 'red', 's': ''},
+        // Talking to yourself is not a signalling session.
+        {'type': 'voice', 'k': 'offer', 'to': 'blue', 's': 'x'},
+        // 64 KB of "SDP" is not an SDP.
+        {
+          'type': 'voice',
+          'k': 'offer',
+          'to': 'red',
+          's': 'a' * (64 * 1024 + 1),
+        },
+      ]) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'blue',
+          msg: junk,
+        );
+      }
+      expect(hostLog, isEmpty);
+      expect(guestLog, isEmpty);
+    });
+
+    test('spectators neither send nor receive signalling', () {
+      final hostLog = <String>[];
+      final watcherLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.spectateRoom(
+        room.code,
+        _member(LudoColor.blue, on: watcherLog.add, id: 'watch-1'),
+      );
+
+      // A watcher "offering": intent handling has no member for a spectator,
+      // so nothing is relayed.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'watch-1',
+        msg: {'type': 'voice', 'k': 'offer', 'to': 'red', 's': 'x'},
+      );
+      expect(hostLog, isEmpty, reason: 'spectators have no mic seat');
+
+      // A seated player addressing a seatId no live member holds (the
+      // watcher's id is not a seat): routes nowhere, no crash.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'voice', 'k': 'ice', 'to': 'watch-1', 's': 'c'},
+      );
+      expect(watcherLog, isEmpty, reason: 'voice is seated-to-seated only');
+    });
+
+    test('signal to a departed connection routes nowhere, without failing', () {
+      final hostLog = <String>[];
+      final guestLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
+      // Guest walks (their sink dies in the transport layer normally; here
+      // we simulate by removing the seat membership directly).
+      room.members.remove('blue');
+
+      expect(
+        () => auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'voice', 'k': 'offer', 'to': 'blue', 's': 'x'},
+        ),
+        returnsNormally,
+        reason: 'a vanished peer is a fact of online play, not an error',
+      );
+      expect(hostLog, isEmpty);
+    });
   });
 
   group('GameAuthority: gameplay', () {
@@ -710,6 +1006,24 @@ void main() {
       final handler = const shelf.Pipeline().addHandler((req) {
         if (req.url.path == 'ws') return wsHandler()(req);
         if (req.url.path == 'stats') return statsHandler(req);
+        // Same wiring as production: the key (blank in tests unless a test
+        // sets it) gates the proxy.
+        if (req.url.path == 'media/tenor') {
+          return tenorHandler(req, apiKey: tenorApiKey, client: tenorHttp);
+        }
+        // Voice notes, the same two arms production routes: an upload
+        // takes fresh bytes into a live room's store; a playback serves a
+        // stored note back out.
+        if (req.url.path == 'media/voice') {
+          return voiceNoteUpload(
+            req,
+            store: authority.voiceNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/')) {
+          return voiceNoteServe(req, store: authority.voiceNotes);
+        }
         return shelf.Response.ok('ok');
       });
       srv = await shelf_io.serve(handler, InternetAddress.loopbackIPv4, 0);
@@ -918,8 +1232,7 @@ void main() {
       },
     );
 
-    test('/stats counts live WebSockets and drops them after close', () async {
-      // The test binding stubs every HTTP client with empty 400 responses
+    test('/stats counts live WebSockets and drops them after close', () async {      // The test binding stubs every HTTP client with empty 400 responses
       // via a global HttpOverrides; a zone-local no-op override opts back
       // into real networking (the base createHttpClient builds the real
       // HttpClient) without touching the global mock.
@@ -959,6 +1272,88 @@ void main() {
       );
     });
 
+    test('/media/tenor without a key is a JSON 503, no upstream call', () async {
+      // A keyless deployment's picker degrades to paste-a-link; the route
+      // must still answer as JSON so the client surfaces the reason.
+      final resp = await HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
+        () => http.get(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/tenor?q=dice'),
+        ),
+        _RealHttpOverrides(),
+      );
+      expect(resp.statusCode, 503);
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      expect(body['ok'], isFalse);
+      expect((body['text'] as String).isNotEmpty, isTrue);
+    });
+
+    test('voice notes ride HTTP into a live room and play back by url', () async {
+      // The upload requires the room to be live, so seat one first.
+      host.sink.add(
+        jsonEncode({'type': 'hello', 'seatId': 'vn-host', 'name': 'Note Reporter'}),
+      );
+      final joined = await nextMsg(hostBuf, 'joined');
+      final code = joined['code'] as String;
+      final relative = '/media/voice/$code/ab12cd34';
+
+      // Production goes through the real HTTP stack; the test binding's
+      // global stub is zone-optimized back out for these calls.
+      Future<http.Response> overRealHttp(Future<http.Response> Function() call) =>
+          HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
+            call,
+            _RealHttpOverrides(),
+          );
+
+      final post = await overRealHttp(
+        () => http.post(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=$code&id=ab12cd34'),
+          headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
+          body: Uint8List.fromList([1, 2, 3]),
+        ),
+      );
+      expect(post.statusCode, 200);
+      final ack = jsonDecode(post.body) as Map<String, dynamic>;
+      expect(ack['url'], relative);
+      expect(ack['dur'], 1100);
+
+      final get = await overRealHttp(
+        () => http.get(Uri.parse('http://127.0.0.1:${srv.port}$relative')),
+      );
+      expect(get.statusCode, 200);
+      expect(get.bodyBytes, [1, 2, 3]);
+      expect(get.headers['content-type'], 'audio/mp4');
+      expect(get.headers['cache-control'], 'no-store');
+
+      // An unknown note is a 404, not an empty success.
+      final missing = await overRealHttp(
+        () => http.get(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice/$code/zzzzzz'),
+        ),
+      );
+      expect(missing.statusCode, 404);
+
+      // An upload for a room that is not on this instance has nowhere to
+      // be announced — refused instead of silently stored.
+      final noRoom = await overRealHttp(
+        () => http.post(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=NOTHERE&id=ab12cd34'),
+          headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
+          body: Uint8List.fromList([1]),
+        ),
+      );
+      expect(noRoom.statusCode, 404);
+
+      // Ids end up in a URL path; junk is refused at the door.
+      final badId = await overRealHttp(
+        () => http.post(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=$code&id=AB'),
+          headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
+          body: Uint8List.fromList([1]),
+        ),
+      );
+      expect(badId.statusCode, 400);
+    });
+
     test('hello -> joined -> lobby -> start -> state, full protocol', () async {
       // Host creates a room; guest joins by code.
       host.sink.add(
@@ -993,6 +1388,53 @@ void main() {
       final state = await nextMsg(hostBuf, 'state');
       expect((state['state'] as Map)['players'], hasLength(2));
       await nextMsg(guestBuf, 'state');
+    });
+
+    test('a host-picked table size closes the room at that count', () async {
+      // The host declares a two-seat table at creation.
+      host.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'size-host',
+          'name': 'Host',
+          'players': 2,
+        }),
+      );
+      final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
+      // every lobby feed reports the size, so the seat list can show (1/2).
+      expect((await nextMsg(hostBuf, 'lobby'))['capacity'], 2);
+
+      guest.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'size-guest',
+          'name': 'Guest',
+          'code': code,
+        }),
+      );
+      await nextMsg(guestBuf, 'joined');
+      expect((await nextMsg(guestBuf, 'lobby'))['capacity'], 2);
+
+      // The room is now at its declared size: a third connection is
+      // refused — and the lobby feed keeps the size for whoever is there.
+      final third = WebSocketChannel.connect(
+        Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+      );
+      addTearDown(third.sink.close);
+      await third.ready;
+      final thirdBuf = <Map<String, dynamic>>[];
+      third.stream.listen(
+        (d) => thirdBuf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      third.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'size-third',
+          'name': 'Third',
+          'code': code,
+        }),
+      );
+      expect(await nextMsg(thirdBuf, 'error'), isNotNull);
     });
 
     test(

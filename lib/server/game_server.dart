@@ -18,6 +18,7 @@ import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
 import '../engine/snakes/snakes_engine.dart' as snakes;
 import 'leaderboard_store.dart';
+import 'voice_notes.dart';
 
 /// One connected participant.
 class ServerMember {
@@ -93,6 +94,7 @@ class Room {
     this.code, {
     required this.rng,
     this.gameType = 'ludo',
+    this.capacity = 4,
     String? registryToken,
   }) : registryToken = registryToken ?? _nextRegistryToken();
 
@@ -103,6 +105,13 @@ class Room {
   /// room creation; joiners inherit it. Seats stay corner-color based, so
   /// both games currently seat up to 4 players.
   final String gameType;
+
+  /// How many players this room closes for: 2, 3 or 4 (the seats are the
+  /// board's four corners). Chosen by the host at creation, joiners inherit
+  /// it, and [full] cuts further joins exactly there — a host who asks for a
+  /// pair gets a private table, and the lobby shows "waiting (n/size)".
+  /// Defaults to 4, which is today's behaviour for every pre-existing client.
+  final int capacity;
 
   /// Built once at [start] from the seated members; never touched before.
   /// A [LudoState] for ludo rooms, a [snakes.SnakesState] for snakes rooms.
@@ -158,7 +167,7 @@ class Room {
   bool started = false;
   bool removed = false;
 
-  bool get full => members.length >= 4;
+  bool get full => members.length >= capacity;
 
   /// Clockwise turn order is enforced by re-sorting members into
   /// colorOrder before start.
@@ -257,6 +266,21 @@ class Room {
     }
   }
 
+  /// Sends a message to whichever live connection currently holds
+  /// [seatId]. Voice chat signalling is seat-to-seat, not broadcast: an
+  /// offer belongs to the one player it names, and the seat id — not the
+  /// connection — is the address, so a reconnect never re-negotiates the
+  /// audio mesh. False when nobody holds the seat (they left mid-hello).
+  bool sendToSeat(String seatId, Map<String, dynamic> message) {
+    for (final m in members.values) {
+      if (m.seatId == seatId) {
+        m.sink(jsonEncode(message));
+        return true;
+      }
+    }
+    return false;
+  }
+
   void broadcastState() =>
       broadcast({'type': 'state', 'game': gameType, 'state': stateJson()});
 
@@ -282,6 +306,40 @@ class Room {
 
 /// Server-side game logic shared by the transport layer (websockets) and
 /// tests (direct function calls).
+/// Valid voice-signal kinds a client may route. The server never inspects
+/// the payload, but the kind must be real or the message is junk.
+const _voiceKinds = {'offer', 'answer', 'ice', 'hangup'};
+
+/// Chat messages may carry a GIF: a single https URL shown inline by the
+/// clients. The gate is deliberately narrow — https only (a plain http
+/// image is mixed content on the hosted site and renders broken), no
+/// spaces/control characters (a URL with a space is a typo, not a share),
+/// and a hard length cap. Anything else is silently dropped: a chat feed
+/// is not a foreign-body parser.
+String? _chatGif(Object? raw) {
+  final value = raw as String?;
+  if (value == null || value.isEmpty) return null;
+  final url = Uri.tryParse(value.trim());
+  if (url == null || url.scheme != 'https' || url.host.isEmpty) return null;
+  if (value.length > 2000) return null;
+  if (value.contains(RegExp(r'\s'))) return null;
+  return value;
+}
+
+/// A voice note rides the intent as its uploaded id and becomes a
+/// broadcast url from the store's own record. An id for a note that was
+/// never uploaded — to this room, on this instance — is dropped: chat
+/// carries nothing a room's own uploads cannot explain.
+VoiceNote? _chatNote(
+  VoiceNoteStore store,
+  String roomCode,
+  Map<String, dynamic> msg,
+) {
+  final id = msg['note'] as String?;
+  if (id == null || id.isEmpty || !voiceNoteIdPattern.hasMatch(id)) return null;
+  return store.get(roomCode, id);
+}
+
 class GameAuthority {
   GameAuthority({
     Random? rng,
@@ -291,9 +349,16 @@ class GameAuthority {
     this.onRoomStarted,
     this.onGameFinished,
     this.autoStepDelay = const Duration(milliseconds: 800),
-  }) : rng = rng ?? Random.secure();
+    VoiceNoteStore? voiceNotes,
+  }) : rng = rng ?? Random.secure(),
+       voiceNotes = voiceNotes ?? VoiceNoteStore();
 
   final Random rng;
+
+  /// Chat voice-note store: uploads land here and wait to be announced
+  /// through a chat line. One authority per process owns one shared
+  /// store, matching how the rooms themselves live per-instance.
+  final VoiceNoteStore voiceNotes;
 
   /// How long a started room with no connected members stays recoverable.
   final Duration emptyRoomGrace;
@@ -357,6 +422,7 @@ class GameAuthority {
   Room createRoom(
     ServerMember host, {
     String game = 'ludo',
+    int capacity = 4,
     String? code,
     String? registryToken,
   }) {
@@ -368,6 +434,7 @@ class GameAuthority {
       code,
       rng: rng,
       gameType: game,
+      capacity: capacity,
       registryToken: registryToken,
     );
     rooms[code] = room;
@@ -377,10 +444,18 @@ class GameAuthority {
   /// Seats [member] in the first waiting (unstarted, not full) room playing
   /// [game]; returns null when none fits. Only rooms that already exist
   /// here are considered — their codes are, by construction, claimed (see
-  /// bin/server.dart for how fresh rooms get claimed).
-  Room? matchExisting(ServerMember member, {String game = 'ludo'}) {
+  /// bin/server.dart for how fresh rooms get claimed). When [capacity] is
+  /// set, only rooms close to the same table size are considered: a
+  /// two-player quick match must not land in a host's four-seat room that
+  /// is still waiting for friends.
+  Room? matchExisting(
+    ServerMember member, {
+    String game = 'ludo',
+    int? capacity,
+  }) {
     for (final room in rooms.values) {
       if (room.gameType != game || room.started || room.full) continue;
+      if (capacity != null && room.capacity != capacity) continue;
       if (joinRoom(room.code, member) != null) return room;
     }
     return null;
@@ -389,8 +464,9 @@ class GameAuthority {
   /// Quick match: seats [member] in the first waiting (unstarted, not full)
   /// room playing [game], creating a fresh room when none fits. Waiting
   /// players thus pair up automatically instead of trading room codes.
-  Room findMatch(ServerMember member, {String game = 'ludo'}) =>
-      matchExisting(member, game: game) ?? createRoom(member, game: game);
+  Room findMatch(ServerMember member, {String game = 'ludo', int? capacity}) =>
+      matchExisting(member, game: game, capacity: capacity) ??
+      createRoom(member, game: game, capacity: capacity ?? 4);
 
   Room? joinRoom(String code, ServerMember member) {
     final room = rooms[code.toUpperCase()];
@@ -420,7 +496,7 @@ class GameAuthority {
       for (final c in LudoBoard.colorOrder)
         if (room.ownerOf(c) != null) c,
     ];
-    if (occupied.length >= LudoBoard.colorOrder.length) return null;
+    if (occupied.length >= room.capacity) return null;
     final across = room.gameType == 'ludo' && occupied.length == 1
         ? _acrossFrom(occupied.single)
         : null;
@@ -577,12 +653,53 @@ class GameAuthority {
     switch (msg['type'] as String?) {
       case 'chat':
         final text = (msg['text'] as String? ?? '').trim();
-        if (text.isEmpty || text.length > 200) return;
-        room.broadcast({'type': 'chat', 'from': member.name, 'text': text});
+        final gif = _chatGif(msg['gif'] as String?);
+        final note = _chatNote(voiceNotes, room.code, msg);
+        // A line is any of a sentence, a GIF, a voice note — or a caption
+        // riding one. Nothing at all is not a message.
+        if (text.isEmpty && gif == null && note == null) return;
+        if (text.length > 200) return;
+        room.broadcast({
+          'type': 'chat',
+          'from': member.name,
+          // The seat color paints the bubble — it is how a string of text
+          // becomes a person at the table.
+          'color': member.color.name,
+          'text': text,
+          'gif': ?gif,
+          // The note's url and duration come from the store, not the
+          // intent: a client that invented either is silently corrected.
+          if (note != null)
+            'note': {'url': note.urlPath, 'dur': note.durMs},
+          'at': DateTime.now().millisecondsSinceEpoch,
+        });
         return;
 
       case 'autoplay':
         _setAutoplay(room, member, msg['on'] as bool? ?? true);
+        return;
+
+      case 'voice':
+        // WebRTC signalling for table voice. The payload ('s') is opaque —
+        // SDP or an ICE candidate as its own JSON string — the server only
+        // routes it between seats. Routing by seatId (stable across
+        // reconnects) rather than connection id is the point: a dropped
+        // link re-attaches to the same peer sessions, and a returning
+        // player's audio mesh survives. Only seated members reach this
+        // arm at all — a spectator 'voice' intent has no member and dies
+        // at the switch's entry guard.
+        final kind = msg['k'] as String? ?? '';
+        final to = msg['to'] as String? ?? '';
+        final s = msg['s'] as String? ?? '';
+        if (!_voiceKinds.contains(kind) || to.isEmpty || s.isEmpty) return;
+        if (to == member.seatId) return;
+        if (s.length > 64 * 1024) return;
+        room.sendToSeat(to, {
+          'type': 'voice',
+          'k': kind,
+          'from': member.seatId,
+          's': s,
+        });
         return;
 
       case 'leave':
