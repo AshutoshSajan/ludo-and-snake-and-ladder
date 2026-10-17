@@ -93,6 +93,7 @@ class Room {
     this.code, {
     required this.rng,
     this.gameType = 'ludo',
+    this.capacity = 4,
     String? registryToken,
   }) : registryToken = registryToken ?? _nextRegistryToken();
 
@@ -103,6 +104,13 @@ class Room {
   /// room creation; joiners inherit it. Seats stay corner-color based, so
   /// both games currently seat up to 4 players.
   final String gameType;
+
+  /// How many players this room closes for: 2, 3 or 4 (the seats are the
+  /// board's four corners). Chosen by the host at creation, joiners inherit
+  /// it, and [full] cuts further joins exactly there — a host who asks for a
+  /// pair gets a private table, and the lobby shows "waiting (n/size)".
+  /// Defaults to 4, which is today's behaviour for every pre-existing client.
+  final int capacity;
 
   /// Built once at [start] from the seated members; never touched before.
   /// A [LudoState] for ludo rooms, a [snakes.SnakesState] for snakes rooms.
@@ -158,7 +166,7 @@ class Room {
   bool started = false;
   bool removed = false;
 
-  bool get full => members.length >= 4;
+  bool get full => members.length >= capacity;
 
   /// Clockwise turn order is enforced by re-sorting members into
   /// colorOrder before start.
@@ -357,6 +365,7 @@ class GameAuthority {
   Room createRoom(
     ServerMember host, {
     String game = 'ludo',
+    int capacity = 4,
     String? code,
     String? registryToken,
   }) {
@@ -368,6 +377,7 @@ class GameAuthority {
       code,
       rng: rng,
       gameType: game,
+      capacity: capacity,
       registryToken: registryToken,
     );
     rooms[code] = room;
@@ -377,10 +387,18 @@ class GameAuthority {
   /// Seats [member] in the first waiting (unstarted, not full) room playing
   /// [game]; returns null when none fits. Only rooms that already exist
   /// here are considered — their codes are, by construction, claimed (see
-  /// bin/server.dart for how fresh rooms get claimed).
-  Room? matchExisting(ServerMember member, {String game = 'ludo'}) {
+  /// bin/server.dart for how fresh rooms get claimed). When [capacity] is
+  /// set, only rooms close to the same table size are considered: a
+  /// two-player quick match must not land in a host's four-seat room that
+  /// is still waiting for friends.
+  Room? matchExisting(
+    ServerMember member, {
+    String game = 'ludo',
+    int? capacity,
+  }) {
     for (final room in rooms.values) {
       if (room.gameType != game || room.started || room.full) continue;
+      if (capacity != null && room.capacity != capacity) continue;
       if (joinRoom(room.code, member) != null) return room;
     }
     return null;
@@ -389,8 +407,9 @@ class GameAuthority {
   /// Quick match: seats [member] in the first waiting (unstarted, not full)
   /// room playing [game], creating a fresh room when none fits. Waiting
   /// players thus pair up automatically instead of trading room codes.
-  Room findMatch(ServerMember member, {String game = 'ludo'}) =>
-      matchExisting(member, game: game) ?? createRoom(member, game: game);
+  Room findMatch(ServerMember member, {String game = 'ludo', int? capacity}) =>
+      matchExisting(member, game: game, capacity: capacity) ??
+      createRoom(member, game: game, capacity: capacity ?? 4);
 
   Room? joinRoom(String code, ServerMember member) {
     final room = rooms[code.toUpperCase()];
@@ -420,7 +439,7 @@ class GameAuthority {
       for (final c in LudoBoard.colorOrder)
         if (room.ownerOf(c) != null) c,
     ];
-    if (occupied.length >= LudoBoard.colorOrder.length) return null;
+    if (occupied.length >= room.capacity) return null;
     final across = room.gameType == 'ludo' && occupied.length == 1
         ? _acrossFrom(occupied.single)
         : null;

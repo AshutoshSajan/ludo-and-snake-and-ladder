@@ -291,6 +291,63 @@ void main() {
       );
     });
 
+    test('a host-picked table size closes the room at that count', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red),
+        capacity: 2,
+      );
+      expect(room.capacity, 2);
+      expect(room.full, isFalse);
+
+      expect(
+        auth.joinRoom(room.code, _member(LudoColor.blue, seatId: 'guest')),
+        same(room),
+      );
+      expect(
+        room.full,
+        isTrue,
+        reason: 'a two-seat room is full at two players',
+      );
+
+      expect(
+        auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'third')),
+        isNull,
+        reason: 'a full room seats nobody else',
+      );
+    });
+
+    test('quick match pairs only rooms of the same table size', () {
+      final auth = GameAuthority(rng: Random(1));
+      // A host is waiting for one specific friend in a two-seat room.
+      final pairRoom = auth.createRoom(_member(LudoColor.red), capacity: 2);
+
+      // A quick-match seeker who wants four players must not be dropped
+      // into the host's private pair.
+      expect(
+        auth.matchExisting(
+          _member(LudoColor.blue, seatId: 'seeker'),
+          capacity: 4,
+        ),
+        isNull,
+      );
+      expect(
+        pairRoom.members,
+        hasLength(1),
+        reason: 'the seeker must not have silently joined the pair room',
+      );
+
+      // A seeker okay with two seats does land in the pair room.
+      expect(
+        auth.matchExisting(
+          _member(LudoColor.blue, seatId: 'seeker'),
+          capacity: 2,
+        ),
+        same(pairRoom),
+      );
+      expect(pairRoom.members, hasLength(2));
+    });
+
     test('joinWithColor honors a free preferred corner', () {
       final auth = GameAuthority(rng: Random(1));
       final room = auth.createRoom(_member(LudoColor.red));
@@ -993,6 +1050,53 @@ void main() {
       final state = await nextMsg(hostBuf, 'state');
       expect((state['state'] as Map)['players'], hasLength(2));
       await nextMsg(guestBuf, 'state');
+    });
+
+    test('a host-picked table size closes the room at that count', () async {
+      // The host declares a two-seat table at creation.
+      host.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'size-host',
+          'name': 'Host',
+          'players': 2,
+        }),
+      );
+      final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
+      // every lobby feed reports the size, so the seat list can show (1/2).
+      expect((await nextMsg(hostBuf, 'lobby'))['capacity'], 2);
+
+      guest.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'size-guest',
+          'name': 'Guest',
+          'code': code,
+        }),
+      );
+      await nextMsg(guestBuf, 'joined');
+      expect((await nextMsg(guestBuf, 'lobby'))['capacity'], 2);
+
+      // The room is now at its declared size: a third connection is
+      // refused — and the lobby feed keeps the size for whoever is there.
+      final third = WebSocketChannel.connect(
+        Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+      );
+      addTearDown(third.sink.close);
+      await third.ready;
+      final thirdBuf = <Map<String, dynamic>>[];
+      third.stream.listen(
+        (d) => thirdBuf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      third.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'size-third',
+          'name': 'Third',
+          'code': code,
+        }),
+      );
+      expect(await nextMsg(thirdBuf, 'error'), isNotNull);
     });
 
     test(

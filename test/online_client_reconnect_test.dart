@@ -311,4 +311,57 @@ void main() {
       expect(factory.uris.last.queryParameters['code'], 'QK1');
     });
   });
+
+  test('creating a room carries the requested table size in hello', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient(
+        'ws://test/ws',
+        seatId: 'p1',
+        name: 'A',
+        capacity: 3,
+        channelFactory: factory.create,
+      );
+
+      client.connect();
+      async.flushMicrotasks();
+      expect(factory.last.sent.first, {
+        'type': 'hello',
+        'seatId': 'p1',
+        'name': 'A',
+        'game': 'ludo',
+        'players': 3,
+      });
+    });
+  });
+
+  test('a join sends no size, but adopts the room size from the lobby', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p1', name: 'A', channelFactory: factory.create);
+
+      client.connect(code: 'F0UR');
+      async.flushMicrotasks();
+      // The room already exists — its size is the host's to have chosen,
+      // so our hello carries only the code.
+      expect(factory.last.sent.first,
+          {'type': 'hello', 'seatId': 'p1', 'name': 'A', 'game': 'ludo', 'code': 'F0UR'});
+
+      // The room's real size arrives with the lobby feed and the UI reads
+      // it from here.
+      factory.last
+          .serverAdd({'type': 'joined', 'code': 'F0UR', 'color': 'blue'});
+      factory.last.serverAdd({
+        'type': 'lobby',
+        'code': 'F0UR',
+        'started': false,
+        'capacity': 2,
+        'seats': [],
+        'spectators': [],
+      });
+      async.flushMicrotasks();
+      expect(client.capacity, 2);
+    });
+  });
 }

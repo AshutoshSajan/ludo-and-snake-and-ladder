@@ -13,7 +13,7 @@
 ///   WS   /ws?code=XXXX  -> join/create room, then JSON message protocol
 ///
 /// Client -> server messages:
-///   {type: 'hello', seatId, name, color?, game?, code?, match?}  first
+///   {type: 'hello', seatId, name, color?, game?, code?, match?, players?}  first
 ///   {type: 'start'}
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
@@ -95,6 +95,7 @@ int _connCounter = 0;
 Future<Room> _createClaimedRoom(
   ServerMember host, {
   required String game,
+  int capacity = 4,
 }) async {
   var token = newRegistryToken();
   for (var attempt = 0; attempt < 3; attempt++) {
@@ -106,6 +107,7 @@ Future<Room> _createClaimedRoom(
       final room = authority.createRoom(
         host,
         game: game,
+        capacity: capacity,
       ); // registry down — host locally
       unawaited(
         adminStore
@@ -126,6 +128,7 @@ Future<Room> _createClaimedRoom(
       final room = authority.createRoom(
         host,
         game: game,
+        capacity: capacity,
         code: code,
         registryToken: token,
       );
@@ -246,6 +249,14 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
         final spectate = msg['spectate'] as bool? ?? false;
         final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
         final match = msg['match'] as bool? ?? false;
+        // Table size the host asks to close a created room at (2..4; the
+        // seats are the board's corners). Sent only by room creators —
+        // joiners inherit the room's size, so an absent/odd value or any
+        // join-with-code stays at today's open four-seat default.
+        final players = switch (msg['players']) {
+          final int n when n >= 2 && n <= 4 => n,
+          _ => 4,
+        };
 
         member = ServerMember(
           id: connId,
@@ -292,8 +303,12 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           // room.
           try {
             room =
-                authority.matchExisting(member!, game: game) ??
-                await _createClaimedRoom(member!, game: game);
+                authority.matchExisting(
+                  member!,
+                  game: game,
+                  capacity: players,
+                ) ??
+                await _createClaimedRoom(member!, game: game, capacity: players);
           } on RoomRegistryException catch (_) {
             webSocket.sink.add(
               jsonEncode({
@@ -314,7 +329,11 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           }
         } else if (code.isEmpty) {
           try {
-            room = await _createClaimedRoom(member!, game: game);
+            room = await _createClaimedRoom(
+              member!,
+              game: game,
+              capacity: players,
+            );
           } on RoomRegistryException catch (_) {
             webSocket.sink.add(
               jsonEncode({
@@ -446,6 +465,11 @@ void _lobby(Room room) {
     'type': 'lobby',
     'code': room.code,
     'started': room.started,
+    // Table size the room closes at: the lobby's "Waiting for players…
+    // (n/size)" line reads this. Fine to list next to the roster — a size
+    // never changes after creation, so unlike the seats it cannot disagree
+    // with itself between arrivals.
+    'capacity': room.capacity,
     // The same entries the `seats` feed carries, so whichever of the two
     // arrives last cannot wipe the seat ids and statuses the other one
     // reported — two shapes for one roster is how badges start disappearing

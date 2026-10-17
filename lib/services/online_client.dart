@@ -259,6 +259,7 @@ class OnlineClient extends ChangeNotifier {
     required this.name,
     this.gameType = 'ludo',
     this.quickMatch = false,
+    this.capacity = 4,
     WebSocketChannel Function(Uri uri)? channelFactory,
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
@@ -390,6 +391,12 @@ class OnlineClient extends ChangeNotifier {
   LudoColor? myColor;
   bool started = false;
   final lobbySeats = <LobbySeat>[];
+
+  /// Table size of the room: requested by the host at creation (this client
+  /// when creating, absent joiners default), then replaced by the room's
+  /// real value on every lobby feed — so a joiner who asked for nothing
+  /// still displays the host's chosen "(n/size)".
+  int capacity = 4;
 
   /// Latest authoritative snapshot, decoded. Null until the game starts.
   LudoState? state;
@@ -543,6 +550,10 @@ class OnlineClient extends ChangeNotifier {
         'game': gameType,
         if (quickMatch && (_joinCode == null || _joinCode!.isEmpty))
           'match': true,
+        // Room creators (and quick match, which creates too) name the table
+        // size they want the room to close at. Join-with-code omits it: the
+        // room already exists and joiners inherit its size.
+        if (_joinCode == null || _joinCode!.isEmpty) 'players': capacity,
         if (_joinCode != null && _joinCode!.isNotEmpty) 'code': _joinCode,
         if (preferredColor != null) 'color': preferredColor.name,
         if (_spectating) 'spectate': true,
@@ -703,6 +714,9 @@ class OnlineClient extends ChangeNotifier {
         _reconnectAttempts = 0; // we're back on the wire
       case 'lobby':
         started = msg['started'] as bool? ?? false;
+        // The room's table size, broadcast since creation. The host's
+        // "waiting (n/size)" and the guest's agree — one value, one room.
+        capacity = msg['capacity'] as int? ?? capacity;
         lobbySeats
           ..clear()
           ..addAll([
