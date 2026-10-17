@@ -92,7 +92,16 @@ const AdminTableSpec _resultsSpec = AdminTableSpec(
   name: 'results',
   pk: 'id',
   pkIsText: false,
-  columns: ['id', 'game_id', 'seat_id', 'name', 'game', 'color', 'rank', 'played_at'],
+  columns: [
+    'id',
+    'game_id',
+    'seat_id',
+    'name',
+    'game',
+    'color',
+    'rank',
+    'played_at',
+  ],
   editable: {
     'game_id',
     'seat_id',
@@ -203,6 +212,103 @@ const AdminTableSpec _sessionsSpec = AdminTableSpec(
   orderBy: 'created_at DESC',
 );
 
+const AdminTableSpec _friendProfilesSpec = AdminTableSpec(
+  name: 'friend_profiles',
+  pk: 'seat_id',
+  pkIsText: true,
+  columns: ['seat_id', 'name', 'code', 'seen_ms'],
+  editable: {'name', 'seen_ms'},
+  // The profile is born on first friends call; admin inserts would mint
+  // an identity out of thin air, so they stay dedicated-endpoint-only.
+  deletable: true,
+  orderBy: 'seen_ms DESC',
+);
+
+const AdminTableSpec _friendshipsSpec = AdminTableSpec(
+  name: 'friendships',
+  pk: 'id',
+  pkIsText: false,
+  columns: ['id', 'seat_a', 'seat_b', 'since_ms'],
+  editable: {'seat_a', 'seat_b', 'since_ms'},
+  insertable: true,
+  deletable: true,
+  orderBy: 'id DESC',
+);
+
+const AdminTableSpec _friendRequestsSpec = AdminTableSpec(
+  name: 'friend_requests',
+  pk: 'id',
+  pkIsText: false,
+  columns: [
+    'id',
+    'from_seat',
+    'from_name',
+    'from_code',
+    'to_seat',
+    'to_name',
+    'to_code',
+    'created_ms',
+  ],
+  // A pending request is a row existence is a request; admins clear spam
+  // by deleting, never by editing its identity columns into something else.
+  deletable: true,
+  orderBy: 'id DESC',
+);
+
+const AdminTableSpec _friendMessagesSpec = AdminTableSpec(
+  name: 'friend_messages',
+  pk: 'id',
+  pkIsText: false,
+  columns: [
+    'id',
+    'from_seat',
+    'to_seat',
+    'body',
+    'liked',
+    'reply_to',
+    'reply_from',
+    'reply_body',
+    'created_ms',
+  ],
+  // Moderation deletes abuse and may correct a body; admin inserts would
+  // forge someone's DMs, so no.
+  editable: {'body'},
+  deletable: true,
+  orderBy: 'id DESC',
+);
+
+const AdminTableSpec _friendInvitesSpec = AdminTableSpec(
+  name: 'friend_invites',
+  pk: 'id',
+  pkIsText: false,
+  columns: [
+    'id',
+    'from_seat',
+    'from_name',
+    'to_seat',
+    'game',
+    'code',
+    'status',
+    'created_ms',
+    'updated_ms',
+  ],
+  editable: {'game', 'code', 'status'},
+  deletable: true,
+  orderBy: 'id DESC',
+);
+
+const AdminTableSpec _friendBlocksSpec = AdminTableSpec(
+  name: 'friend_blocks',
+  pk: 'id',
+  pkIsText: false,
+  columns: ['id', 'blocker', 'blocked', 'blocked_name', 'created_ms'],
+  // Blocks exist to be corrected by admins (bad-name blocks, harassment
+  // cleanup): delete to lift, edit the stored name if it drifted.
+  editable: {'blocked', 'blocked_name', 'created_ms'},
+  deletable: true,
+  orderBy: 'id DESC',
+);
+
 const Map<String, AdminTableSpec> adminTableSpecs = {
   'feedback': _feedbackSpec,
   'results': _resultsSpec,
@@ -213,6 +319,12 @@ const Map<String, AdminTableSpec> adminTableSpecs = {
   'admin_audit': _auditSpec,
   'auth_users': _usersSpec,
   'auth_sessions': _sessionsSpec,
+  'friend_profiles': _friendProfilesSpec,
+  'friendships': _friendshipsSpec,
+  'friend_requests': _friendRequestsSpec,
+  'friend_messages': _friendMessagesSpec,
+  'friend_invites': _friendInvitesSpec,
+  'friend_blocks': _friendBlocksSpec,
 };
 
 AdminTableSpec? tableSpec(String name) => adminTableSpecs[name];

@@ -526,7 +526,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                       ? 'Category: all'
                       : 'Category: $_repCategory',
                   selected: _repCategory.isNotEmpty,
-                  options: const ['', 'bug', 'feature', 'question', 'other'],
+                  options: const ['', 'bug', 'feature', 'question', 'other', 'player'],
                   onPick: (v) {
                     setState(() => _repCategory = v);
                     _reloadReports();
@@ -766,7 +766,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                   initialValue: category,
                   decoration: const InputDecoration(labelText: 'Category'),
                   items: [
-                    for (final v in const ['bug', 'feature', 'question', 'other'])
+                    for (final v in const ['bug', 'feature', 'question', 'other', 'player'])
                       DropdownMenuItem(value: v, child: Text(v)),
                   ],
                   onChanged: (v) => setD(() => category = v ?? category),

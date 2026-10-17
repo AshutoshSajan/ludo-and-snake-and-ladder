@@ -8,6 +8,7 @@ import '../ui/ludo/ludo_board_painter.dart';
 import '../ui/snakes/snakes_board_painter.dart';
 import '../ui/theme.dart';
 import 'home_widgets.dart';
+import 'friends_screen.dart';
 import 'online_lobby_screen.dart';
 import 'scoreboard_screen.dart';
 import 'settings_screen.dart';
@@ -86,6 +87,16 @@ class HomeScreen extends ConsumerWidget {
                             ),
                           ),
                         ),
+                      ),
+                      const SizedBox(width: 10),
+                      IconButton.outlined(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const FriendsScreen(),
+                          ),
+                        ),
+                        icon: const Icon(Icons.group_outlined),
+                        tooltip: 'Friends',
                       ),
                       const SizedBox(width: 10),
                       IconButton.outlined(

@@ -22,7 +22,14 @@ import '../ui/theme.dart';
 /// The server owns the rules and the dice; this screen only renders what the
 /// server reports (`OnlineClient`) and forwards the player's intents.
 class OnlineLobbyScreen extends StatefulWidget {
-  const OnlineLobbyScreen({super.key});
+  const OnlineLobbyScreen({super.key, this.startup});
+
+  /// Optional entry handoff from the friends feature: the inviter walks
+  /// in with a live [OnlineStartup.adoptedClient] (their room already
+  /// exists, the invite carries its code), the invitee walks in with a
+  /// [OnlineStartup.joinCode] and auto-joins. Null stays the plain
+  /// connect form.
+  final OnlineStartup? startup;
 
   /// The server the online screens target by default. Precedence:
   /// 1. `--dart-define=GAME_SERVER_URL=wss://host/ws` (build-time override,
@@ -76,6 +83,20 @@ class OnlineLobbyScreen extends StatefulWidget {
   State<OnlineLobbyScreen> createState() => _OnlineLobbyScreenState();
 }
 
+/// Startstate the friends feature hands the lobby: either a client that
+/// already opened a room (the inviter, whose invite referenced that
+/// room's code) or a room code to join (the invitee).
+class OnlineStartup {
+  const OnlineStartup({this.joinCode, this.adoptedClient});
+
+  /// The invitee path: join this room the moment identity is restored.
+  final String? joinCode;
+
+  /// The inviter path: this client is already connected (or connecting)
+  /// to a room; the lobby adopts it instead of showing the connect form.
+  final OnlineClient? adoptedClient;
+}
+
 class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   final _serverCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
@@ -111,6 +132,13 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   void initState() {
     super.initState();
     _serverCtrl.text = OnlineLobbyScreen.defaultServerUrl();
+    // The inviter's handoff: an already-live client is adopted before
+    // the first build, so the lobby panel draws with it from frame one.
+    final adopted = widget.startup?.adoptedClient;
+    if (adopted != null) {
+      adopted.addListener(() => setState(() {}));
+      _client = adopted;
+    }
     _restoreIdentity();
   }
 
@@ -133,6 +161,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       // Persist it now, so it is the same name next time even before they play.
       await StorageService().saveOnlineName(resolved);
     }
+    // The invitee's handoff: with identity in hand, join the invited room
+    // straight away — the code came from the accepted invite.
+    final joinCode = widget.startup?.joinCode;
+    if (!mounted || joinCode == null) return;
+    _codeCtrl.text = joinCode;
+    _connect(createRoom: false, codeOverride: joinCode);
   }
 
   /// A stable default name for [id], mixed from the id itself so it is
@@ -163,13 +197,13 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     super.dispose();
   }
 
-  void _connect({bool createRoom = true}) {
+  void _connect({bool createRoom = true, String? codeOverride}) {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
       _showSnack('Pick a display name first');
       return;
     }
-    final code = _codeCtrl.text.trim();
+    final code = codeOverride ?? _codeCtrl.text.trim();
     if (!createRoom && code.length != 4) {
       _showSnack(
         _spectate ? 'Enter a room code to watch' : 'Room codes are 4 letters',
@@ -722,9 +756,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                     durMs: recording.durMs,
                   ),
                   onError: (message) =>
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(message)),
-                      ),
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(SnackBar(content: Text(message))),
                   onRecordingChanged: (recording) => setState(() {
                     _chatRecording = recording;
                   }),
