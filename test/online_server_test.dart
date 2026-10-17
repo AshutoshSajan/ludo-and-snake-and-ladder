@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,6 +20,7 @@ import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/tenor.dart' show tenorHandler;
+import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
@@ -671,6 +673,67 @@ void main() {
         expect(m['gif'], isNull, reason: 'refused links must not broadcast');
       }
     });
+
+    test('an uploaded voice note broadcasts with the store url and duration', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+
+      auth.voiceNotes.put(
+        code: room.code,
+        id: 'eadada55',
+        data: Uint8List.fromList([1]),
+        mime: 'audio/mp4',
+        durMs: 1400,
+      );
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'chat', 'text': 'listen to this', 'note': 'eadada55'},
+      );
+
+      final line = _lastSent(log, 'chat')!;
+      expect(line['note']['url'], '/media/voice/${room.code}/eadada55');
+      // The duration comes from the store, not the client's say-so — a
+      // client claiming 90 000 ms is corrected by the file it uploaded.
+      expect(line['note']['dur'], 1400);
+      expect(line['text'], 'listen to this', reason: 'a caption can ride a note');
+      // The bubble painter data rides every broadcast now: the sender's
+      // seat color is whatever the room assigned, not what they claimed
+      // at hello.
+      expect(line['color'], room.members['blue']!.color.name);
+      expect(line['at'], isA<int>());
+    });
+
+    test('an unuploaded or malformed note id is dropped, not announced', () {
+      final log = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+      for (final note in ['zzzzzz', 'Bad id', 'BAD_ID!!']) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'blue',
+          msg: {'type': 'chat', 'note': note},
+        );
+      }
+      expect(
+        _lastSent(log, 'chat'),
+        isNull,
+        reason: 'chat carries nothing the room could not have uploaded',
+      );
+
+      // A caption in the same intent still flows — only the note dies.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {'type': 'chat', 'text': 'trust me', 'note': 'zzzzzz'},
+      );
+      final line = _lastSent(log, 'chat')!;
+      expect(line['text'], 'trust me');
+      expect(line['note'], isNull, reason: 'no key for an unexplained audio url');
+    });
   });
 
   group('GameAuthority: voice signalling', () {
@@ -948,6 +1011,19 @@ void main() {
         if (req.url.path == 'media/tenor') {
           return tenorHandler(req, apiKey: tenorApiKey, client: tenorHttp);
         }
+        // Voice notes, the same two arms production routes: an upload
+        // takes fresh bytes into a live room's store; a playback serves a
+        // stored note back out.
+        if (req.url.path == 'media/voice') {
+          return voiceNoteUpload(
+            req,
+            store: authority.voiceNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/')) {
+          return voiceNoteServe(req, store: authority.voiceNotes);
+        }
         return shelf.Response.ok('ok');
       });
       srv = await shelf_io.serve(handler, InternetAddress.loopbackIPv4, 0);
@@ -1209,6 +1285,73 @@ void main() {
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
       expect(body['ok'], isFalse);
       expect((body['text'] as String).isNotEmpty, isTrue);
+    });
+
+    test('voice notes ride HTTP into a live room and play back by url', () async {
+      // The upload requires the room to be live, so seat one first.
+      host.sink.add(
+        jsonEncode({'type': 'hello', 'seatId': 'vn-host', 'name': 'Note Reporter'}),
+      );
+      final joined = await nextMsg(hostBuf, 'joined');
+      final code = joined['code'] as String;
+      final relative = '/media/voice/$code/ab12cd34';
+
+      // Production goes through the real HTTP stack; the test binding's
+      // global stub is zone-optimized back out for these calls.
+      Future<http.Response> overRealHttp(Future<http.Response> Function() call) =>
+          HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
+            call,
+            _RealHttpOverrides(),
+          );
+
+      final post = await overRealHttp(
+        () => http.post(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=$code&id=ab12cd34'),
+          headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
+          body: Uint8List.fromList([1, 2, 3]),
+        ),
+      );
+      expect(post.statusCode, 200);
+      final ack = jsonDecode(post.body) as Map<String, dynamic>;
+      expect(ack['url'], relative);
+      expect(ack['dur'], 1100);
+
+      final get = await overRealHttp(
+        () => http.get(Uri.parse('http://127.0.0.1:${srv.port}$relative')),
+      );
+      expect(get.statusCode, 200);
+      expect(get.bodyBytes, [1, 2, 3]);
+      expect(get.headers['content-type'], 'audio/mp4');
+      expect(get.headers['cache-control'], 'no-store');
+
+      // An unknown note is a 404, not an empty success.
+      final missing = await overRealHttp(
+        () => http.get(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice/$code/zzzzzz'),
+        ),
+      );
+      expect(missing.statusCode, 404);
+
+      // An upload for a room that is not on this instance has nowhere to
+      // be announced — refused instead of silently stored.
+      final noRoom = await overRealHttp(
+        () => http.post(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=NOTHERE&id=ab12cd34'),
+          headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
+          body: Uint8List.fromList([1]),
+        ),
+      );
+      expect(noRoom.statusCode, 404);
+
+      // Ids end up in a URL path; junk is refused at the door.
+      final badId = await overRealHttp(
+        () => http.post(
+          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=$code&id=AB'),
+          headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
+          body: Uint8List.fromList([1]),
+        ),
+      );
+      expect(badId.statusCode, 400);
     });
 
     test('hello -> joined -> lobby -> start -> state, full protocol', () async {

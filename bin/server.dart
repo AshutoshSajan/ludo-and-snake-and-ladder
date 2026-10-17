@@ -17,7 +17,9 @@
 ///   {type: 'start'}
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
-///   {type: 'chat', text, gif?}  gif is an https image URL (text may be empty)
+///   {type: 'chat', text, gif?, note?}  gif is an https image URL\n///       (text may be empty); note is the id of an uploaded voice note —
+///       see POST /media/voice. Invalid ids/notes are dropped
+///       server-side, never broadcast.
 ///   {type: 'voice', k, to, s}  P2P audio signalling: k is one of
 ///       offer/answer/ice/hangup, `to` is the target seatId, and `s` the
 ///       opaque payload. Routed only between seated members.
@@ -25,7 +27,10 @@
 ///   {type: 'joined', code, color, game}
 ///   {type: 'lobby', capacity, seats: [{name, color}...]}
 ///   {type: 'state', game, state: LudoStateJson | SnakesStateJson}
-///   {type: 'chat', from, text, gif?}
+///   {type: 'chat', from, color, text, gif?, note?, at}
+///       from is the sender name, color their seat color ('red'…), note
+///       the voice note {url, dur} when one rides the line, at the epoch
+///       ms it was said — clients use these to paint chat bubbles.
 ///   {type: 'voice', k, from, s}  relayed signalling; from is the sender seatId
 ///   {type: 'error', text}
 library;
@@ -45,6 +50,7 @@ import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/room_registry.dart';
 import 'package:game_club/server/tenor.dart';
+import 'package:game_club/server/voice_notes.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
 import 'package:http/http.dart' as http;
@@ -536,10 +542,13 @@ String get leaderboardBackend {
 }
 
 /// CORS for the read-only JSON API (`/health`, `/leaderboard`, `/stats`,
-/// `/rooms/lookup`): the Flutter web dev server runs on another origin, so
+/// `/rooms/lookup`) and the chat voice-note endpoints (`POST/GET
+/// /media/voice`): the Flutter web dev server runs on another origin, so
 /// without these headers a browser would fetch the data fine and then refuse
 /// to hand the response to the app. WebSockets do not need a preflight, so
-/// `/ws` is unaffected; writes stay rejected with 405, so `*` is safe here.
+/// `/ws` is unaffected; writes stay rejected with 405, so `*` is safe here —
+/// voice-note uploads are the one deliberate POST, gated by size caps and a
+/// live room check rather than auth, matching the room chat they belong to.
 /// No auth or cookies ride on these routes (Turso uses its own Bearer token
 /// server-side), which is exactly the case `*` is meant for.
 ///
@@ -1282,6 +1291,19 @@ Future<void> main(List<String> args) async {
       .addMiddleware(corsMiddleware)
       .addMiddleware(jsonErrorMiddleware)
       .addHandler((req) async {
+        // Voice notes: the upload (fresh bytes into a live room's store)
+        // and the playback (a stored note out again) are path-family
+        // routes — the id lives in the path, not the switch's labels.
+        if (req.url.path == 'media/voice') {
+          return voiceNoteUpload(
+            req,
+            store: authority.voiceNotes,
+            roomIsLive: authority.rooms.containsKey,
+          );
+        }
+        if (req.url.path.startsWith('media/voice/')) {
+          return voiceNoteServe(req, store: authority.voiceNotes);
+        }
         switch (req.url.path) {
           case 'ws':
             return wsHandler()(req);

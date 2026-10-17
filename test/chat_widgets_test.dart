@@ -55,7 +55,7 @@ Finder get linkField => find.byType(TextField).last;
 
 void main() {
   group('ChatLineView', () {
-    testWidgets('a plain line reads "from: text" as always', (tester) async {
+    testWidgets('a line bubbles up: avatar chip, name, body', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -65,8 +65,52 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Ana: hi', findRichText: true), findsOneWidget);
+      // The byline is its own row now — name and body are separate texts.
+      expect(find.text('Ana'), findsOneWidget);
+      expect(find.text('hi'), findsOneWidget);
+      // The avatar chip carries the sender's initial.
+      expect(find.text('A'), findsOneWidget);
       expect(find.byType(Image), findsNothing);
+    });
+
+    testWidgets('my own line renders the same way (right side, gold)', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(children: [
+              const ChatLineView(line: ChatLine(from: 'Ana', text: 'hey'), myName: 'Ana'),
+            ]),
+          ),
+        ),
+      );
+      expect(find.text('Ana'), findsOneWidget);
+      expect(find.text('hey'), findsOneWidget);
+    });
+
+    testWidgets('a timestamp rides the byline when the line has one', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(children: [
+              // at: 1 — the wall clock of a fixed epoch; the exact digits
+              // depend on the runner's timezone, the shape does not.
+              const ChatLineView(line: ChatLine(from: 'Ana', text: 'hi', at: 1)),
+            ]),
+          ),
+        ),
+      );
+      final texts = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data ?? '');
+      expect(
+        texts.any((s) => RegExp(r'^\d\d:\d\d$').hasMatch(s)),
+        isTrue,
+        reason: 'the byline shows one HH:MM clock',
+      );
     });
 
     testWidgets('a GIF line shows the image and its caption', (tester) async {
@@ -85,15 +129,12 @@ void main() {
           ),
         ),
       );
-      // The name alone (no colon-sentence) and the caption ride along.
-      expect(find.text('Bo', findRichText: true), findsOneWidget);
+      expect(find.text('Bo'), findsOneWidget);
       expect(find.text('look at this'), findsOneWidget);
       expect(find.byType(Image), findsOneWidget);
     });
 
-    testWidgets('a GIF-only line announces itself without a caption', (
-      tester,
-    ) async {
+    testWidgets('a GIF-only line needs no caption', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -105,8 +146,10 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Bo sent a GIF', findRichText: true), findsOneWidget);
+      expect(find.text('Bo'), findsOneWidget);
       expect(find.byType(Image), findsOneWidget);
+      // A lone GIF has nothing to say: no filler body text in the bubble.
+      expect(find.text('sent a GIF'), findsNothing);
     });
 
     testWidgets('a dead GIF degrades to a note, not an empty gap', (
@@ -127,6 +170,49 @@ void main() {
       // let the load fail and the errorBuilder replace the spinner.
       await tester.pumpAndSettle();
       expect(find.text('GIF unavailable'), findsOneWidget);
+    });
+
+    testWidgets('a voice note renders as a playable pill (static)', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(children: [
+              const ChatLineView(
+                line: ChatLine(from: 'Ana', note: VoiceNote(url: 'http://x/v', durMs: 7000)),
+              ),
+            ]),
+          ),
+        ),
+      );
+      // The pill shows the clip's length; playback itself is not tapped
+      // here — audioplayers has no plugin in widget tests — only that the
+      // pill and its play control exist.
+      expect(find.text('0:07'), findsOneWidget);
+      expect(find.byTooltip('Play voice note'), findsOneWidget);
+    });
+
+    testWidgets('a note with a caption keeps both in the bubble', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(children: [
+              const ChatLineView(
+                line: ChatLine(
+                  from: 'Ana',
+                  text: 'listen to this',
+                  note: VoiceNote(url: 'http://x/v', durMs: 1200),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      );
+      expect(find.text('0:01'), findsOneWidget);
+      expect(find.text('listen to this'), findsOneWidget);
     });
   });
 

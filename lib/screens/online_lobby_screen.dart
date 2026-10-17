@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import '../ui/page_app_bar.dart';
 import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/gif_picker_sheet.dart';
+import '../ui/shared/note_composer.dart';
 import '../ui/shared/voice_button.dart';
 
 import '../engine/ludo/ludo_models.dart';
@@ -79,6 +80,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   final _nameCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   final _chatCtrl = TextEditingController();
+
+  /// Whether the voice-note control currently owns the composer row —
+  /// the field, GIF and send step aside while the mic is live.
+  bool _chatRecording = false;
 
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
@@ -640,7 +645,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         for (final line in client.chat.reversed.take(6))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
-            child: ChatLineView(line: line, compact: true),
+            child: ChatLineView(line: line, compact: true, myName: client.name),
           ),
         const SizedBox(height: 16),
         // Table voice: peer-to-peer audio through the room's WebSocket
@@ -665,32 +670,53 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         if (!spectating)
           Row(
             children: [
-              IconButton(
-                icon: const Icon(Icons.gif_box, color: AppColors.gold),
-                tooltip: 'Send a GIF',
-                onPressed: () => GifPickerSheet.show(
-                  context,
-                  serverUrl: client.serverUrl,
-                  onPick: (url) => client.sendGif(url),
-                ),
-              ),
-              Expanded(
-                child: TextField(
-                  controller: _chatCtrl,
-                  style: const TextStyle(color: AppColors.ivory),
-                  onSubmitted: (_) => _sendChat(client),
-                  decoration: InputDecoration(
-                    labelText: 'Say something…',
-                    labelStyle: const TextStyle(color: AppColors.ivory),
-                    enabledBorder: _border(AppColors.ivory.withAlpha(90)),
-                    focusedBorder: _border(AppColors.gold),
+              if (!_chatRecording) ...[
+                IconButton(
+                  icon: const Icon(Icons.gif_box, color: AppColors.gold),
+                  tooltip: 'Send a GIF',
+                  onPressed: () => GifPickerSheet.show(
+                    context,
+                    serverUrl: client.serverUrl,
+                    onPick: (url) => client.sendGif(url),
                   ),
                 ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.send, color: AppColors.gold),
-                tooltip: 'Send chat',
-                onPressed: () => _sendChat(client),
+                Expanded(
+                  child: TextField(
+                    controller: _chatCtrl,
+                    style: const TextStyle(color: AppColors.ivory),
+                    onSubmitted: (_) => _sendChat(client),
+                    decoration: InputDecoration(
+                      labelText: 'Say something…',
+                      labelStyle: const TextStyle(color: AppColors.ivory),
+                      enabledBorder: _border(AppColors.ivory.withAlpha(90)),
+                      focusedBorder: _border(AppColors.gold),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send, color: AppColors.gold),
+                  tooltip: 'Send chat',
+                  onPressed: () => _sendChat(client),
+                ),
+              ],
+              // The voice control must not be rebuilt while it holds a mic
+              // session — see [NoteComposer]; the row's other members make
+              // way while it records.
+              Flexible(
+                child: NoteComposer(
+                  send: (recording) => client.sendVoiceNote(
+                    bytes: recording.bytes,
+                    mime: recording.mime,
+                    durMs: recording.durMs,
+                  ),
+                  onError: (message) =>
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(message)),
+                      ),
+                  onRecordingChanged: (recording) => setState(() {
+                    _chatRecording = recording;
+                  }),
+                ),
               ),
             ],
           ),

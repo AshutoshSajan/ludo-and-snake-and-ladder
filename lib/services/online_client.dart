@@ -22,21 +22,86 @@ import 'voice_rtc.dart';
 /// playing for them, or they have walked out.
 enum SeatStatus { connected, auto, left }
 
-/// One table-chat line: a sentence, and/or an inline GIF someone shared.
-/// The `gif` is the full-resolution https URL; the room's server refuses
-/// anything else (see `_chatGif`), so this is trustworthy to render.
-class ChatLine {
-  const ChatLine({required this.from, this.text = '', this.gif});
+/// The WS server URL's http(s) origin, where the voice-note store (and
+/// any other REST surface) lives. Kept public for the tests and for
+/// callers that frame player-facing links.
+Uri _httpOriginOf(String serverUrl, String path) {
+  final ws = Uri.parse(serverUrl);
+  return ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http', path: path);
+}
 
-  factory ChatLine.fromJson(Map<String, dynamic> j) => ChatLine(
-    from: j['from'] as String,
-    text: j['text'] as String? ?? '',
-    gif: j['gif'] as String?,
-  );
+/// One recorded voice note in chat: the playback URL (absolute — the
+/// chat broadcast carries a relative server path; the client joins it to
+/// the game server's origin here, once, at parse time) and its duration
+/// as the server recorded it.
+class VoiceNote {
+  const VoiceNote({required this.url, required this.durMs});
+
+  factory VoiceNote.fromJson(Map<String, dynamic> j, String serverUrl) =>
+      VoiceNote(
+        url: _httpOriginOf(serverUrl, j['url'] as String? ?? '').toString(),
+        durMs: (j['dur'] as num?)?.toInt() ?? 0,
+      );
+
+  final String url;
+  final int durMs;
+
+  /// '0:07' / '1:03' — the way a voice pill is read at a glance.
+  String get clock {
+    final s = (durMs / 1000).round();
+    final m = s ~/ 60;
+    return '$m:${(s % 60).toString().padLeft(2, '0')}';
+  }
+}
+
+/// One table-chat line: a sentence, an inline GIF and/or a voice note.
+/// The `gif` is the full-resolution https URL and `note` an uploaded
+/// recording — the room's server builds both (see `_chatGif` and
+/// `_chatNote`), so they are exactly what the store vouched for.
+/// `color` paints the bubble with the sender's seat; `at` is the epoch
+/// ms the line was said.
+class ChatLine {
+  const ChatLine({
+    required this.from,
+    this.text = '',
+    this.gif,
+    this.note,
+    this.color,
+    this.at,
+  });
+
+  factory ChatLine.fromJson(Map<String, dynamic> j, {String? serverUrl}) =>
+    ChatLine(
+      from: j['from'] as String,
+      text: j['text'] as String? ?? '',
+      gif: j['gif'] as String?,
+      note: j['note'] == null
+          ? null
+          : (serverUrl == null
+                ? null
+                : VoiceNote.fromJson(
+                    (j['note'] as Map).cast<String, dynamic>(),
+                    serverUrl,
+                  )),
+      color: LudoColor.tryParse(j['color'] as String? ?? ''),
+      at: (j['at'] as num?)?.toInt(),
+    );
 
   final String from;
   final String text;
   final String? gif;
+  final VoiceNote? note;
+  final LudoColor? color;
+  final int? at;
+
+  /// '14:32' — fresh enough to matter in a tablet session, and cheap: no
+  /// date math, just the wall clock at arrival.
+  String get clock {
+    final t = DateTime.fromMillisecondsSinceEpoch(at ?? 0);
+    final h = t.hour.toString().padLeft(2, '0');
+    final m = t.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
 }
 
 /// One lobby seat as reported by the server.
@@ -816,7 +881,7 @@ class OnlineClient extends ChangeNotifier {
         started = true;
         status = OnlineStatus.playing;
       case 'chat':
-        final line = ChatLine.fromJson(msg);
+        final line = ChatLine.fromJson(msg, serverUrl: serverUrl);
         chat.add(line);
         // Unread only accumulates while the chat surface is closed. A message
         // that arrives while the reader is looking at it is read by
@@ -981,6 +1046,44 @@ class OnlineClient extends ChangeNotifier {
   void sendGif(String url, {String caption = ''}) => _spectating
       ? _noop()
       : _send({'type': 'chat', 'text': caption.trim(), 'gif': url});
+
+  /// Uploads a recorded voice note to the server and announces it as a
+  /// chat line. Two steps on purpose: the recording's bytes travel by
+  /// HTTP (the socket only carries small JSON), and the announcement is a
+  /// regular chat broadcast so unread counts, chimes and history all
+  /// treat it like any other line. False when there is no room, the
+  /// upload was refused, or the network had other plans — the caller
+  /// says so instead of the composer silently swallowing a recording.
+  Future<bool> sendVoiceNote({
+    required List<int> bytes,
+    required String mime,
+    required int durMs,
+    http.Client? httpClient,
+  }) async {
+    final code = roomCode;
+    if (code == null || _spectating) return false;
+    // An id the store's policy will accept: [a-z0-9-], unique enough that
+    // two notes recorded in the same millisecond stay distinct.
+    final id = '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+        '${Random().nextInt(1 << 24).toRadixString(36)}';
+    final client = httpClient ?? http.Client();
+    try {
+      final res = await client.post(
+        _httpOriginOf(serverUrl, '/media/voice').replace(
+          queryParameters: {'room': code, 'id': id},
+        ),
+        headers: {'content-type': mime, 'x-voice-duration': '$durMs'},
+        body: bytes,
+      );
+      if (res.statusCode != 200) return false;
+      _send({'type': 'chat', 'text': '', 'note': id});
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (httpClient == null) client.close();
+    }
+  }
 
   /// Hand the seat to the table. The decision lives on the server, so the
   /// table keeps playing our turn when this tab is closed, the phone is

@@ -18,6 +18,7 @@ import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
 import '../engine/snakes/snakes_engine.dart' as snakes;
 import 'leaderboard_store.dart';
+import 'voice_notes.dart';
 
 /// One connected participant.
 class ServerMember {
@@ -325,6 +326,20 @@ String? _chatGif(Object? raw) {
   return value;
 }
 
+/// A voice note rides the intent as its uploaded id and becomes a
+/// broadcast url from the store's own record. An id for a note that was
+/// never uploaded — to this room, on this instance — is dropped: chat
+/// carries nothing a room's own uploads cannot explain.
+VoiceNote? _chatNote(
+  VoiceNoteStore store,
+  String roomCode,
+  Map<String, dynamic> msg,
+) {
+  final id = msg['note'] as String?;
+  if (id == null || id.isEmpty || !voiceNoteIdPattern.hasMatch(id)) return null;
+  return store.get(roomCode, id);
+}
+
 class GameAuthority {
   GameAuthority({
     Random? rng,
@@ -334,9 +349,16 @@ class GameAuthority {
     this.onRoomStarted,
     this.onGameFinished,
     this.autoStepDelay = const Duration(milliseconds: 800),
-  }) : rng = rng ?? Random.secure();
+    VoiceNoteStore? voiceNotes,
+  }) : rng = rng ?? Random.secure(),
+       voiceNotes = voiceNotes ?? VoiceNoteStore();
 
   final Random rng;
+
+  /// Chat voice-note store: uploads land here and wait to be announced
+  /// through a chat line. One authority per process owns one shared
+  /// store, matching how the rooms themselves live per-instance.
+  final VoiceNoteStore voiceNotes;
 
   /// How long a started room with no connected members stays recoverable.
   final Duration emptyRoomGrace;
@@ -632,15 +654,24 @@ class GameAuthority {
       case 'chat':
         final text = (msg['text'] as String? ?? '').trim();
         final gif = _chatGif(msg['gif'] as String?);
-        // A line is either a sentence, a GIF, or both (a GIF plus a
-        // caption). Nothing at all is not a message.
-        if (text.isEmpty && gif == null) return;
+        final note = _chatNote(voiceNotes, room.code, msg);
+        // A line is any of a sentence, a GIF, a voice note — or a caption
+        // riding one. Nothing at all is not a message.
+        if (text.isEmpty && gif == null && note == null) return;
         if (text.length > 200) return;
         room.broadcast({
           'type': 'chat',
           'from': member.name,
+          // The seat color paints the bubble — it is how a string of text
+          // becomes a person at the table.
+          'color': member.color.name,
           'text': text,
           'gif': ?gif,
+          // The note's url and duration come from the store, not the
+          // intent: a client that invented either is silently corrected.
+          if (note != null)
+            'note': {'url': note.urlPath, 'dur': note.durMs},
+          'at': DateTime.now().millisecondsSinceEpoch,
         });
         return;
 
