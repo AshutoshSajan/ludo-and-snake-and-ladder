@@ -41,7 +41,7 @@
 | Start | roll a **6** to leave the base | roll a **1** to enter |
 | Win | exact entry into the home triangle | exact landing on 100 (overshoot bounces back) |
 | Bots | easy / medium / hard | auto-play |
-| Online | ✅ rooms, chat, reconnect, spectate, autoplay | ✅ rooms, chat, reconnect, spectate, autoplay |
+| Online | ✅ rooms, chat, voice, reconnect, spectate, autoplay | ✅ rooms, chat, voice, reconnect, spectate, autoplay |
 
 ### 🎲 Ludo (classic)
 

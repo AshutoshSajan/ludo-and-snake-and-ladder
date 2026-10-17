@@ -12,6 +12,7 @@ import '../../engine/ludo/ludo_models.dart';
 import '../../engine/ludo/ludo_rules.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../shared/voice_button.dart';
 import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
@@ -367,6 +368,14 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
               onPressed: () =>
                   GameChatSheet.show(context, widget.onlineClient!),
             ),
+          if (widget.onlineClient != null &&
+              !(widget.onlineClient!.isSpectator)) ...[
+            // Voice is seated-only: a watcher has no seat for the mesh to
+            // address, so no controls rather than a control that answers
+            // "no microphone" misleadingly.
+            VoiceButton(client: widget.onlineClient!),
+            MicButton(client: widget.onlineClient!),
+          ],
           IconButton(
             icon: const Icon(Icons.undo),
             tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',

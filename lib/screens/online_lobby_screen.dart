@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import '../ui/page_app_bar.dart';
 import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/gif_picker_sheet.dart';
+import '../ui/shared/voice_button.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../services/online_client.dart';
@@ -640,6 +641,26 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: ChatLineView(line: line, compact: true),
+          ),
+        const SizedBox(height: 16),
+        // Table voice: peer-to-peer audio through the room's WebSocket
+        // signalling. Spectators have no seat, so no mic.
+        if (!spectating)
+          Row(
+            children: [
+              VoiceButton(client: client),
+              MicButton(client: client),
+              const SizedBox(width: 8),
+              Text(
+                client.voiceJoined
+                    ? (client.voiceMuted ? 'Voice — muted' : 'Table voice on')
+                    : 'Voice',
+                style: TextStyle(
+                  color: AppColors.ivory.withAlpha(150),
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
         if (!spectating)
           Row(

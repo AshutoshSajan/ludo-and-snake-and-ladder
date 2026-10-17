@@ -265,6 +265,21 @@ class Room {
     }
   }
 
+  /// Sends a message to whichever live connection currently holds
+  /// [seatId]. Voice chat signalling is seat-to-seat, not broadcast: an
+  /// offer belongs to the one player it names, and the seat id — not the
+  /// connection — is the address, so a reconnect never re-negotiates the
+  /// audio mesh. False when nobody holds the seat (they left mid-hello).
+  bool sendToSeat(String seatId, Map<String, dynamic> message) {
+    for (final m in members.values) {
+      if (m.seatId == seatId) {
+        m.sink(jsonEncode(message));
+        return true;
+      }
+    }
+    return false;
+  }
+
   void broadcastState() =>
       broadcast({'type': 'state', 'game': gameType, 'state': stateJson()});
 
@@ -290,6 +305,10 @@ class Room {
 
 /// Server-side game logic shared by the transport layer (websockets) and
 /// tests (direct function calls).
+/// Valid voice-signal kinds a client may route. The server never inspects
+/// the payload, but the kind must be real or the message is junk.
+const _voiceKinds = {'offer', 'answer', 'ice', 'hangup'};
+
 /// Chat messages may carry a GIF: a single https URL shown inline by the
 /// clients. The gate is deliberately narrow — https only (a plain http
 /// image is mixed content on the hosted site and renders broken), no
@@ -627,6 +646,29 @@ class GameAuthority {
 
       case 'autoplay':
         _setAutoplay(room, member, msg['on'] as bool? ?? true);
+        return;
+
+      case 'voice':
+        // WebRTC signalling for table voice. The payload ('s') is opaque —
+        // SDP or an ICE candidate as its own JSON string — the server only
+        // routes it between seats. Routing by seatId (stable across
+        // reconnects) rather than connection id is the point: a dropped
+        // link re-attaches to the same peer sessions, and a returning
+        // player's audio mesh survives. Only seated members reach this
+        // arm at all — a spectator 'voice' intent has no member and dies
+        // at the switch's entry guard.
+        final kind = msg['k'] as String? ?? '';
+        final to = msg['to'] as String? ?? '';
+        final s = msg['s'] as String? ?? '';
+        if (!_voiceKinds.contains(kind) || to.isEmpty || s.isEmpty) return;
+        if (to == member.seatId) return;
+        if (s.length > 64 * 1024) return;
+        room.sendToSeat(to, {
+          'type': 'voice',
+          'k': kind,
+          'from': member.seatId,
+          's': s,
+        });
         return;
 
       case 'leave':

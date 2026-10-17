@@ -673,6 +673,119 @@ void main() {
     });
   });
 
+  group('GameAuthority: voice signalling', () {
+    test('a signal routes to the addressed seat, framed with the sender', () {
+      final hostLog = <String>[];
+      final guestLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
+
+      auth.handleIntent(
+        room: room,
+        connectionId: 'blue',
+        msg: {
+          'type': 'voice',
+          'k': 'offer',
+          'to': 'red',
+          's': '{"type":"offer","sdp":"v=0"}',
+        },
+      );
+
+      expect(guestLog, isEmpty, reason: 'the sender is not their own audience');
+      expect(hostLog, hasLength(1));
+      final frame = jsonDecode(hostLog.single) as Map<String, dynamic>;
+      expect(frame['type'], 'voice');
+      expect(frame['k'], 'offer');
+      // The seat, not the connection, is the address: the relay stamps the
+      // sender's stable seatId so the receiver knows which peer it is.
+      expect(frame['from'], 'blue');
+      expect(frame['s'], '{"type":"offer","sdp":"v=0"}');
+    });
+
+    test('junk signals are dropped before anyone hears about them', () {
+      final hostLog = <String>[];
+      final guestLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
+
+      for (final junk in [
+        {'type': 'voice', 'k': 'attack', 'to': 'red', 's': 'x'},
+        {'type': 'voice', 'k': 'offer', 'to': '', 's': 'x'},
+        {'type': 'voice', 'k': 'offer', 'to': 'red', 's': ''},
+        // Talking to yourself is not a signalling session.
+        {'type': 'voice', 'k': 'offer', 'to': 'blue', 's': 'x'},
+        // 64 KB of "SDP" is not an SDP.
+        {
+          'type': 'voice',
+          'k': 'offer',
+          'to': 'red',
+          's': 'a' * (64 * 1024 + 1),
+        },
+      ]) {
+        auth.handleIntent(
+          room: room,
+          connectionId: 'blue',
+          msg: junk,
+        );
+      }
+      expect(hostLog, isEmpty);
+      expect(guestLog, isEmpty);
+    });
+
+    test('spectators neither send nor receive signalling', () {
+      final hostLog = <String>[];
+      final watcherLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.spectateRoom(
+        room.code,
+        _member(LudoColor.blue, on: watcherLog.add, id: 'watch-1'),
+      );
+
+      // A watcher "offering": intent handling has no member for a spectator,
+      // so nothing is relayed.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'watch-1',
+        msg: {'type': 'voice', 'k': 'offer', 'to': 'red', 's': 'x'},
+      );
+      expect(hostLog, isEmpty, reason: 'spectators have no mic seat');
+
+      // A seated player addressing a seatId no live member holds (the
+      // watcher's id is not a seat): routes nowhere, no crash.
+      auth.handleIntent(
+        room: room,
+        connectionId: 'red',
+        msg: {'type': 'voice', 'k': 'ice', 'to': 'watch-1', 's': 'c'},
+      );
+      expect(watcherLog, isEmpty, reason: 'voice is seated-to-seated only');
+    });
+
+    test('signal to a departed connection routes nowhere, without failing', () {
+      final hostLog = <String>[];
+      final guestLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+      auth.joinRoom(room.code, _member(LudoColor.blue, on: guestLog.add));
+      // Guest walks (their sink dies in the transport layer normally; here
+      // we simulate by removing the seat membership directly).
+      room.members.remove('blue');
+
+      expect(
+        () => auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'voice', 'k': 'offer', 'to': 'blue', 's': 'x'},
+        ),
+        returnsNormally,
+        reason: 'a vanished peer is a fact of online play, not an error',
+      );
+      expect(hostLog, isEmpty);
+    });
+  });
+
   group('GameAuthority: gameplay', () {
     // Two seated members with recording sinks.
     (Room, GameAuthority, List<String>, List<String>) playRoom() {

@@ -18,11 +18,15 @@
 ///   {type: 'roll'}
 ///   {type: 'move', token: 0..3}
 ///   {type: 'chat', text, gif?}  gif is an https image URL (text may be empty)
+///   {type: 'voice', k, to, s}  P2P audio signalling: k is one of
+///       offer/answer/ice/hangup, `to` is the target seatId, and `s` the
+///       opaque payload. Routed only between seated members.
 /// Server -> client:
 ///   {type: 'joined', code, color, game}
 ///   {type: 'lobby', capacity, seats: [{name, color}...]}
 ///   {type: 'state', game, state: LudoStateJson | SnakesStateJson}
 ///   {type: 'chat', from, text, gif?}
+///   {type: 'voice', k, from, s}  relayed signalling; from is the sender seatId
 ///   {type: 'error', text}
 library;
 

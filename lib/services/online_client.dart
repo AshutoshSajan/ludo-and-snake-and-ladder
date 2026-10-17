@@ -15,6 +15,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../engine/snakes/snakes_engine.dart';
+import 'voice_room.dart';
+import 'voice_rtc.dart';
 
 /// How a seat is being held: the person is at their device, the table is
 /// playing for them, or they have walked out.
@@ -278,6 +280,7 @@ class OnlineClient extends ChangeNotifier {
     this.quickMatch = false,
     this.capacity = 4,
     WebSocketChannel Function(Uri uri)? channelFactory,
+    this._voiceBackend,
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
   /// e.g. 'ws://localhost:8080/ws'
@@ -745,6 +748,30 @@ class OnlineClient extends ChangeNotifier {
           ..addAll([
             for (final n in (msg['spectators'] as List? ?? [])) n as String,
           ]);
+        // Where the voice mesh follows the roster — but only for a join in
+        // progress: pre-arming peers without a mic grants nothing and would
+        // burn an RTCPeerConnection per seat for players who never speak.
+        final v = _voice;
+        if (v != null && v.enabled) {
+          v.updateSeats(
+            lobbySeats.map((s) => s.seatId).toSet(),
+            seatId,
+          );
+        }
+      case 'voice':
+        // Signalling for a session I joined; a client that never enabled
+        // voice drops these (its mic is off, an unanswered offer is
+        // exactly what the sender's ICE lifecycle already tolerates).
+        final v = _voice;
+        if (v != null) {
+          unawaited(
+            v.onSignal((
+              k: msg['k'] as String,
+              from: msg['from'] as String,
+              s: msg['s'] as String,
+            )),
+          );
+        }
       case 'seats':
         // The per-seat status feed: autoplay badges, disconnected links, and
         // the corners that are now empty because someone walked out. It
@@ -808,6 +835,7 @@ class OnlineClient extends ChangeNotifier {
         errorText = 'The room has closed.';
         status = OnlineStatus.error;
         _userClosed = true;
+        _teardownVoice();
         _channel?.sink.close();
         _channel = null;
       case 'error':
@@ -831,10 +859,19 @@ class OnlineClient extends ChangeNotifier {
         // A definitive rejection (bad code, gone room) — stop retrying.
         _reconnectTimer?.cancel();
         _userClosed = true;
+        _teardownVoice();
         _channel?.sink.close();
         _channel = null;
     }
     notifyListeners();
+  }
+
+  /// The room is gone — there is no seat to hand a hangup to, so peers
+  /// are closed without farewell and the mic is released. The joined
+  /// state clears outright; the voice button flips to off.
+  void _teardownVoice() {
+    final v = _voice;
+    if (v != null) unawaited(v.abandoned());
   }
 
   /// Hooks used by the session adapter (sounds, animation replay).
@@ -859,6 +896,58 @@ class OnlineClient extends ChangeNotifier {
   /// can play the notification. Separate from [onChat] on purpose: [onChat]
   /// fires for every line, and only the unread ones should make a noise.
   void Function(ChatLine message)? onMessageArrived;
+
+  // ------------------------------------------------------- voice chat
+  //
+  // One VoiceRoom per client, created on first use. It outlives reconnects
+  // (the P2P mesh carries on while the socket re-attaches) and dies with
+  // the room session, not the widget tree — a board screen swap must not
+  // end a call someone is still talking in.
+
+  final VoiceBackend? _voiceBackend;
+  VoiceRoom? _voice;
+
+  VoiceBackend get _effectiveVoiceBackend =>
+      _voiceBackend ?? FlutterVoiceBackend();
+
+  bool get voiceJoined => _voice?.enabled ?? false;
+  bool get voiceMuted => _voice?.muted ?? false;
+
+  /// Seat ids whose audio peers are mounted right now.
+  List<String> get voicePeers => _voice?.peers ?? const [];
+
+  /// Whether the local mic is captured. Permission lives behind this:
+  /// nothing (no audio element, no peer) is created before the user asks
+  /// for voice, so the browser prompt only ever appears deliberately.
+  VoiceRoom get voice => _voice ??= VoiceRoom(
+    backend: _effectiveVoiceBackend,
+    sendSignal: _sendVoiceSignal,
+    onChanged: notifyListeners,
+  );
+
+  /// Joins the table voice. False when the mic was refused — the caller
+  /// surfaces that rather than flipping the button into a silent state.
+  Future<bool> joinVoice() async {
+    if (_spectating) return false;
+    // The seat roster must be known before offers are elected; feeding it
+    // here ensures a join during a lagging lobby feed still meshes.
+    voice.updateSeats(
+      lobbySeats.map((s) => s.seatId).where((id) => id.isNotEmpty).toSet(),
+      seatId,
+    );
+    return voice.enable();
+  }
+
+  /// Leaves the table voice and tells every peer so their side drops fast.
+  Future<void> leaveVoice() => voice.disable();
+
+  /// Local mute — toggles the track, sends nothing.
+  void setVoiceMuted(bool muted) => voice.setMuted(muted);
+
+  void _sendVoiceSignal(String k, String to, String s) {
+    if (_spectating) return;
+    _send({'type': 'voice', 'k': k, 'to': to, 's': s});
+  }
 
   /// Show the chat. Reading and opening are the same act, so opening clears
   /// the unread count immediately rather than waiting for the sheet to close.
@@ -920,6 +1009,9 @@ class OnlineClient extends ChangeNotifier {
     _coldStartTimer?.cancel();
     waitingForColdStart = false;
     _reconnectTimer = null;
+    // A deliberate leave: tell the peers we are going, then drop them —
+    // the receivers stop playing instead of draining silence for a while.
+    _teardownVoice();
     // Reflect the leave immediately so the UI doesn't flash a spinner
     // while the socket cleanup below settles.
     status = OnlineStatus.idle;
@@ -936,6 +1028,7 @@ class OnlineClient extends ChangeNotifier {
     _reconnectTimer?.cancel();
     _coldStartTimer?.cancel();
     _reconnectTimer = null;
+    _teardownVoice();
     _sub?.cancel();
     _channel?.sink.close();
     super.dispose();

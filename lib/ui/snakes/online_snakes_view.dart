@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../shared/voice_button.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
@@ -294,6 +295,11 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                 : 'Table chat',
             onPressed: () => GameChatSheet.show(context, widget.client),
           ),
+          // Voice is seated-only; a spectator has no seat for the mesh.
+          if (!widget.client.isSpectator) ...[
+            VoiceButton(client: widget.client),
+            MicButton(client: widget.client),
+          ],
           IconButton(
             icon: Icon(
               widget.client.iAmAuto
