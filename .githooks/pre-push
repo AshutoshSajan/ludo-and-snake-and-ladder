@@ -12,6 +12,19 @@ set -uo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
+# Detach git's hook plumbing before spawning children. Hooks run with
+# GIT_DIR (and friends) exported to the chain, and anything that runs its
+# own `git` then describes THE WRONG REPOSITORY — the Flutter tool stamps
+# its framework version with git and reported "0.0.0-unknown" on pushes,
+# because `git describe` inside the flutter checkout returned this repo's
+# hash (verified live: v1.2.1-43-gda9ea25 instead of 3.47.2). The toplevel
+# above is resolved BEFORE the unset on purpose; after the cd, plain cwd
+# discovery is unambiguous and every nested git consumer sees its own repo.
+# (Ported from chore/agent-conventions so this push gate works before
+# that PR merges; identical bytes merge cleanly.)
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
 skip() { printf '\033[33m[pre-push] %s\033[0m\n' "$1"; exit 0; }
 
 # 1. The local quality gate, unless this push only moves tags or deletes refs.
