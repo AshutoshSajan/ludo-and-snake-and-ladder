@@ -23,7 +23,7 @@
   <a href="#-screenshots">📸 Screenshots</a> ·
   <a href="#-architecture">🏗 Architecture</a> ·
   <a href="#-getting-started">🚀 Getting started</a> ·
-  <a href="#-branches-prs--ci">🌲 Branches &amp; CI</a> ·
+  <a href="CONVENTIONS.md">📜 Conventions</a> · <a href="ROADMAP.md">🗺 Roadmap</a> ·
   <a href="#-tooling">🛠 Tooling</a> ·
   <a href="#-online-play--deploy">🌐 Online &amp; deploy</a> ·
   <a href="#-browser-extension">🧩 Extension</a> ·
@@ -186,13 +186,9 @@ flutter analyze --fatal-infos
 ./tool/ci.sh --web          # + web release build
 ```
 
-`tool/ci.sh` runs the same checks as CI — no runner queue wait. Enable the
-pre-push hook (analyze + tests on every push to `main`/`staging`/`dev`,
-skippable with `git push --no-verify`):
-
-```bash
-git config core.hooksPath .githooks   # one-time setup
-```
+`tool/ci.sh` runs the same checks as CI — no runner queue wait. (The git
+hooks around it — `pre-push`, `post-merge` — are documented in
+[CONVENTIONS.md](CONVENTIONS.md).)
 
 ### 📱 Supported platforms
 
@@ -216,120 +212,6 @@ flutter build linux --release
 Android/iOS: open in Android Studio / Xcode and run normally, or
 `flutter build apk --release` / `flutter build ios --release` with the
 toolchains installed.
-</details>
-
----
-
-## 🌲 Branches, PRs & CI
-
-```
-sandbox  →  dev  →  staging  →  main
-```
-
-| Branch | Role | PRs into it come from | Merge gate |
-|---|---|---|---|
-| `sandbox` | free experiments / spikes / prototypes | anything, no ceremony | none — break it freely |
-| `dev` | **day-to-day development integration** | `feat/…` `fix/…` `chore/…` task branches (and `sandbox` when a spike graduates) | analyze + full tests + build (CI) |
-| `staging` | release preparation / integration testing | `dev` | analyze + full tests + build (CI) |
-| `main` | production | `staging` **only** | merged by the maintainer |
-
-**The rules:**
-
-- **Every feature, bugfix, task or experiment gets its own branch** (`feat/…`,
-  `fix/…`, `chore/…`, `spike/…`), cut from the branch it will be merged into
-  (normally `dev`).
-- **PRs always target the immediate parent branch** — `feat/…` → `dev`,
-  `dev` → `staging`, `staging` → `main`. Task branches never target
-  `staging`/`main` directly, and nothing is ever pushed to `main`.
-- Tests must pass (analyze + full suite + release build) before a PR merges.
-- **`main` is CI-guarded**: a push to `main` fails CI unless its head is a merge
-  commit (direct pushes and squash-merges are rejected). Branch protection is
-  unavailable on this private repo (free plan), so the `guard-main` job stands
-  in for it.
-
-```bash
-git checkout dev && git pull                # latest development state
-git checkout -b feat/my-feature dev         # new branch per task
-# …work (TDD: failing test first, then the fix)…
-git push -u origin feat/my-feature
-gh pr create --base dev                     # PR to the parent, never main
-# spike?            → cut from sandbox, PR back to sandbox
-# spike graduated?  → branch feat/… from sandbox, PR to dev
-```
-
-**CI gates** run on every PR and push:
-
-- `dev`/`staging`/`main` push → full CI (analyze + tests + build)
-- PR to `staging`/`main` → full CI (required to merge)
-- `main` push → `guard-main` requires a merge commit
-
-<details>
-<summary>Which CI event runs what — and why only <code>main</code></summary>
-
-`.github/workflows/ci.yml` runs on **PRs targeting `main`** and on **pushes to
-`main`**, plus `v*` tags.
-
-- A **pull request into `main`** runs the `test` job and nothing else —
-  analyze, the full suite, and a release web build.
-- A **push to `main`** runs the release path, in this order:
-  1. `release-prep` regenerates `CHANGELOG.md` and bumps the declared version,
-     then **opens a pull request** with both in one commit. It cannot push to
-     `main` directly: `guard-main` requires the head of `main` to be a merge
-     commit, and a bot commit is not one.
-  2. You merge that `chore: release prep` PR. That merge re-runs the workflow.
-  3. `verify-release` runs analyze + the full suite — the only test gate on a
-     push path, since `test` is pull-request-scoped.
-  4. `publish-firefox` builds the add-on and uploads it to addons.mozilla.org.
-
-So a release is: land your PR → merge the bot's `chore: release prep` PR → the
-add-on is uploaded. No tagging and nothing typed by hand. A `v*` tag runs the
-same path, for cutting a release without merging anything new.
-
-**Why only `main`.** Hosted runner minutes are metered and this repo exhausted
-them once already, so a full run happens where a change is about to ship rather
-than at every hop. Scoping is a trigger filter (`on.pull_request.branches:
-[main]`) rather than an `if:` inside the job, because an `if` still starts the
-runner and every job only to skip them. A PR into the integration branch has no
-hosted CI — run `tool/ci.sh` locally, which is the same gate and what the
-`pre-push` hook does. `prune-branch` only fires for PRs into `main`, so inner
-branches need deleting by hand.
-</details>
-
-<details>
-<summary>Changelog (git-cliff)</summary>
-
-`CHANGELOG.md` is **generated** by [git-cliff](https://git-cliff.org) from the
-commit history using `cliff.toml` (Keep a Changelog format) — never hand-edit
-it.
-
-```bash
-tool/changelog.sh           # rewrite it
-tool/changelog.sh --check   # fail if out of date, change nothing
-```
-
-The pre-push hook runs `--check` on `staging`/`main` pushes, so the file cannot
-drift from history at the moment it matters. Write commit subjects as
-`feat: …`, `fix: …`, `docs: …`, `chore: …` (Conventional Commits) so entries
-land in the right *Added / Fixed / …* group.
-</details>
-
-<details>
-<summary>Code review (Greptile)</summary>
-
-[Greptile](https://www.greptile.com) reviews pull requests through the
-committed `.greptile/config.json` (`{"includeBranches": ["main"]}`) — **only
-PRs targeting `main`** are reviewed, i.e. the `staging` → `main` release PR.
-Notes:
-
-- Widening the filter is a one-word edit: `"includeBranches": ["main", "staging"]`.
-  Use `excludeBranches` to review everything *except* listed tiers.
-- Both lists take globs (`release/*`, `dependabot/**`), matched
-  case-insensitively against the PR's **base** branch.
-- Draft PRs are skipped by default; a skipped PR can still be reviewed on
-  demand by commenting `@greptileai review`.
-- The committed file overrides the dashboard settings, and Greptile reads it
-  from the PR's *source* branch — so a branch only obeys the filter once it
-  contains this file (i.e. once it has merged `dev`).
 </details>
 
 ---
@@ -584,20 +466,18 @@ repository.
 
 ## 🤝 Contributing
 
-Issues and PRs welcome. For anything non-trivial, open an issue first.
+Issues and PRs welcome — for anything non-trivial, open an issue first.
+How we work (branch model, protected trunks `main`/`dev`, PR targets, hooks,
+CI guards, commit format) is documented in
+**[CONVENTIONS.md](CONVENTIONS.md)**; planned work and todos live in
+**[ROADMAP.md](ROADMAP.md)**.
 
-- **Code style**: `flutter analyze --fatal-infos` + `dart format` (enforced by CI).
-- **Tests**: new features need tests — run `flutter test` before pushing.
-- **Commits**: [Conventional Commits](https://www.conventionalcommits.org/) —
-  the changelog is generated from commit subjects (see the *Changelog
-  (git-cliff)* details above):
-
-  ```
-  feat(ludo): add new power-up
-  fix(snakes): fix ladder collision at square 42
-  docs: update leaderboard API docs
-  chore(deps): upgrade flutter_riverpod to 3.0
-  ```
+- **Code style**: `flutter analyze --fatal-infos` + `dart format` (enforced
+  by CI).
+- **Tests**: new features need tests — run `flutter test` (or `tool/ci.sh`)
+  before pushing.
+- **Commits**: [Conventional Commits](https://www.conventionalcommits.org/),
+  verified by the `commit-msg` hook.
 
 ## 📜 License
 

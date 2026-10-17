@@ -1,0 +1,45 @@
+name: Guard dev
+
+# ci.yml deliberately runs its full workflow only on `main` (both workflows'
+# comments tell the metered-runner-minutes story), so a push to `dev` would go
+# unguarded by it. This is the minimal complement: per CONVENTIONS.md, the head
+# of `dev` must a) be a merge commit — it arrived through a pull request — and
+# b) never be force-pushed or deleted.
+#
+# No checkout step on purpose: the guarded facts are already in the push event
+# payload, and starting a runner to run git for two hundred milliseconds is
+# runner minutes for nothing.
+on:
+  push:
+    branches: [dev]
+
+permissions: {}
+
+jobs:
+  guard-dev:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Reject non-PR, forced and deleting pushes
+        run: |
+          set -euo pipefail
+
+          # A deletion never carries head_commit; `// []` turns that into a
+          # violation verdict below rather than a jq crash.
+          parents=$(jq '(.head_commit.parents // []) | length' "$GITHUB_EVENT_PATH")
+
+          # A merge made from the GitHub UI has two parents. A squash merge has
+          # one, exactly like a direct push — both forbid the trunk.
+          if [ "$parents" -lt 2 ]; then
+            echo "::error::Direct push to dev is forbidden."
+            echo "::error::Push your task branch (from dev) and open a pull request into dev."
+            echo "::error::(head_commit.parents = $parents; a PR merge has 2 or more)"
+            exit 1
+          fi
+
+          forced=$(jq -r '.forced // false' "$GITHUB_EVENT_PATH")
+          if [ "$forced" = "true" ]; then
+            echo "::error::Force-push to dev is forbidden (rewrite of shared history)."
+            exit 1
+          fi
+
+          echo "dev head is a merge commit and not a force-push — OK"
