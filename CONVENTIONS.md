@@ -108,7 +108,7 @@ git config core.hooksPath .githooks
 |---|---|---|
 | `commit-msg` | Enforces [Conventional Commits](https://www.conventionalcommits.org/) (`feat`, `fix`, `docs`, `chore`, …) so git-cliff can group the changelog | history is the generator's input format |
 | `pre-push` | **Rejects any push to `main`/`dev`** (direct push, force-push, branch deletion — all forms), then runs `tool/ci.sh` (analyze + full suite) | the trunks only ever advance via PRs; get the cheap failures locally |
-| `post-merge` | Runs `tool/changelog.sh` (leaves the diff in the tree, one commit author per hook: you) and `git fetch --prune` | local catch-up + branch hygiene |
+| `post-merge` | Checks whether `CHANGELOG.md` is behind this history and says so — `--check` rewrites nothing; regeneration (`tool/changelog.sh`) stays a deliberate action — and `git fetch --prune` | clean pulls + branch hygiene |
 
 `tool/ci.sh` runs the same checks as CI, in seconds, free:
 
