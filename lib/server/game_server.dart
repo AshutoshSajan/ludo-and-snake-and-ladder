@@ -50,7 +50,10 @@ class ServerMember {
     for (final unit in seatId.codeUnits) {
       hash = (hash * 31 + unit) & 0x7fffffff;
     }
-    final tag = (hash % 0x10000).toRadixString(32).toUpperCase().padLeft(4, '0');
+    final tag = (hash % 0x10000)
+        .toRadixString(32)
+        .toUpperCase()
+        .padLeft(4, '0');
     var candidate = '$name #$tag';
     var n = 2;
     // Astronomically unlikely, but the fallback costs three lines and
@@ -61,6 +64,7 @@ class ServerMember {
     }
     name = candidate;
   }
+
   String name;
   LudoColor color; // reassigned by the authority when a corner is unavailable
   final void Function(String json) sink; // send-to-client callback
@@ -308,7 +312,7 @@ class Room {
 /// tests (direct function calls).
 /// Valid voice-signal kinds a client may route. The server never inspects
 /// the payload, but the kind must be real or the message is junk.
-const _voiceKinds = {'offer', 'answer', 'ice', 'hangup'};
+const _voiceKinds = {'offer', 'answer', 'ice', 'hangup', 'reinvite'};
 
 /// Chat messages may carry a GIF: a single https URL shown inline by the
 /// clients. The gate is deliberately narrow — https only (a plain http
@@ -391,7 +395,8 @@ class GameAuthority {
   final Future<void> Function({
     required String gameId,
     required List<GameResult> results,
-  })? onGameFinished;
+  })?
+  onGameFinished;
 
   final Map<String, Room> rooms = {};
 
@@ -671,8 +676,7 @@ class GameAuthority {
           'gif': ?gif,
           // The note's url and duration come from the store, not the
           // intent: a client that invented either is silently corrected.
-          if (note != null)
-            'note': {'url': note.urlPath, 'dur': note.durMs},
+          if (note != null) 'note': {'url': note.urlPath, 'dur': note.durMs},
           'at': DateTime.now().millisecondsSinceEpoch,
         });
         return;

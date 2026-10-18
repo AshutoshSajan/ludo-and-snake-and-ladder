@@ -1,5 +1,7 @@
 /// The WebRTC implementation behind [VoiceBackend]: flutter_webrtc for mic
-/// and peer plumbing, `voice_audio` for the platform split on playback.
+/// and peer plumbing, `voice_audio` for the platform split on playback,
+/// and `voice_speaking` for the per-stream loudness probes behind the
+/// "who is talking" indicator.
 ///
 /// Signalling payloads (SDP, ICE) travel as their own JSON strings — the
 /// server relays them opaquely by seat and never opens them. ICE frames
@@ -14,6 +16,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as wr;
 
 import 'voice_audio/voice_audio.dart';
 import 'voice_room.dart';
+import 'voice_speaking/voice_speaking.dart';
 
 class FlutterVoiceBackend implements VoiceBackend {
   FlutterVoiceBackend() {
@@ -24,12 +27,12 @@ class FlutterVoiceBackend implements VoiceBackend {
   }
 
   @override
-  Future<VoiceMic?> openMic() async {
+  Future<VoiceMic?> openMic({void Function(bool up)? onSpeaking}) async {
     try {
       final stream = await wr.navigator.mediaDevices.getUserMedia(
         <String, dynamic>{'audio': true, 'video': false},
       );
-      return RtcVoiceMic(stream);
+      return RtcVoiceMic(stream, onSpeaking: onSpeaking);
     } catch (_) {
       // Permission refused, no mic, browser without getUserMedia: voice
       // simply stays off and the button reports the miss.
@@ -42,23 +45,44 @@ class FlutterVoiceBackend implements VoiceBackend {
     required VoiceMic mic,
     required void Function(String k, String s) onSignal,
     required String peerId,
-  }) => RtcVoicePeer(onSignal: onSignal, mic: mic, peerId: peerId);
+    required void Function(bool up) onSpeaking,
+  }) => RtcVoicePeer(
+    onSignal: onSignal,
+    mic: mic,
+    peerId: peerId,
+    onSpeaking: onSpeaking,
+  );
 }
 
 class RtcVoiceMic implements VoiceMic {
-  RtcVoiceMic(this.stream);
+  RtcVoiceMic(this.stream, {void Function(bool up)? onSpeaking}) {
+    // Mute rides inside the probe's data for free: the analyser taps the
+    // MediaStreamTrack, and a track disabled by setMuted feeds silence —
+    // so a muted mic never reports the seat as speaking, in either
+    // direction of the tape.
+    if (onSpeaking != null) {
+      _probe = newVoiceSpeaking(
+        stream,
+        onChange: (up) => onSpeaking(!muted && up),
+      )..start();
+    }
+  }
 
   final wr.MediaStream stream;
+  VoiceSpeaking? _probe;
+  bool muted = false;
 
   @override
-  void setMuted(bool muted) {
+  void setMuted(bool value) {
+    muted = value;
     for (final track in stream.getAudioTracks()) {
-      track.enabled = !muted;
+      track.enabled = !value;
     }
   }
 
   @override
   void stop() {
+    _probe?.stop();
     for (final track in stream.getTracks()) {
       track.stop();
     }
@@ -70,10 +94,10 @@ class RtcVoicePeer implements VoicePeer {
     required this.onSignal,
     required VoiceMic mic,
     required this.peerId,
+    this.onSpeaking,
   }) {
     _open(mic);
   }
-
   final void Function(String k, String s) onSignal;
 
   /// The seat this session addresses. Also the key the remote audio
@@ -81,9 +105,14 @@ class RtcVoicePeer implements VoicePeer {
   /// teardown — one shared key would let two seats overwrite the same
   /// player and leak the leaver's audio element.
   final String peerId;
+
+  /// The room's speaking-indicator hook for this peer's remote audio.
+  final void Function(bool up)? onSpeaking;
   final Completer<wr.RTCPeerConnection?> _peering = Completer();
+  final List<VoiceSpeaking> _remoteProbes = [];
   wr.MediaStreamTrack? _localTrack;
   wr.MediaStream? _localStream;
+  wr.RTCPeerConnection? _pc;
 
   Future<void> _open(VoiceMic mic) async {
     try {
@@ -96,7 +125,8 @@ class RtcVoicePeer implements VoicePeer {
           {'urls': 'stun:stun1.l.google.com:19302'},
         ],
       });
-      _peering.complete(pc);
+      _pc = pc;
+      if (!_peering.isCompleted) _peering.complete(pc);
       pc.onIceCandidate = (c) {
         if (c.candidate == null) return;
         onSignal(
@@ -112,6 +142,12 @@ class RtcVoicePeer implements VoicePeer {
       pc.onTrack = (event) {
         if (event.streams.isNotEmpty) {
           unawaited(voiceAudio.attachRemoteAudio(peerId, event.streams.first));
+          // ...and the speaking indicator rides the same stream.
+          final probe = newVoiceSpeaking(
+            event.streams.first,
+            onChange: (up) => onSpeaking?.call(up),
+          )..start();
+          _remoteProbes.add(probe);
         }
       };
       if (mic is RtcVoiceMic) {
@@ -123,6 +159,12 @@ class RtcVoicePeer implements VoicePeer {
       if (!_peering.isCompleted) _peering.complete(null);
     }
   }
+
+  @override
+  bool get established =>
+      _pc != null &&
+      _pc!.connectionState ==
+          wr.RTCPeerConnectionState.RTCPeerConnectionStateConnected;
 
   @override
   Future<void> offer() async {
@@ -180,17 +222,28 @@ class RtcVoicePeer implements VoicePeer {
     final j = jsonDecode(s) as Map<String, dynamic>;
     final candidate = j['candidate'] as String?;
     if (candidate == null || candidate.isEmpty) return;
-    await pc.addCandidate(
-      wr.RTCIceCandidate(
-        candidate,
-        j['sdpMid'] as String?,
-        j['sdpMLineIndex'] as int? ?? 0,
-      ),
-    );
+    try {
+      await pc.addCandidate(
+        wr.RTCIceCandidate(
+          candidate,
+          j['sdpMid'] as String?,
+          j['sdpMLineIndex'] as int? ?? 0,
+        ),
+      );
+    } catch (_) {
+      // A stale candidate from a replaced session reaches the fresh pc
+      // before any SDP it belongs to; browsers buffer candidates against
+      // the pending remote description, and anything that cannot ever
+      // match burns silently rather than crashing the signalling drain.
+    }
   }
 
   @override
   void close() {
+    for (final probe in _remoteProbes) {
+      probe.stop();
+    }
+    _remoteProbes.clear();
     _peering.future
         .then((pc) {
           if (pc != null) pc.close();
