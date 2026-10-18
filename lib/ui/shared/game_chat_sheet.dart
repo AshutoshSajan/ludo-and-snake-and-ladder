@@ -72,8 +72,12 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     _input.clear();
   }
 
-  Future<bool> _sendNote(NoteRecording recording) => widget.client
-      .sendVoiceNote(bytes: recording.bytes, mime: recording.mime, durMs: recording.durMs);
+  Future<bool> _sendNote(NoteRecording recording) =>
+      widget.client.sendVoiceNote(
+        bytes: recording.bytes,
+        mime: recording.mime,
+        durMs: recording.durMs,
+      );
 
   void _chatError(String message) {
     // The root ScaffoldMessenger sits above the navigator, so snackbars
@@ -105,10 +109,7 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
                 children: [
                   if (!_recording) ...[
                     IconButton(
-                      icon: const Icon(
-                        Icons.gif_box,
-                        color: AppColors.gold,
-                      ),
+                      icon: const Icon(Icons.gif_box, color: AppColors.gold),
                       tooltip: 'Send a GIF',
                       onPressed: () => GifPickerSheet.show(
                         context,
@@ -123,7 +124,13 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
                   // The composer is the one child that must survive the swap —
                   // see [NoteComposer]; rebuilding it would kill the mic
                   // session mid-recording.
+                  // Flex follows the state (see the lobby row): idle, the
+                  // composer is one mic chip at intrinsic width and the
+                  // field owns the row; recording, the bar takes over.
+                  // The Flexible type never changes, so the mic session
+                  // survives the rebuild.
                   Flexible(
+                    flex: _recording ? 1 : 0,
                     child: NoteComposer(
                       send: _sendNote,
                       onError: _chatError,
@@ -151,7 +158,9 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
         backgroundColor: enabled
             ? AppColors.gold
             : Colors.white.withValues(alpha: 0.1),
-        foregroundColor: enabled ? AppColors.ink : AppColors.ivory.withValues(alpha: 0.4),
+        foregroundColor: enabled
+            ? AppColors.ink
+            : AppColors.ivory.withValues(alpha: 0.4),
       ),
     );
   }
@@ -168,8 +177,8 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
       textInputAction: TextInputAction.send,
       onSubmitted: (_) => _send(),
       contentInsertionConfiguration: keyboardGifInsertion(
-        send: ({required bytes, required mime}) => widget.client
-            .sendKeyboardGif(bytes: bytes, mime: mime),
+        send: ({required bytes, required mime}) =>
+            widget.client.sendKeyboardGif(bytes: bytes, mime: mime),
         sendLink: widget.client.sendGif,
         onError: _chatError,
       ),
@@ -178,7 +187,10 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
         hintStyle: TextStyle(color: AppColors.ivory.withValues(alpha: 0.5)),
         filled: true,
         fillColor: Colors.white.withValues(alpha: 0.07),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 10,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(22),
           borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
@@ -207,7 +219,11 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
             Text(
               'No messages yet.\nSay hello to the table.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.5),
+              style: TextStyle(
+                color: Colors.white54,
+                fontSize: 13,
+                height: 1.5,
+              ),
             ),
           ],
         ),
@@ -289,4 +305,3 @@ class _ChipIcon extends StatelessWidget {
     );
   }
 }
-

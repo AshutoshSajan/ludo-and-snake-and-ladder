@@ -753,7 +753,14 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               // The voice control must not be rebuilt while it holds a mic
               // session — see [NoteComposer]; the row's other members make
               // way while it records.
+              // Flex follows the state: idle, the composer is one mic
+              // chip and takes only its intrinsic width (a flex slot on
+              // an idle composer split the row in half and left the text
+              // field — and the row's right edge — short of the panel);
+              // while recording the bar takes the row. The Flexible type
+              // never changes, so the mic session survives the rebuild.
               Flexible(
+                flex: _chatRecording ? 1 : 0,
                 child: NoteComposer(
                   send: (recording) => client.sendVoiceNote(
                     bytes: recording.bytes,
