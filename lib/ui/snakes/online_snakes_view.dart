@@ -1,4 +1,5 @@
 import '../page_app_bar.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -17,6 +18,7 @@ import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/speaking_chips.dart';
 import '../shared/bug_report_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
@@ -78,10 +80,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     // The chime is wired from the view, not from the chat sheet: from the sheet
     // it could only fire after that sheet had been opened once, so the first
     // messages of a game — the ones you most want to hear — arrived silently.
-    widget.client.onMessageArrived = (_) =>
-        ProviderScope.containerOf(context, listen: false)
-            .read(soundServiceProvider)
-            .message();
+    widget.client.onMessageArrived = (_) => ProviderScope.containerOf(
+      context,
+      listen: false,
+    ).read(soundServiceProvider).message();
     _onClientUpdate();
   }
 
@@ -104,10 +106,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       }
       widget.client.addListener(_onClientUpdate);
       widget.client.onRoll = _onRoll;
-      widget.client.onMessageArrived = (_) =>
-          ProviderScope.containerOf(context, listen: false)
-              .read(soundServiceProvider)
-              .message();
+      widget.client.onMessageArrived = (_) => ProviderScope.containerOf(
+        context,
+        listen: false,
+      ).read(soundServiceProvider).message();
       _onClientUpdate();
     }
   }
@@ -339,6 +341,9 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
               seats: widget.client.lobbySeats,
               mySeatId: widget.client.seatId,
             ),
+            // The live talk state, straight under the seat strip: one gold
+            // chip per speaking seat; nothing at all while it is quiet.
+            SpeakingChips(names: widget.client.voiceSpeakingNames),
             Expanded(
               child: Center(
                 child: LayoutBuilder(

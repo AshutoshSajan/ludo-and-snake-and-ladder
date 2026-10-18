@@ -71,21 +71,21 @@ class ChatLine {
   });
 
   factory ChatLine.fromJson(Map<String, dynamic> j, {String? serverUrl}) =>
-    ChatLine(
-      from: j['from'] as String,
-      text: j['text'] as String? ?? '',
-      gif: j['gif'] as String?,
-      note: j['note'] == null
-          ? null
-          : (serverUrl == null
-                ? null
-                : VoiceNote.fromJson(
-                    (j['note'] as Map).cast<String, dynamic>(),
-                    serverUrl,
-                  )),
-      color: LudoColor.tryParse(j['color'] as String? ?? ''),
-      at: (j['at'] as num?)?.toInt(),
-    );
+      ChatLine(
+        from: j['from'] as String,
+        text: j['text'] as String? ?? '',
+        gif: j['gif'] as String?,
+        note: j['note'] == null
+            ? null
+            : (serverUrl == null
+                  ? null
+                  : VoiceNote.fromJson(
+                      (j['note'] as Map).cast<String, dynamic>(),
+                      serverUrl,
+                    )),
+        color: LudoColor.tryParse(j['color'] as String? ?? ''),
+        at: (j['at'] as num?)?.toInt(),
+      );
 
   final String from;
   final String text;
@@ -241,7 +241,10 @@ class DefaultNames {
     final base = generate(salt: hash);
     // Four base-32 characters from the hash: short enough to read aloud, wide
     // enough that collisions are vanishingly rare.
-    final tag = (hash % 0x10000).toRadixString(32).toUpperCase().padLeft(4, '0');
+    final tag = (hash % 0x10000)
+        .toRadixString(32)
+        .toUpperCase()
+        .padLeft(4, '0');
     return '$base $tag';
   }
 }
@@ -818,10 +821,7 @@ class OnlineClient extends ChangeNotifier {
         // burn an RTCPeerConnection per seat for players who never speak.
         final v = _voice;
         if (v != null && v.enabled) {
-          v.updateSeats(
-            lobbySeats.map((s) => s.seatId).toSet(),
-            seatId,
-          );
+          v.updateSeats(lobbySeats.map((s) => s.seatId).toSet(), seatId);
         }
       case 'voice':
         // Signalling for a session I joined; a client that never enabled
@@ -978,6 +978,22 @@ class OnlineClient extends ChangeNotifier {
   bool get voiceJoined => _voice?.enabled ?? false;
   bool get voiceMuted => _voice?.muted ?? false;
 
+  /// Seat ids believed to be speaking right now (self included when this
+  /// voice is unmuted and the mic hears speech). Backs the speaking
+  /// indicator; repaints ride the [VoiceRoom]'s change hook.
+  Set<String> get voiceSpeaking => _voice?.speaking ?? const {};
+
+  /// The speaking seats as display names for the indicator: this seat is
+  /// "You", the rest resolve through the lobby roster, falling back to
+  /// the raw seat id when the roster has never heard of them.
+  List<String> get voiceSpeakingNames {
+    final names = {for (final s in lobbySeats) s.seatId: s.name};
+    return [
+      for (final seat in voiceSpeaking)
+        seat == seatId ? 'You' : (names[seat] ?? seat),
+    ];
+  }
+
   /// Seat ids whose audio peers are mounted right now.
   List<String> get voicePeers => _voice?.peers ?? const [];
 
@@ -1064,14 +1080,16 @@ class OnlineClient extends ChangeNotifier {
     if (code == null || _spectating) return false;
     // An id the store's policy will accept: [a-z0-9-], unique enough that
     // two notes recorded in the same millisecond stay distinct.
-    final id = '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+    final id =
+        '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
         '${Random().nextInt(1 << 24).toRadixString(36)}';
     final client = httpClient ?? http.Client();
     try {
       final res = await client.post(
-        _httpOriginOf(serverUrl, '/media/voice').replace(
-          queryParameters: {'room': code, 'id': id},
-        ),
+        _httpOriginOf(
+          serverUrl,
+          '/media/voice',
+        ).replace(queryParameters: {'room': code, 'id': id}),
         headers: {'content-type': mime, 'x-voice-duration': '$durMs'},
         body: bytes,
       );
@@ -1103,14 +1121,16 @@ class OnlineClient extends ChangeNotifier {
     if (code == null || _spectating) return false;
     // An id the store's policy will accept: [a-z0-9-], unique enough that
     // two pastes in the same millisecond stay distinct.
-    final id = '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+    final id =
+        '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
         '${Random().nextInt(1 << 24).toRadixString(36)}';
     final client = httpClient ?? http.Client();
     try {
       final res = await client.post(
-        _httpOriginOf(serverUrl, '/media/image').replace(
-          queryParameters: {'room': code, 'id': id},
-        ),
+        _httpOriginOf(
+          serverUrl,
+          '/media/image',
+        ).replace(queryParameters: {'room': code, 'id': id}),
         headers: {'content-type': mime},
         body: bytes,
       );
@@ -1120,10 +1140,7 @@ class OnlineClient extends ChangeNotifier {
       if (urlPath == null) return false;
       // The broadcast gate requires an absolute https URL, and the
       // relative serve path composes to one same-origin as this client.
-      sendGif(
-        _httpOriginOf(serverUrl, urlPath).toString(),
-        caption: caption,
-      );
+      sendGif(_httpOriginOf(serverUrl, urlPath).toString(), caption: caption);
       return true;
     } catch (_) {
       return false;
