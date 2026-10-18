@@ -688,9 +688,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         if (!spectating)
           Row(
             children: [
-              VoiceButton(client: client),
-              MicButton(client: client),
-              const SizedBox(width: 8),
+              // The label leads: the row reads "Voice" before anything,
+              // instead of making the player decode two mic-adjacent
+              // icons first, and it carries the live state once joined
+              // ("Table voice on" / "— muted"). The mute mic appears
+              // only after joining ([MicButton] hides itself till then),
+              // so the room screen shows a single voice affordance.
               Text(
                 client.voiceJoined
                     ? (client.voiceMuted ? 'Voice — muted' : 'Table voice on')
@@ -700,6 +703,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   fontSize: 12,
                 ),
               ),
+              const SizedBox(width: 4),
+              VoiceButton(client: client),
+              MicButton(client: client),
             ],
           ),
         if (!spectating)
@@ -727,9 +733,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                           client.sendKeyboardGif(bytes: bytes, mime: mime),
                       sendLink: client.sendGif,
                       onError: (message) =>
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(message)),
-                          ),
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(SnackBar(content: Text(message))),
                     ),
                     decoration: InputDecoration(
                       labelText: 'Say something…',
