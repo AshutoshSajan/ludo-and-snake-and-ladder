@@ -85,6 +85,10 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(find.text('GIF unavailable'), findsNothing);
     expect(find.byType(Image), findsAtLeastNWidgets(1));
+
+    // The placeholder reserves the full fixed frame while it waits — the
+    // same 230 x 138 the loaded image will occupy, never a bar.
+    expect(tester.getSize(find.byType(Image)), equals(const Size(230, 138)));
   });
 }
 
