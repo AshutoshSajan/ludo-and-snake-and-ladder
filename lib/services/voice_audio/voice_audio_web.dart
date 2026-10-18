@@ -25,7 +25,15 @@ class WebVoiceAudio implements VoiceAudio {
     final player = _players[peerId] ??= web.HTMLAudioElement();
     player.srcObject = stream.jsStream;
     player.setAttribute('autoplay', '');
-    player.play().toDart;
+    try {
+      await player.play().toDart;
+    } catch (_) {
+      // A rejected play() used to escape as an unhandled error. Chrome
+      // lets WebRTC audio autoplay once the page has captured a mic (the
+      // tap that joined the call), so a rejection should be rare — but if
+      // it happens it means silence, not a crash worth crashing a zone
+      // over.
+    }
   }
 
   @override

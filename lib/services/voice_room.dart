@@ -37,10 +37,13 @@ abstract class VoiceBackend {
   /// Builds one peer session with the local track already attached where
   /// the platform wants it attached. [onSignal] receives everything the
   /// peer produces (offer/answer/ice), addressed to the seat this peer
-  /// connects to.
+  /// connects to. [peerId] is that seat, and doubles as the playback key:
+  /// the platform renderer keeps one audio player per seat so teardown
+  /// can find and free exactly the one that is leaving.
   VoicePeer createPeer({
     required VoiceMic mic,
     required void Function(String k, String s) onSignal,
+    required String peerId,
   });
 }
 
@@ -65,9 +68,11 @@ abstract class VoicePeer {
 class VoiceRoom {
   VoiceRoom({
     required this.backend,
+
     /// Sends one signalling message toward [to]. In production this is the
     /// WebSocket client's sender; in tests it records frames.
     required this.sendSignal,
+
     /// Called after every state change so a ChangeNotifier can repaint.
     this.onChanged,
   });
@@ -154,6 +159,7 @@ class VoiceRoom {
       _peers[seat] = backend.createPeer(
         mic: _mic ?? _NoMic(),
         onSignal: (k, s) => sendSignal(k, seat, s),
+        peerId: seat,
       );
       // Election: the lexically-first seat offers. Deterministic from
       // data both sides already agree on.
@@ -193,6 +199,7 @@ class VoiceRoom {
     final peer = _peers[from] ??= backend.createPeer(
       mic: _mic ?? _NoMic(),
       onSignal: (kind, payload) => sendSignal(kind, from, payload),
+      peerId: from,
     );
     switch (k) {
       case 'offer':
@@ -260,9 +267,8 @@ String encodeIce({
   required String? candidate,
   required String? sdpMid,
   required int? sdpMLineIndex,
-}) =>
-    jsonEncode({
-      'candidate': candidate,
-      'sdpMid': sdpMid,
-      'sdpMLineIndex': sdpMLineIndex,
-    });
+}) => jsonEncode({
+  'candidate': candidate,
+  'sdpMid': sdpMid,
+  'sdpMLineIndex': sdpMLineIndex,
+});

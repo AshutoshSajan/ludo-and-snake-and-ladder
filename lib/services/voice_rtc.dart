@@ -26,8 +26,9 @@ class FlutterVoiceBackend implements VoiceBackend {
   @override
   Future<VoiceMic?> openMic() async {
     try {
-      final stream = await wr.navigator.mediaDevices
-          .getUserMedia(<String, dynamic>{'audio': true, 'video': false});
+      final stream = await wr.navigator.mediaDevices.getUserMedia(
+        <String, dynamic>{'audio': true, 'video': false},
+      );
       return RtcVoiceMic(stream);
     } catch (_) {
       // Permission refused, no mic, browser without getUserMedia: voice
@@ -40,8 +41,8 @@ class FlutterVoiceBackend implements VoiceBackend {
   VoicePeer createPeer({
     required VoiceMic mic,
     required void Function(String k, String s) onSignal,
-  }) =>
-      RtcVoicePeer(onSignal: onSignal, mic: mic);
+    required String peerId,
+  }) => RtcVoicePeer(onSignal: onSignal, mic: mic, peerId: peerId);
 }
 
 class RtcVoiceMic implements VoiceMic {
@@ -68,13 +69,21 @@ class RtcVoicePeer implements VoicePeer {
   RtcVoicePeer({
     required this.onSignal,
     required VoiceMic mic,
+    required this.peerId,
   }) {
     _open(mic);
   }
 
   final void Function(String k, String s) onSignal;
+
+  /// The seat this session addresses. Also the key the remote audio
+  /// player is stored under, so this seat's player is the one freed at
+  /// teardown — one shared key would let two seats overwrite the same
+  /// player and leak the leaver's audio element.
+  final String peerId;
   final Completer<wr.RTCPeerConnection?> _peering = Completer();
   wr.MediaStreamTrack? _localTrack;
+  wr.MediaStream? _localStream;
 
   Future<void> _open(VoiceMic mic) async {
     try {
@@ -90,21 +99,25 @@ class RtcVoicePeer implements VoicePeer {
       _peering.complete(pc);
       pc.onIceCandidate = (c) {
         if (c.candidate == null) return;
-        onSignal('ice', encodeIce(
-          candidate: c.candidate,
-          sdpMid: c.sdpMid,
-          sdpMLineIndex: c.sdpMLineIndex,
-        ));
+        onSignal(
+          'ice',
+          encodeIce(
+            candidate: c.candidate,
+            sdpMid: c.sdpMid,
+            sdpMLineIndex: c.sdpMLineIndex,
+          ),
+        );
       };
       // Remote audio arrives on early track events...
       pc.onTrack = (event) {
         if (event.streams.isNotEmpty) {
-          unawaited(voiceAudio.attachRemoteAudio('pc', event.streams.first));
+          unawaited(voiceAudio.attachRemoteAudio(peerId, event.streams.first));
         }
       };
       if (mic is RtcVoiceMic) {
         final tracks = mic.stream.getAudioTracks();
         _localTrack = tracks.isNotEmpty ? tracks.first : null;
+        _localStream = _localTrack != null ? mic.stream : null;
       }
     } catch (_) {
       if (!_peering.isCompleted) _peering.complete(null);
@@ -115,13 +128,10 @@ class RtcVoicePeer implements VoicePeer {
   Future<void> offer() async {
     final pc = await _peering.future;
     if (pc == null) return;
-    if (_localTrack != null) await pc.addTrack(_localTrack!);
+    if (_localTrack != null) await _addLocalMic(pc);
     final offer = await pc.createOffer(<String, dynamic>{});
     await pc.setLocalDescription(offer);
-    onSignal('offer', jsonEncode({
-      'type': 'offer',
-      'sdp': offer.sdp,
-    }));
+    onSignal('offer', jsonEncode({'type': 'offer', 'sdp': offer.sdp}));
   }
 
   @override
@@ -133,13 +143,22 @@ class RtcVoicePeer implements VoicePeer {
       'offer',
     );
     await pc.setRemoteDescription(desc);
-    if (_localTrack != null) await pc.addTrack(_localTrack!);
+    if (_localTrack != null) await _addLocalMic(pc);
     final answer = await pc.createAnswer(<String, dynamic>{});
     await pc.setLocalDescription(answer);
-    onSignal('answer', jsonEncode({
-      'type': 'answer',
-      'sdp': answer.sdp,
-    }));
+    onSignal('answer', jsonEncode({'type': 'answer', 'sdp': answer.sdp}));
+  }
+
+  /// Puts the mic on the wire.
+  ///
+  /// The stream MUST travel with the track: `addTrack(track)` without a
+  /// MediaStream association arrives on the far side with
+  /// `event.streams == []`, so [onTrack]'s guard skips it, nothing is ever
+  /// attached to an `<audio>` element, and the whole mesh plays silence
+  /// with no error anywhere. Associating the mic's stream means the far
+  /// side always gets `streams[0]` keyed under this session's [peerId].
+  Future<void> _addLocalMic(wr.RTCPeerConnection pc) async {
+    await pc.addTrack(_localTrack!, _localStream!);
   }
 
   @override
@@ -172,8 +191,10 @@ class RtcVoicePeer implements VoicePeer {
 
   @override
   void close() {
-    _peering.future.then((pc) {
-      if (pc != null) pc.close();
-    }).catchError((Object _) {});
+    _peering.future
+        .then((pc) {
+          if (pc != null) pc.close();
+        })
+        .catchError((Object _) {});
   }
 }
