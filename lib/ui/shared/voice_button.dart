@@ -25,8 +25,7 @@ class VoiceButton extends StatelessWidget {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         const SnackBar(
-          content:
-              Text('No microphone — allow mic access to use table voice'),
+          content: Text('No microphone — allow mic access to use table voice'),
         ),
       );
   }
@@ -43,16 +42,19 @@ class VoiceButton extends StatelessWidget {
             color: joined ? AppColors.gold : null,
           ),
           tooltip: joined ? 'Leave table voice' : 'Join table voice',
-          onPressed: joined
-              ? client.leaveVoice
-              : () => _join(context),
+          onPressed: joined ? client.leaveVoice : () => _join(context),
         );
       },
     );
   }
 }
 
-/// The mute toggle next to [VoiceButton], dimmed till voice is joined.
+/// The mute toggle next to [VoiceButton]. Hidden until you have actually
+/// joined table voice: a mute toggle before joining is a control that
+/// answers every tap with nothing (it cannot mute a call you are not
+/// on), and in a row with the voice-note mic it read as a second mic
+/// that did not work. Once joined it appears — red while muted — so the
+/// state that matters (transmitting or not) stays one tap away.
 class MicButton extends StatelessWidget {
   const MicButton({super.key, required this.client});
 
@@ -65,6 +67,7 @@ class MicButton extends StatelessWidget {
       builder: (context, _) {
         final joined = client.voiceJoined;
         final muted = client.voiceMuted;
+        if (!joined) return const SizedBox.shrink();
         return IconButton(
           icon: Icon(
             muted ? Icons.mic_off : Icons.mic,

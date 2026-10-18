@@ -64,7 +64,9 @@ void main() {
     final client = await seatedClient(tester, backend: backend);
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: VoiceButton(client: client))),
+      MaterialApp(
+        home: Scaffold(body: VoiceButton(client: client)),
+      ),
     );
     expect(find.byTooltip('Join table voice'), findsOneWidget);
     expect(client.voiceJoined, isFalse);
@@ -83,7 +85,9 @@ void main() {
     final client = await seatedClient(tester, backend: backend);
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: VoiceButton(client: client))),
+      MaterialApp(
+        home: Scaffold(body: VoiceButton(client: client)),
+      ),
     );
     await tester.tap(find.byTooltip('Join table voice'));
     await tester.pumpAndSettle();
@@ -97,25 +101,28 @@ void main() {
     expect(find.byTooltip('Join table voice'), findsOneWidget);
   });
 
-  testWidgets('mute is gated on joining, then toggles locally', (tester) async {
+  testWidgets('mute exists only once voice is joined, then toggles locally', (
+    tester,
+  ) async {
     final backend = FakeBackend();
     final client = await seatedClient(tester, backend: backend);
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: MicButton(client: client))),
+      MaterialApp(
+        home: Scaffold(body: MicButton(client: client)),
+      ),
     );
-    // Not joined: the mute button is inert.
-    expect(
-      _muteOnPressed(tester),
-      isNull,
-    );
+    // Not joined: there is no mute control at all — in a row with the
+    // voice-note mic a visible-but-inert mute reads as a broken mic.
+    expect(find.byTooltip('Mute my mic'), findsNothing);
 
     await client.joinVoice();
     await tester.pump();
-    expect(
-      _muteOnPressed(tester),
-      isNotNull,
-    );
+    expect(_muteOnPressed(tester), isNotNull);
+
+    await client.joinVoice();
+    await tester.pump();
+    expect(_muteOnPressed(tester), isNotNull);
 
     await tester.tap(find.byTooltip('Mute my mic'));
     await tester.pump();
