@@ -24,6 +24,7 @@ class ChatLineView extends StatelessWidget {
     this.avatar,
     this.quote,
     this.liked = false,
+    this.gifImageProvider,
   });
 
   final ChatLine line;
@@ -49,6 +50,13 @@ class ChatLineView extends StatelessWidget {
 
   /// A reaction stamp on the bubble (the liked-heart in a 1:1 chat).
   final bool liked;
+
+  /// Test seam for the GIF bubble's image source. Production leaves it
+  /// null so the bubble fetches [line.gif] itself; a widget test injects
+  /// a memory-backed provider to drive the loading states without a
+  /// network. Any ImageProvider works — the loader only cares about its
+  /// chunk events.
+  final ImageProvider? gifImageProvider;
 
   @override
   Widget build(BuildContext context) {
@@ -105,6 +113,7 @@ class ChatLineView extends StatelessWidget {
                   mine: mine,
                   quote: quote,
                   liked: liked,
+                  gifImageProvider: gifImageProvider,
                 ),
               ),
             ),
@@ -197,6 +206,7 @@ class _Content extends StatelessWidget {
     this.mine = false,
     this.quote,
     this.liked = false,
+    this.gifImageProvider,
   });
 
   final ChatLine line;
@@ -205,6 +215,7 @@ class _Content extends StatelessWidget {
   final bool mine;
   final Widget? quote;
   final bool liked;
+  final ImageProvider? gifImageProvider;
 
   @override
   Widget build(BuildContext context) {
@@ -217,7 +228,11 @@ class _Content extends StatelessWidget {
         // the quoted card pattern from every big 1:1 messenger.
         if (quote != null) ...[quote!, const SizedBox(height: 4)],
         if (line.gif != null) ...[
-          _GifImage(url: line.gif!, width: compact ? 150 : 230),
+          _GifImage(
+            url: line.gif!,
+            width: compact ? 150 : 230,
+            provider: gifImageProvider,
+          ),
           if (line.note != null || line.text.isNotEmpty)
             const SizedBox(height: 5),
         ],
@@ -261,17 +276,21 @@ class _Content extends StatelessWidget {
 /// link, no connectivity) degrade to a small note rather than an empty gap:
 /// a dead GIF should read as "gone", not as "the chat is broken".
 class _GifImage extends StatelessWidget {
-  const _GifImage({required this.url, required this.width});
+  const _GifImage({required this.url, required this.width, this.provider});
 
   final String url;
   final double width;
+
+  /// Optional test seam (see [ChatLineView.gifImageProvider]): injects the
+  /// image source so a widget test can walk the loader's phases offline.
+  final ImageProvider? provider;
 
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
-      child: Image.network(
-        url,
+      child: Image(
+        image: provider ?? NetworkImage(url),
         width: width,
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) => Container(
@@ -288,19 +307,33 @@ class _GifImage extends StatelessWidget {
             ),
           ),
         ),
-        loadingBuilder: (context, child, progress) => Container(
-          width: width,
-          height: width * 0.6,
-          color: AppColors.felt,
-          alignment: Alignment.center,
-          child: progress == null
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : child,
-        ),
+        // Phases, in the only order they can occur: while frame chunks
+        // stream in (progress != null) the felt placeholder shows a
+        // spinner — determinate when the CDN reports a content length so
+        // a big GIF does not read as stuck. At completion (progress ==
+        // null) the child is the image itself; the old code inverted the
+        // pair, which held a loaded GIF behind a permanent gray spinner —
+        // exactly what a player sees when the animation "never renders".
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          final total = progress.expectedTotalBytes;
+          return Container(
+            width: width,
+            height: width * 0.6,
+            color: AppColors.felt,
+            alignment: Alignment.center,
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                value: total == null
+                    ? null
+                    : progress.cumulativeBytesLoaded / total,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
