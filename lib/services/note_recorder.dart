@@ -93,7 +93,19 @@ class NoteRecorder {
         AudioEncoder.opus => 'webm',
         _ => 'm4a',
       };
-      final dir = (await getTemporaryDirectory()).path;
+      // Web gives the recorder no path at all: `record`'s web delegates
+      // ignore [path] — stop() resolves to the browser's blob: URL, which
+      // _fetchBlob picks up — and path_provider has no web implementation,
+      // so getTemporaryDirectory() throws. That throw sat inside this
+      // catch and read as "No microphone", failing every web start with
+      // mic access allowed and the codec probed fine. Only native keeps a
+      // real temp file.
+      final String path;
+      if (kIsWeb) {
+        path = '';
+      } else {
+        path = '${(await getTemporaryDirectory()).path}/table-chat-note.$ext';
+      }
       await recorder.start(
         RecordConfig(
           encoder: encoder,
@@ -101,7 +113,7 @@ class NoteRecorder {
           numChannels: 1,
           bitRate: 96000,
         ),
-        path: '$dir/table-chat-note.$ext',
+        path: path,
       );
       final session = NoteRecorder._(recorder, encoder);
       session._stopwatch.start();
