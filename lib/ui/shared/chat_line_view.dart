@@ -313,32 +313,27 @@ class _GifImage extends StatelessWidget {
             ),
           ),
         ),
-        // Phases, in the only order they can occur: while frame chunks
-        // stream in (progress != null) the felt placeholder shows a
-        // spinner — determinate when the CDN reports a content length so
-        // a big GIF does not read as stuck. At completion (progress ==
-        // null) the child is the image itself; the old code inverted the
-        // pair, which held a loaded GIF behind a permanent gray spinner —
-        // exactly what a player sees when the animation "never renders".
-        loadingBuilder: (context, child, progress) {
-          if (progress == null) return child;
-          final total = progress.expectedTotalBytes;
-          return Container(
-            width: width,
-            height: width * 0.6,
-            color: AppColors.felt,
-            alignment: Alignment.center,
-            child: SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                value: total == null
-                    ? null
-                    : progress.cumulativeBytesLoaded / total,
+        // Phases are keyed on the DECODED FRAME, never on chunk progress:
+        // between stream resolution and the first fetched bytes, "no
+        // progress" fires too, and trusting it there paints the unresolved
+        // child — a zero-height shadow bubble (the player's "empty gold
+        // strip" while a GIF waits for its CDN). `frameBuilder`'s
+        // frame != null is precisely the moment pixels exist: the felt
+        // placeholder with its spinner owns everything before that, and
+        // the image paints from the first frame to the last.
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (frame == null) {
+            return Container(
+              color: AppColors.felt,
+              alignment: Alignment.center,
+              child: const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
-            ),
-          );
+            );
+          }
+          return child;
         },
       ),
     );
