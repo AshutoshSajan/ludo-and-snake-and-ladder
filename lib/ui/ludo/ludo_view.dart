@@ -1,4 +1,5 @@
 import '../page_app_bar.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -25,6 +26,7 @@ import 'ludo_token_layer.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/speaking_chips.dart';
 import '../shared/bug_report_sheet.dart';
 import '../../services/server_url.dart';
 
@@ -128,17 +130,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   Future<void> _saveNow() async {
-    if (widget.onlineClient != null || session.state.phase == LudoPhase.gameOver) {
+    if (widget.onlineClient != null ||
+        session.state.phase == LudoPhase.gameOver) {
       // A finished game must not offer itself for resume.
       await SavedGameStore().clear(GameKind.ludo);
       return;
     }
-    await SavedGameStore().save(SavedGame(
-      game: GameKind.ludo,
-      state: session.state.toJson(),
-      seatNames: [for (final p in session.state.players) p.name],
-      savedAt: DateTime.now(),
-    ));
+    await SavedGameStore().save(
+      SavedGame(
+        game: GameKind.ludo,
+        state: session.state.toJson(),
+        seatNames: [for (final p in session.state.players) p.name],
+        savedAt: DateTime.now(),
+      ),
+    );
   }
 
   @override
@@ -475,6 +480,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 seats: widget.onlineClient!.lobbySeats,
                 mySeatId: widget.onlineSeatId,
               ),
+            // The live talk state, straight under the seat strip: one gold
+            // chip per speaking seat; nothing at all while it is quiet.
+            if (widget.onlineClient != null)
+              SpeakingChips(names: widget.onlineClient!.voiceSpeakingNames),
             Expanded(
               child: Semantics(
                 label: _boardSemanticLabel(s, movable.isNotEmpty),
@@ -562,8 +571,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                       builder: (context, outer) {
                         // Matches how the board above sizes itself: a square as
                         // large as the play area allows.
-                        final boardSize =
-                            math.min(outer.maxWidth, outer.maxHeight);
+                        final boardSize = math.min(
+                          outer.maxWidth,
+                          outer.maxHeight,
+                        );
                         // The felt margin the dice sit in, just outside the
                         // board's own square.
                         const felt = 18.0;

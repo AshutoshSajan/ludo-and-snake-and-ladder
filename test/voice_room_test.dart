@@ -43,7 +43,7 @@ void main() {
     },
   );
 
-  test('enabling sends nothing when this seat loses the election', () async {
+  test('a losing seat asks its elected offerer to re-arm the pair', () async {
     room.updateSeats({'a', 'b'}, 'b');
     final ok = await room.enable();
 
@@ -51,7 +51,14 @@ void main() {
     expect(
       wire.where((f) => f.k == 'offer'),
       isEmpty,
-      reason: "'a' offers; 'b' waits for the offer",
+      reason: "'a' offers; 'b' never takes the offerer's chair",
+    );
+    expect(
+      wire.where((f) => f.k == 'reinvite').map((f) => f.to),
+      {'a'},
+      reason:
+          'the first offer — if any is even out — died while this seat '
+          'was still passive; only an explicit invite re-arms the winner',
     );
   });
 
@@ -73,13 +80,16 @@ void main() {
     await room.enable();
 
     // Outgoing ICE, produced by our own peer.
-    backend.peers.first.onSignal('ice', 'CANDIDATE-1');
+    backend.livePeers.first.onSignal('ice', 'CANDIDATE-1');
     expect(wire.last.k, 'ice');
     expect(wire.last.to, 'b');
 
     // Incoming ICE from the other seat.
     await room.onSignal((k: 'ice', from: 'b', s: 'CANDIDATE-2'));
-    expect(backend.peers.first.received.single, (k: 'ice', s: 'CANDIDATE-2'));
+    expect(backend.livePeers.first.received.single, (
+      k: 'ice',
+      s: 'CANDIDATE-2',
+    ));
   });
 
   test('mute is local and silent on the wire', () async {
@@ -95,7 +105,7 @@ void main() {
   test('seat churn builds and drops the mesh, never the wrong seats', () async {
     room.updateSeats({'a', 'b'}, 'a');
     await room.enable();
-    final peerB = backend.peers.single;
+    final peerB = backend.livePeers.single;
     wire.clear(); // the initial offer to 'b' is irrelevant here
 
     // 'b' leaves, 'c' and 'd' take the empty and fresh seat.
@@ -166,7 +176,7 @@ void main() {
   test('abandoned() closes without goodbyes', () async {
     room.updateSeats({'a', 'b'}, 'a');
     await room.enable();
-    final peer = backend.peers.single;
+    final peer = backend.livePeers.single;
 
     await room.abandoned();
     expect(peer.closed, isTrue);
@@ -213,7 +223,185 @@ void main() {
       await room.enable();
 
       await room.onSignal((k: 'offer', from: 'late', s: 'x'));
-      expect(backend.peers.single.peerId, 'late');
+      expect(backend.livePeers.single.peerId, 'late');
     },
   );
+
+  test(
+    'staggered joins still converge: the missed offer is re-armed',
+    () async {
+      // Two real rooms, the exact shape of two tabs joining voice at
+      // different times, wired through a relay that reproduces the client's
+      // drop rule (a session not yet enabled buries every incoming frame —
+      // onSignal's `!enabled` guard IS that filter).
+      final wireA = <WireFrame>[];
+      final wireB = <WireFrame>[];
+      final backendA = FakeBackend();
+      final backendB = FakeBackend();
+      final a = VoiceRoom(
+        backend: backendA,
+        sendSignal: (k, to, s) => wireA.add((k: k, to: to, s: s)),
+      );
+      final b = VoiceRoom(
+        backend: backendB,
+        sendSignal: (k, to, s) => wireB.add((k: k, to: to, s: s)),
+      );
+      // Drain each side's wire into the other room until the protocol has
+      // no more to say. Bounded far beyond any round-trip this protocol
+      // needs (reinvite → offer → answer is three hops each way).
+      Future<void> drain() async {
+        for (var hop = 0; hop < 7; hop++) {
+          // Snapshot then empty the SOURCE — `List.of(x)..clear()` would
+          // cascade onto the copy and lose the frames down the drain.
+          final outA = List.of(wireA);
+          final outB = List.of(wireB);
+          wireA.clear();
+          wireB.clear();
+          for (final f in outA) {
+            await b.onSignal((k: f.k, from: 'a', s: f.s));
+          }
+          for (final f in outB) {
+            await a.onSignal((k: f.k, from: 'b', s: f.s));
+          }
+        }
+      }
+
+      a.updateSeats({'a', 'b'}, 'a');
+      b.updateSeats({'a', 'b'}, 'b');
+
+      // 'a' joins first and offers into the void: 'b' is not enabled yet,
+      // and the offer dies in the not-enabled filter. This is the step the
+      // old mesh never recovered from.
+      await a.enable();
+      await drain();
+      expect(
+        wireB.where((f) => f.k == 'answer'),
+        isEmpty,
+        reason: "b never answered — 'a's first offer was buried",
+      );
+      expect(
+        backendA.livePeers.single.established,
+        isFalse,
+        reason: "a's session died unanswered",
+      );
+
+      // 'b' joins second. Its enable must ask 'a' to re-arm the pair, and
+      // the re-armed session must actually close a handshake.
+      await b.enable();
+      expect(wireB.where((f) => f.k == 'reinvite').map((f) => f.to), {'a'});
+      await drain();
+
+      expect(
+        backendA.livePeers.single.established,
+        isTrue,
+        reason: "a's rebuilt session answered and reached the connected pair",
+      );
+      expect(
+        backendB.livePeers.single.established,
+        isTrue,
+        reason: "b's session accepted the fresh offer",
+      );
+    },
+  );
+
+  test('a live session refuses a reinvite', () async {
+    // Established pair: a reinvite (a late joiner re-enabling, say) must
+    // not churn a working call.
+    room.updateSeats({'a', 'b'}, 'a');
+    await room.enable(); // offers to 'b'
+    await room.onSignal((k: 'answer', from: 'b', s: 'x'));
+    final livePeer = backend.livePeers.single;
+    expect(
+      livePeer.established,
+      isTrue,
+      reason: 'an answered offer has completed the handshake',
+    );
+
+    await room.onSignal((k: 'reinvite', from: 'b', s: '{}'));
+    expect(
+      backend.livePeers.single,
+      same(livePeer),
+      reason: 'a live call is left exactly as it stands',
+    );
+    expect(
+      livePeer.closed,
+      isFalse,
+      reason: 'nobody tears down a session the reinvite was asked to spare',
+    );
+  });
+
+  test('a reinvite is taken up only by the elected offerer', () async {
+    // Same seat pair, both rooms' perspectives. The offerer rebuilds and
+    // re-offers; the election loser neither rebuilds nor answers, since
+    // the winner got the same request and owns the restart.
+    room.updateSeats({'a', 'b'}, 'a');
+    await room.enable();
+    final stale = backend.livePeers.single;
+
+    await room.onSignal((k: 'reinvite', from: 'b', s: '{}'));
+    expect(
+      stale.closed,
+      isTrue,
+      reason: 'the loser session is torn down for a fresh one',
+    );
+    expect(
+      backend.livePeers.single.peerId,
+      'b',
+      reason: 'a fresh session is bought and offered immediately',
+    );
+    final offers = wire.where((f) => f.k == 'offer').map((f) => f.to);
+    expect(
+      offers,
+      contains('b'),
+      reason: 'the re-armed session offers at once',
+    );
+
+    // The loser's point of view: nothing to do, nothing emitted.
+    final wireLoser = <WireFrame>[];
+    final loser = VoiceRoom(
+      backend: FakeBackend(),
+      sendSignal: (k, to, s) => wireLoser.add((k: k, to: to, s: s)),
+    );
+    loser.updateSeats({'a', 'b'}, 'b');
+    await loser.enable();
+    wireLoser.clear();
+    await loser.onSignal((k: 'reinvite', from: 'a', s: '{}'));
+    expect(
+      wireLoser.where((f) => f.k == 'offer' || f.k == 'answer'),
+      isEmpty,
+      reason: 'the loser waits; the winner restarts the pair',
+    );
+  });
+
+  test(
+    'speaking rides the probes: self on the mic, peers on their audio',
+    () async {
+      room.updateSeats({'a', 'b'}, 'a');
+      await room.enable();
+      expect(room.speaking, isEmpty);
+
+      backend.mic!.simulate(true);
+      expect(room.speaking, {'a'}, reason: 'the local seat reports itself');
+      backend.mic!.simulate(false);
+      expect(room.speaking, isEmpty);
+
+      backend.livePeers.single.simulateSpeaking(true);
+      expect(room.speaking, {
+        'b',
+      }, reason: 'a remote seat rings up through its own probe');
+      backend.livePeers.single.simulateSpeaking(false);
+      expect(room.speaking, isEmpty, reason: 'quiet is the default state');
+    },
+  );
+
+  test('tearing the room down clears a lit speaking set', () async {
+    room.updateSeats({'a', 'b'}, 'a');
+    await room.enable();
+    backend.mic!.simulate(true);
+    backend.livePeers.single.simulateSpeaking(true);
+    expect(room.speaking, isNotEmpty);
+
+    await room.disable();
+    expect(room.speaking, isEmpty, reason: 'no session, no lit chips');
+  });
 }

@@ -20,7 +20,13 @@ import 'dart:async';
 import 'dart:convert';
 
 /// Valid signalling directions a peer can emit or accept.
-const voiceKinds = {'offer', 'answer', 'ice', 'hangup'};
+///
+/// `reinvite` is a client-side convergence request, never WebRTC content:
+/// when a seat enables voice it invites its elected offerer to (re)start
+/// the session, because that offerer's first offer — sent before this
+/// seat ever enabled — was dropped by the not-enabled filter and nothing
+/// else would ever re-arm the pair.
+const voiceKinds = {'offer', 'answer', 'ice', 'hangup', 'reinvite'};
 
 /// One incoming relayed signal, as [OnlineClient.onVoice] delivers it.
 typedef VoiceSignal = ({String k, String from, String s});
@@ -31,19 +37,24 @@ typedef VoiceSignal = ({String k, String from, String s});
 abstract class VoiceBackend {
   /// Opens the local microphone. Null when capture is impossible —
   /// permission refused, no device, no getUserMedia — and the whole
-  /// session then simply never leaves `enabled: false`.
-  Future<VoiceMic?> openMic();
+  /// session then simply never leaves `enabled: false`. [onSpeaking]
+  /// receives the loudness verdict the backend probes off the capture
+  /// (a muted track feeds silence, so a muted mic reports nothing).
+  Future<VoiceMic?> openMic({void Function(bool up)? onSpeaking});
 
   /// Builds one peer session with the local track already attached where
   /// the platform wants it attached. [onSignal] receives everything the
   /// peer produces (offer/answer/ice), addressed to the seat this peer
   /// connects to. [peerId] is that seat, and doubles as the playback key:
   /// the platform renderer keeps one audio player per seat so teardown
-  /// can find and free exactly the one that is leaving.
+  /// can find and free exactly the one that is leaving. [onSpeaking]
+  /// receives the loudness verdict of this peer's remote audio so the
+  /// indicator can name who is talking.
   VoicePeer createPeer({
     required VoiceMic mic,
     required void Function(String k, String s) onSignal,
     required String peerId,
+    required void Function(bool up) onSpeaking,
   });
 }
 
@@ -58,6 +69,12 @@ abstract class VoiceMic {
 abstract class VoicePeer {
   /// Only the elected offerer calls this.
   Future<void> offer();
+
+  /// True once this session's handshake has reached the connected state
+  /// (offer applied + answer applied, or the reverse). The [reinvite]
+  /// handler uses it to leave live calls untouched; probes for the
+  /// speaking indicator mount only ever touch dead sessions.
+  bool get established;
 
   Future<void> acceptOffer(String s);
   Future<void> acceptAnswer(String s);
@@ -90,6 +107,7 @@ class VoiceRoom {
   VoiceMic? _mic;
   final Map<String, VoicePeer> _peers = {};
   String? _mySeatId;
+  final Set<String> _speaking = {};
 
   /// True from a successful mic grant until [disable].
   bool get enabled => _enabled;
@@ -101,12 +119,32 @@ class VoiceRoom {
   /// Seat ids this room currently holds audio peers for.
   List<String> get peers => List.unmodifiable(_peers.keys);
 
+  /// Seats believed to be speaking right now — the local mic's own probe
+  /// reports this seat, each peer session reports its remote. Feeds the
+  /// voice indicator on every surface; empty when the table is quiet, and
+  /// never contains an echo once the session is torn down.
+  Set<String> get speaking => Set.unmodifiable(_speaking);
+
+  void _markSpeaking(String? seat, bool up) {
+    if (seat == null) return;
+    final had = _speaking.contains(seat);
+    if (up == had) return;
+    if (up) {
+      _speaking.add(seat);
+    } else {
+      _speaking.remove(seat);
+    }
+    onChanged?.call();
+  }
+
   /// Who I am on the table; set on every [updateSeats].
   String? get mySeatId => _mySeatId;
 
   Future<bool> enable() async {
     if (_enabled) return true;
-    final mic = await backend.openMic();
+    final mic = await backend.openMic(
+      onSpeaking: (up) => _markSpeaking(_mySeatId, up),
+    );
     // Persist the grant (or the very first enable failed): a denied mic
     // must not flip into a silent half-state.
     if (mic == null) {
@@ -116,9 +154,32 @@ class VoiceRoom {
     _mic = mic;
     _enabled = true;
     mic.setMuted(_muted);
-    // Seats already known (the lobby feed arrives before the first join).
+    // Peers mounted while voice was OFF carry only the _NoMic stand-in:
+    // they can never attach a track, so an answer from one is mute in
+    // both directions. Rebuild every such peer fresh with the real mic.
+    for (final seat in List.of(_peers.keys)) {
+      _peers.remove(seat)?.close();
+      voiceAudio.detachRemoteAudio(seat);
+      _peers[seat] = backend.createPeer(
+        mic: mic,
+        onSignal: (kind, payload) => sendSignal(kind, seat, payload),
+        peerId: seat,
+        onSpeaking: (up) => _markSpeaking(seat, up),
+      );
+    }
+    // Then invite every seatmate. The elected offerer offers now (its
+    // earlier offer — if any is even out — previously died in this seat's
+    // not-enabled filter on the far end); the loser asks its offerer to
+    // start a session, because waiting for a first offer that was already
+    // sent and dropped would stall the pair forever.
+    final mySeat = _mySeatId;
     for (final seat in _peers.keys) {
-      _reconnectPeer(seat);
+      if (mySeat == null) continue;
+      if (mySeat.compareTo(seat) < 0) {
+        unawaited(_peers[seat]!.offer());
+      } else {
+        sendSignal('reinvite', seat, '{}');
+      }
     }
     onChanged?.call();
     return true;
@@ -134,6 +195,7 @@ class VoiceRoom {
     }
     _mic?.stop();
     _mic = null;
+    _speaking.clear();
     final wasOn = _enabled;
     _enabled = false;
     if (wasOn) onChanged?.call();
@@ -160,31 +222,26 @@ class VoiceRoom {
         mic: _mic ?? _NoMic(),
         onSignal: (k, s) => sendSignal(k, seat, s),
         peerId: seat,
+        onSpeaking: (up) => _markSpeaking(seat, up),
       );
       // Election: the lexically-first seat offers. Deterministic from
-      // data both sides already agree on.
+      // data both sides already agree on. The loser invites its offerer:
+      // if that first offer already crossed (and was dropped while this
+      // seat was still passive), only an explicit reinvite re-arms it.
       if (_enabled && mySeatId.compareTo(seat) < 0) {
         unawaited(_peers[seat]!.offer());
+      } else if (_enabled) {
+        sendSignal('reinvite', seat, '{}');
       }
       onChanged?.call();
     }
-  }
-
-  /// Voice was enabled while peers for existing seats already exist (the
-  /// seats feed came first). Reconnect flow after a mute-free enable.
-  void _reconnectPeer(String seat) {
-    final mySeat = _mySeatId;
-    if (mySeat == null) return;
-    if (mySeat.compareTo(seat) < 0) {
-      unawaited(_peers[seat]?.offer());
-    }
-    // Otherwise the other side offers; we wait for their signal.
   }
 
   void _closePeer(String seat) {
     _peers.remove(seat)?.close();
     // The platform piece frees its audio element for this seat.
     voiceAudio.detachRemoteAudio(seat);
+    _speaking.remove(seat);
     onChanged?.call();
   }
 
@@ -200,6 +257,7 @@ class VoiceRoom {
       mic: _mic ?? _NoMic(),
       onSignal: (kind, payload) => sendSignal(kind, from, payload),
       peerId: from,
+      onSpeaking: (up) => _markSpeaking(from, up),
     );
     switch (k) {
       case 'offer':
@@ -210,6 +268,27 @@ class VoiceRoom {
         await peer.addIce(s);
       case 'hangup':
         _closePeer(from);
+      case 'reinvite':
+        // The sender just enabled voice. Its first role in this pair may
+        // have been lost: the elected offerer (me, lexically first) had
+        // offered while the sender was still off, and the sender's
+        // not-enabled filter buried that offer. If this session is not
+        // already up, restart it fresh on my side — new pc, new offer —
+        // and the sender's own pc (fresh too, it was only just built) can
+        // accept it cleanly. A live session is left untouched.
+        if (peer.established) break;
+        final mySeat = _mySeatId;
+        if (mySeat == null || mySeat.compareTo(from) >= 0) break;
+        _peers.remove(from)?.close();
+        voiceAudio.detachRemoteAudio(from);
+        _speaking.remove(from);
+        _peers[from] = backend.createPeer(
+          mic: _mic ?? _NoMic(),
+          onSignal: (kind, payload) => sendSignal(kind, from, payload),
+          peerId: from,
+          onSpeaking: (up) => _markSpeaking(from, up),
+        );
+        unawaited(_peers[from]!.offer());
     }
   }
 
@@ -222,6 +301,7 @@ class VoiceRoom {
     }
     _mic?.stop();
     _mic = null;
+    _speaking.clear();
     final wasOn = _enabled;
     _enabled = false;
     if (wasOn) onChanged?.call();

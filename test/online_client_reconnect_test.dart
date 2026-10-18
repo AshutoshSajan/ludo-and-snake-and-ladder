@@ -434,7 +434,8 @@ void main() {
           's': 'CAND-1',
         });
         async.flushMicrotasks();
-        final peer = backend.peers.single;
+        // enable()'s rebuild closes the pre-mic peer; pin the live one.
+        final peer = backend.livePeers.single;
         expect(peer.received, [
           (k: 'answer', s: 'REMOTE-ANSWER'),
           (k: 'ice', s: 'CAND-1'),
