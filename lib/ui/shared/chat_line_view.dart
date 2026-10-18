@@ -287,11 +287,17 @@ class _GifImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A fixed frame, matched to the loading placeholder below: the bubble
+    // reserves the same 5:3 crop through every phase, so a GIF cannot
+    // punch the bubble open the moment its pixels land (a width-only
+    // image sizes to its intrinsic ratio — "loading box is the wrong
+    // size", and the corners slid out past the bubble's paint).
     return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(12),
       child: Image(
         image: provider ?? NetworkImage(url),
         width: width,
+        height: width * 0.6,
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) => Container(
           width: width,

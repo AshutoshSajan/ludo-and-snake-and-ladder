@@ -47,6 +47,12 @@ void main() {
     expect(find.byType(Image), findsAtLeastNWidgets(1));
     expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(find.text('GIF unavailable'), findsNothing);
+
+    // The frame is fixed: the loaded image is the same 5:3 crop the
+    // loading placeholder reserved (230 x 138), so the bubble never
+    // jumps size when the pixels land. A 1x1 source proves the widget —
+    // not the intrinsic image — decides the geometry.
+    expect(tester.getSize(find.byType(Image)), equals(const Size(230, 138)));
   });
 
   testWidgets('an image that fails to decode shows the GIF unavailable card', (
