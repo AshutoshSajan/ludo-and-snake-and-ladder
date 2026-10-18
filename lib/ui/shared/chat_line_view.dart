@@ -323,7 +323,14 @@ class _GifImage extends StatelessWidget {
         // the image paints from the first frame to the last.
         frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
           if (frame == null) {
+            // The placeholder must carry the frame's size EXPLICITLY: it
+            // replaces the child whole, so any size the Image's width/
+            // height props describe belongs to the child being withheld —
+            // a sizeless Container here wraps only its spinner and the
+            // bubble collapses to a small bar while the CDN is slow.
             return Container(
+              width: width,
+              height: width * 0.6,
               color: AppColors.felt,
               alignment: Alignment.center,
               child: const SizedBox(
