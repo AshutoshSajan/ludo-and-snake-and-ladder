@@ -25,28 +25,34 @@ void main() {
     );
   });
 
-  test('enabling offers to the elected peer when seats are already known', () async {
-    // Ticket: id 'a' seats first, so for the pair (a, b) it must offer.
-    room.updateSeats({'a', 'b'}, 'a');
-    final ok = await room.enable();
+  test(
+    'enabling offers to the elected peer when seats are already known',
+    () async {
+      // Ticket: id 'a' seats first, so for the pair (a, b) it must offer.
+      room.updateSeats({'a', 'b'}, 'a');
+      final ok = await room.enable();
 
-    expect(ok, isTrue);
-    expect(room.enabled, isTrue);
-    expect(backend.mic, isNotNull);
-    // Exactly one offer gone out, addressed to the higher-seated peer.
-    final offers = wire.where((f) => f.k == 'offer');
-    expect(offers, hasLength(1));
-    expect(offers.single.to, 'b');
-    expect(offers.single.s, serializedOfferBid);
-  });
+      expect(ok, isTrue);
+      expect(room.enabled, isTrue);
+      expect(backend.mic, isNotNull);
+      // Exactly one offer gone out, addressed to the higher-seated peer.
+      final offers = wire.where((f) => f.k == 'offer');
+      expect(offers, hasLength(1));
+      expect(offers.single.to, 'b');
+      expect(offers.single.s, serializedOfferBid);
+    },
+  );
 
   test('enabling sends nothing when this seat loses the election', () async {
     room.updateSeats({'a', 'b'}, 'b');
     final ok = await room.enable();
 
     expect(ok, isTrue);
-    expect(wire.where((f) => f.k == 'offer'), isEmpty,
-        reason: "'a' offers; 'b' waits for the offer");
+    expect(
+      wire.where((f) => f.k == 'offer'),
+      isEmpty,
+      reason: "'a' offers; 'b' waits for the offer",
+    );
   });
 
   test('an incoming offer is answered back over the wire', () async {
@@ -73,8 +79,7 @@ void main() {
 
     // Incoming ICE from the other seat.
     await room.onSignal((k: 'ice', from: 'b', s: 'CANDIDATE-2'));
-    expect(backend.peers.first.received.single,
-        (k: 'ice', s: 'CANDIDATE-2'));
+    expect(backend.peers.first.received.single, (k: 'ice', s: 'CANDIDATE-2'));
   });
 
   test('mute is local and silent on the wire', () async {
@@ -98,11 +103,10 @@ void main() {
     expect(peerB.closed, isTrue, reason: 'a departed seat loses its peer');
     expect(room.peers, {'c', 'd'});
     // Election for new seats: 'a' offers to 'c' and to 'd'.
-    expect(
-      wire.where((f) => f.k == 'offer').map((f) => f.to),
-      {'c', 'd'},
-      reason: "my seat sorts first, so I offer to every newcomer",
-    );
+    expect(wire.where((f) => f.k == 'offer').map((f) => f.to), {
+      'c',
+      'd',
+    }, reason: "my seat sorts first, so I offer to every newcomer");
 
     // Rejoining the gone seat (a dropped player reclaims their seat) is
     // just another newcomer.
@@ -119,11 +123,9 @@ void main() {
     expect(room.enabled, isFalse);
     expect(backend.mic!.stopped, isTrue);
     expect(room.peers, isEmpty);
-    expect(
-      wire.where((f) => f.k == 'hangup').map((f) => f.to),
-      {'b'},
-      reason: 'a farewell walks to peers, not to cancelled mic state',
-    );
+    expect(wire.where((f) => f.k == 'hangup').map((f) => f.to), {
+      'b',
+    }, reason: 'a farewell walks to peers, not to cancelled mic state');
   });
 
   test('a denied mic keeps voice off and does not leave a half mesh', () async {
@@ -153,8 +155,11 @@ void main() {
     final before = backend.peers.length;
 
     await room.onSignal((k: 'attack', from: 'a', s: 'x'));
-    expect(backend.peers.length, before,
-        reason: 'a bogus kind must not conjure a peer');
+    expect(
+      backend.peers.length,
+      before,
+      reason: 'a bogus kind must not conjure a peer',
+    );
     expect(wire, isEmpty);
   });
 
@@ -171,4 +176,44 @@ void main() {
       reason: 'the room is gone; nobody is left to receive a hangup',
     );
   });
+
+  test(
+    'every peer mounts its audio under its own seat and frees it there',
+    () async {
+      // The old code attached every remote stream under one shared 'pc'
+      // key: two seats overwrote the same player, teardown (keyed by seat)
+      // never matched, and the leaver's audio element leaked. One player
+      // per seat, keyed and freed by seat, is the whole lifecycle.
+      room.updateSeats({'b', 'c'}, 'a');
+      await room.enable();
+      await room.onSignal((k: 'offer', from: 'b', s: 'x'));
+      await room.onSignal((k: 'offer', from: 'c', s: 'x'));
+      expect(
+        backend.audioAttached,
+        unorderedEquals(['b', 'c']),
+        reason: 'one player per seat — never a shared slot',
+      );
+
+      room.updateSeats({'a'}, 'a');
+      expect(
+        backend.peers.every((p) => p.closed),
+        isTrue,
+        reason: 'both sessions tore down with their seats',
+      );
+    },
+  );
+
+  test(
+    'a mid-call joiner is addressed by its own seat, not a stale key',
+    () async {
+      // Fast signalling vs. slow lobby feeds: the offer creates the peer
+      // itself, and that self-created peer must carry the sender's seat as
+      // its playback key too.
+      room.updateSeats({'a'}, 'a');
+      await room.enable();
+
+      await room.onSignal((k: 'offer', from: 'late', s: 'x'));
+      expect(backend.peers.single.peerId, 'late');
+    },
+  );
 }

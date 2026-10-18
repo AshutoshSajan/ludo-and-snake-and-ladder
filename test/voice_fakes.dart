@@ -26,11 +26,20 @@ class FakeBackend implements VoiceBackend {
   VoicePeer createPeer({
     required VoiceMic mic,
     required void Function(String k, String s) onSignal,
+    required String peerId,
   }) {
-    final peer = FakePeer(onSignal);
+    final peer = FakePeer(
+      onSignal,
+      peerId,
+      onTrack: () => audioAttached.add(peerId),
+    );
     peers.add(peer);
     return peer;
   }
+
+  /// Audio keys every [FakePeer] attached under — the playback seam the
+  /// real peer feeds its [peerId] through.
+  final audioAttached = <String>[];
 }
 
 class FakeMic implements VoiceMic {
@@ -45,9 +54,20 @@ class FakeMic implements VoiceMic {
 }
 
 class FakePeer implements VoicePeer {
-  FakePeer(this.onSignal);
+  FakePeer(this.onSignal, this.peerId, {this._onTrack});
 
   final void Function(String k, String s) onSignal;
+
+  /// The seat this session addresses, which must also be the audio
+  /// playback key — one shared key (like the historical constant 'pc')
+  /// lets two seats overwrite the same player and leaks the leaver's.
+  final String peerId;
+
+  /// Simulated arrival of the negotiated remote track: the real peer
+  /// mounts the far side's audio under [peerId] here; the recording
+  /// callback lets tests follow the playback-key lifecycle against the
+  /// backend ([VoiceBackend.createPeer]'s peerId should be the seat).
+  final void Function()? _onTrack;
 
   /// Frames this peer produced locally (offers/answers/ice).
   final List<({String k, String s})> produced = [];
@@ -66,6 +86,9 @@ class FakePeer implements VoicePeer {
   @override
   Future<void> acceptOffer(String s) {
     received.add((k: 'offer', s: s));
+    // Remote track arrives with the negotiation → audio mounts under the
+    // seat key, exactly as [RtcVoicePeer.onTrack] does live.
+    _onTrack?.call();
     onSignal('answer', serializedOfferBid);
     return Future.value();
   }
