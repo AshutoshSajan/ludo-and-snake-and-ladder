@@ -25,10 +25,19 @@ class GameChatSheet extends ConsumerStatefulWidget {
   final OnlineClient client;
 
   /// Opens the sheet. Returns when it is dismissed.
+  ///
+  /// The sheet is capped at a little over half the screen: it answers
+  /// "what did the table say?" while the board still answers "whose turn is
+  /// it?" — a full-height sheet left the reader blind to the game they were
+  /// playing, and turns kept passing underneath a chat they could not see.
+  /// The cap, instead of a fixed height, keeps a quiet table's sheet small
+  /// and a busy one's scrollable without ever covering the board outright.
   static Future<void> show(BuildContext context, OnlineClient client) {
+    final screen = MediaQuery.sizeOf(context).height;
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      constraints: BoxConstraints(maxHeight: screen * 0.55),
       backgroundColor: AppColors.feltLight,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
