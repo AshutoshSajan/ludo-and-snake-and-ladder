@@ -713,23 +713,6 @@ class FriendStore {
     return list;
   }
 
-  /// Every registered player, freshest presence first — the player
-  /// directory's rows. Discovery used to run only on friend codes, which
-  /// assumes you can ask your friend for a string neither of you knows
-  /// how to find; the directory is the answer to "I met Ana at a table,
-  /// what now". Capped so an open list can never balloon (the cap covers
-  /// the liveliest arcade a single server plausibly hosts), and it is a
-  /// read: relationships are still per-caller and the request flow still
-  /// decides who actually becomes whose friend.
-  Future<List<FriendProfile>> directory({int limit = 250}) async {
-    final rows = _db.select(
-      'SELECT seat_id, name, code, seen_ms FROM friend_profiles '
-      'ORDER BY seen_ms DESC LIMIT ?',
-      [limit],
-    );
-    return [for (final r in rows) FriendProfile._fromRow(r)];
-  }
-
   // -------------------------------------------------------------- blocking
 
   static const blocksPerSeat = 200;

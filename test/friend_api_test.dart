@@ -27,7 +27,6 @@ import '../bin/server.dart'
         friendsInviteHandler,
         friendsInviteRespondHandler,
         friendsLookupHandler,
-        friendsPlayersHandler,
         friendsRemoveHandler,
         friendsReportHandler,
         friendsRequestHandler,
@@ -58,7 +57,13 @@ Future<Map<String, dynamic>> _json(shelf.Response r) async =>
 Future<shelf.Response> _call(String path, shelf.Request req) => switch (path) {
   'friends/state' => friendsStateHandler(req),
   'friends/lookup' => friendsLookupHandler(req),
-  'friends/players' => friendsPlayersHandler(req),
+  // Retired route: mirrors bin/server.dart's in-switch 404 (the helper
+  // that serves it there is private to the server library).
+  'friends/players' => Future.value(shelf.Response(
+    404,
+    body: jsonEncode({'ok': false, 'text': 'not found'}),
+    headers: {'content-type': 'application/json'},
+  )),
   'friends/request' => friendsRequestHandler(req),
   'friends/respond' => friendsRespondHandler(req),
   'friends/remove' => friendsRemoveHandler(req),
@@ -195,23 +200,13 @@ void main() {
       expect((state['friends'] as List).single['seatId'], 'p2');
     });
 
-    test('the directory lists every registered player, freshest first', () async {
+    test('the retired player enumeration answers 404, not a listing', () async {
       await _serve('pOld', 'Old Name');
-      await _serve('pNew', 'New Name');
       final r = await _call('friends/players', _get('friends/players'));
-      expect(r.statusCode, 200);
-      final players = (await _json(r))['players'] as List;
-      final ids = [for (final p in players) (p as Map)['seatId']];
-      expect(ids, containsAll(['pOld', 'pNew']),
-          reason: 'every profile the server knows is a row');
-      expect(ids.first, 'pNew',
-          reason: 'freshest presence first — the person you just played '
-              'with is at the top, not buried');
-    });
-
-    test('the directory is a read: it answers GET and refuses writes', () async {
-      final wrong = await _call('friends/players', _post('friends/players', {}));
-      expect(wrong.statusCode, 405);
+      expect(r.statusCode, 404,
+          reason: 'add-a-friend discovery lives at the table now: the '
+              'server-wide player list was removed with the directory '
+              'screen, and a registry enumeration must not come back');
     });
 
     test('unknown target maps to a readable 400', () async {
