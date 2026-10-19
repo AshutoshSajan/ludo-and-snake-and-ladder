@@ -17,7 +17,9 @@
 ///   pipeline has none.
 ///
 /// 16 kHz mono keeps a minute of speech under the server's 2 MiB cap on
-/// every codec involved.
+/// every codec involved, and the browser's speech clean-up (echo cancel,
+/// noise suppression, auto gain) stays on — see [NoteRecorder.recordConfig]
+/// for why it cannot be left to the plugin's defaults.
 library;
 
 import 'dart:io' show File;
@@ -54,6 +56,30 @@ class NoteRecorder {
   /// The recorder's own cap: a minute of speech is generous, bound the
   /// encoder's output and the server's patience at once.
   static const max = Duration(seconds: 60);
+
+  /// The capture config for a table note: 16 kHz mono — a minute of
+  /// speech stays under the server's 2 MiB cap — with the browser's
+  /// speech clean-up **turned on**.
+  ///
+  /// The plugin's [RecordConfig] defaults `echoCancel`, `noiseSuppress`
+  /// and `autoGain` to **false**, and the web delegate passes them
+  /// straight into `getUserMedia` — so leaving them unset does not fall
+  /// back to the browser default, it explicitly opts the mic OUT of
+  /// every clean-up. Notes came out carrying the raw room: fan hum,
+  /// keyboard clatter, game audio bleeding in. Speech capture wants all
+  /// three on — the live-call path already gets them for free from its
+  /// bare `'audio': true` (the browser default), which is exactly how
+  /// calls came out cleaner than notes. Platform delegates that cannot
+  /// honor a flag degrade gracefully instead.
+  static RecordConfig recordConfig(AudioEncoder encoder) => RecordConfig(
+    encoder: encoder,
+    sampleRate: 16000,
+    numChannels: 1,
+    bitRate: 96000,
+    echoCancel: true,
+    noiseSuppress: true,
+    autoGain: true,
+  );
 
   Future<NoteRecording?> finish() async {
     final durMs = _stopwatch.elapsedMilliseconds.clamp(0, max.inMilliseconds);
@@ -106,15 +132,7 @@ class NoteRecorder {
       } else {
         path = '${(await getTemporaryDirectory()).path}/table-chat-note.$ext';
       }
-      await recorder.start(
-        RecordConfig(
-          encoder: encoder,
-          sampleRate: 16000,
-          numChannels: 1,
-          bitRate: 96000,
-        ),
-        path: path,
-      );
+      await recorder.start(recordConfig(encoder), path: path);
       final session = NoteRecorder._(recorder, encoder);
       session._stopwatch.start();
       return session;
