@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../engine/ludo/ludo_models.dart';
@@ -7,17 +9,20 @@ import '../../engine/snakes/snakes_engine.dart';
 /// snackbar that replaces whatever was showing. Every surface that needs to
 /// *say something happened* — a spent roll, a missed turn, a walk-out —
 /// uses this so tone, timing and shape stay one pattern.
-void showTableNotice(
-  BuildContext context,
-  String text, {
-  int seconds = 4,
-}) {
+///
+/// The notice is a pill, not a banner: a table message is a whisper between
+/// turns, and a full-width slab reads like a system failure while it sits
+/// over the board. The pill is capped so it never crosses mid-screen idle
+/// width, and it stays under the controls row where the turn line lives.
+void showTableNotice(BuildContext context, String text, {int seconds = 4}) {
+  final screen = MediaQuery.widthOf(context);
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
         content: Text(text),
         behavior: SnackBarBehavior.floating,
+        width: math.min(360.0, screen * 0.86),
         duration: Duration(seconds: seconds),
       ),
     );
@@ -43,4 +48,5 @@ String ludoSkipNotice(LudoState s) {
 
 /// The snakes variant, where exactly one rule ever spends a roll this way:
 /// a pawn still off the board can only enter on a 1.
-String snakesSkipNotice(SnakesState s) => 'Needs a 1 to enter — the turn passes';
+String snakesSkipNotice(SnakesState s) =>
+    'Needs a 1 to enter — the turn passes';

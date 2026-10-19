@@ -177,29 +177,64 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   /// game view that keeps showing a table the player is no longer part of
   /// is a frozen game wearing the UI of a live one.
   void _onClientChanged() {
-    final notice = widget.onlineClient?.leftNotice;
-    if (notice != null) {
-      widget.onlineClient!.clearLeftNotice();
-      // A seat can be announced mid-frame; a toast has to wait for the frame.
+    final client = widget.onlineClient;
+    if (client?.mySeatEvicted ?? false) {
+      // The server walked this seat out mid-game (five silent turns). The
+      // final state never reaches this client — the seat is already off the
+      // room's roster before the gameOver snapshot goes out — so the removal
+      // itself IS the end screen. It shows as one: a banner that says what
+      // happened and an exit button on the table they were removed from,
+      // instead of a toast that scrolls away above a board frozen forever.
+      // Both flags are consumed BEFORE scheduling: clearLeftNotice re-enters
+      // this listener, and an unconsumed eviction would stack the card.
+      client!.clearMySeatEviction();
+      client.clearLeftNotice();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showNotice(notice);
+        if (mounted) _showRemovalDialog();
       });
-    }
-    if (widget.onlineClient?.mySeatEvicted ?? false) {
-      // Frame-first so the toast above is already laid in when the route
-      // pops — the snackbar outlives the screen, on home where it explains
-      // the return.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final onLeave = widget.onOnlineLeave;
-        if (onLeave != null) {
-          onLeave();
-        } else {
-          Navigator.of(context).popUntil((r) => r.isFirst);
-        }
-      });
+    } else {
+      final notice = client?.leftNotice;
+      if (notice != null) {
+        client!.clearLeftNotice();
+        // A seat can be announced mid-frame; a toast has to wait for the frame.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showNotice(notice);
+        });
+      }
     }
     if (mounted) setState(() {});
+  }
+
+  /// The removed seat's end card: what happened, and the one way out. The
+  /// winner's trophy belongs to the live table; this card owns the state the
+  /// removed player is actually in — their seat forfeited, the result
+  /// counted against them, the table moving on.
+  void _showRemovalDialog() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('You were removed'),
+        content: const Text(
+          'Five turns in a row were missed, so the table carried on without '
+          'your seat. The result counts as a loss for you.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              final onLeave = widget.onOnlineLeave;
+              if (onLeave != null) {
+                onLeave();
+              } else {
+                Navigator.of(context).popUntil((r) => r.isFirst);
+              }
+            },
+            child: const Text('Back to lobby'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showNotice(String text) {
@@ -305,11 +340,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         s.players.where((p) => p.id == id).firstOrNull?.name ?? 'Player',
     ];
     if (!mounted) return;
+    final mySeat = widget.onlineSeatId;
+    final iWon =
+        mySeat != null && s.rankings.isNotEmpty && s.rankings.first == mySeat;
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => VictoryDialog(
-        title: '${names.first} wins Ludo!',
+        // Who owns the trophy is one sentence; the winner's own dialog says
+        // "you", everyone else's says who the table crowned and where they
+        // finished (the standings list carries the seats' order).
+        title: iWon ? 'You win Ludo!' : '${names.first} wins Ludo!',
         rankedNames: names,
         // No local rematch against a server-owned game — leave instead.
         onRematch: session.isOnline
@@ -544,6 +585,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                               final playerNames = {
                                 for (final p in s.players) p.color: p.name,
                               };
+                              // The live strike counts ride with the board:
+                              // each yard's name pill carries its seat's
+                              // missed-turn dots (red as they accrue), so the
+                              // countdown risk is visible from your own seat
+                              // without waiting for a removal.
+                              final missesByColor = <LudoColor, int>{
+                                for (final p in s.players)
+                                  p.color:
+                                      widget.onlineClient?.seatMisses[p.id] ??
+                                      0,
+                              };
                               // There is no AnimatedBuilder around this
                               // subtree any more, and that was the single
                               // biggest mobile-web lag source: the effects
@@ -563,6 +615,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                                     painter: LudoBoardPainter(
                                       highlightCells: highlights,
                                       playerNames: playerNames,
+                                      missesByColor: missesByColor,
                                       activeColor: s.currentPlayer.color,
                                       pulseAnim: _fx,
                                       repaint: _fx,

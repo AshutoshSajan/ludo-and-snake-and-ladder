@@ -135,22 +135,49 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   void _onClientUpdate() {
     if (!mounted) return;
     setState(() {});
-    final notice = widget.client.leftNotice;
-    if (notice != null) {
-      widget.client.clearLeftNotice();
-      // A seat can be announced mid-frame; a toast has to wait for the frame.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showNotice(notice);
-      });
-    }
     if (widget.client.mySeatEvicted) {
-      // The server walked this seat out (five missed turns): finish the
-      // exit it started, exactly like the game-over dialog's "Back to
-      // lobby" — the table has carried on without this seat, and a screen
-      // still wearing the board would be a frozen game with live furniture.
+      // The server walked this seat out mid-game (five silent turns), and
+      // the final state never reaches this client — the seat is already off
+      // the room's roster before the gameOver snapshot goes out. The removal
+      // itself IS the end screen: a banner that says what happened plus the
+      // one way out, instead of a toast that scrolls away above a board
+      // frozen forever. Both flags are consumed BEFORE scheduling:
+      // clearLeftNotice re-enters this listener, and an unconsumed eviction
+      // would stack the card.
+      widget.client.clearMySeatEviction();
+      widget.client.clearLeftNotice();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) widget.onLeave();
+        if (!mounted) return;
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('You were removed'),
+            content: const Text(
+              'Five turns in a row were missed, so the table carried on '
+              'without your seat. The result counts as a loss for you.',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  widget.onLeave();
+                },
+                child: const Text('Back to lobby'),
+              ),
+            ],
+          ),
+        );
       });
+    } else {
+      final notice = widget.client.leftNotice;
+      if (notice != null) {
+        widget.client.clearLeftNotice();
+        // A seat can be announced mid-frame; a toast has to wait for the frame.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showNotice(notice);
+        });
+      }
     }
     final s = widget.client.snakesState;
     if (s == null) return;
