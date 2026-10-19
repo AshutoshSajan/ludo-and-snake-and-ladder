@@ -535,6 +535,11 @@ class OnlineClient extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The evicted seat's end card has been shown: consume the flag so later
+  /// notifications (transport chatter, other notices) cannot show it twice.
+  /// A fresh `joined` resets it, like [leftNotice]'s cache-cycle here.
+  void clearMySeatEviction() => _mySeatEvicted = false;
+
   /// Milliseconds the on-turn seat has left to act, measured when the latest
   /// state broadcast was built. Null on any snapshot without a running
   /// timer (pre-timer servers, no game, nobody at the table). The screens
@@ -905,18 +910,27 @@ class OnlineClient extends ChangeNotifier {
         final goneSeat = msg['seatId'] as String? ?? '';
         final mine = goneSeat.isNotEmpty && goneSeat == seatId;
         _mySeatEvicted = mine && reason == 'timeout';
-        leftNotice =
-            reason == 'timeout'
-            ? (mine ? 'You were removed — five turns missed' : '$gone was removed — five turns missed')
+        leftNotice = reason == 'timeout'
+            ? (mine
+                  ? 'You were removed — five turns missed'
+                  : '$gone was removed — five turns missed')
             : (mine ? 'You left the game' : '$gone left the game');
         onLeft?.call(leftNotice!);
       case 'turnMissed':
         // One turn just burned because the seat on turn did not answer the
-        // clock. A one-time toast (the standing miss count lives on the seat
-        // list), with the remaining strikes so the player knows the stakes.
+        // clock. The toast is for the seat that burned it — "you missed a
+        // turn (2 of 5)" is the nudge that makes a slow phone open the
+        // board by the next beat — everyone else watches the strikes
+        // accumulate on that seat's corner dots instead of a broadcast
+        // interrupting their turn (a toast every silent turn of another
+        // player is an alarm that belongs to them, not the table).
+        final seat = msg['seatId'] as String? ?? '';
         final name = msg['name'] as String? ?? 'A player';
         final count = (msg['count'] as num?)?.toInt() ?? 0;
-        leftNotice = '$name missed a turn ($count of $maxTurnMisses)';
+        if (seat.isNotEmpty && seat != seatId) return;
+        leftNotice = seat.isEmpty
+            ? '$name missed a turn ($count of $maxTurnMisses)'
+            : 'You missed a turn ($count of $maxTurnMisses)';
         onLeft?.call(leftNotice!);
       case 'state':
         if ((msg['game'] as String?) == 'snakes') {

@@ -738,20 +738,19 @@ class _FriendsScreenState extends State<FriendsScreen> {
       color: Colors.white.withValues(alpha: 0.06),
       margin: const EdgeInsets.only(bottom: 6),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      // One compact row like every other card in the app: the instruction
+      // line ("tap to chat · long-press for more") used to stretch every
+      // card to two display lines — a hint that repeats forever teaches
+      // nobody and reads as scaffolding. The gestures it described still
+      // exist: tapping opens the chat, holding opens the sheet.
       child: ListTile(
+        dense: true,
         onLongPress: () => _friendLongPressSheet(f),
         onTap: () => _openChat(f),
         leading: _avatar(f.seatId),
         title: Text(
           f.name,
           style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(
-          'tap to chat · long-press for more',
-          style: TextStyle(
-            color: AppColors.ivory.withValues(alpha: 0.55),
-            fontSize: 12,
-          ),
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,

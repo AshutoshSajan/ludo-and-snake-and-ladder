@@ -681,4 +681,70 @@ void main() {
               'nothing but the dialog');
     });
   });
+
+  group('the eviction is the removed seat end screen', () {
+    Future<List<String>> pumpedTable(
+      WidgetTester tester, {
+      bool mine = true,
+    }) async {
+      await connectAndEnterGame(tester);
+      final exits = <String>[];
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: OnlineSnakesView(
+                client: client,
+                onLeave: () => exits.add('left'),
+              ),
+            ),
+          ),
+        ),
+      );
+      channel.serverAdd({
+        'type': 'state',
+        'game': 'snakes',
+        'state': twoPlayerState(currentPlayerId: 'p2').toJson(),
+      });
+      await tester.pump(const Duration(milliseconds: 300));
+      channel.serverAdd({
+        'type': 'left',
+        'seatId': mine ? 'p2' : 'p1',
+        'name': mine ? 'Bo' : 'Ana',
+        'color': mine ? 'green' : 'red',
+        'reason': 'timeout',
+      });
+      await tester.pump();
+      await tester.pump();
+      return exits;
+    }
+
+    testWidgets('five silent turns end with a card, not a silent bounce', (
+      tester,
+    ) async {
+      final exits = await pumpedTable(tester);
+
+      expect(find.text('You were removed'), findsOneWidget,
+          reason: 'the final state never reaches a removed seat — the '
+              'removal is the game over this client will ever see');
+      expect(find.textContaining('Five turns in a row'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Back to lobby'));
+      await tester.pump();
+      expect(exits, ['left']);
+      expect(find.text('You were removed'), findsNothing,
+          reason: 'one card, once: clearLeftNotice re-enters the listener '
+              'and must not stack a second end card');
+    });
+
+    testWidgets('witnesses keep playing; they get the notice, not the card', (
+      tester,
+    ) async {
+      await pumpedTable(tester, mine: false);
+
+      expect(find.text('You were removed'), findsNothing);
+      expect(find.textContaining('was removed — five turns missed'),
+          findsOneWidget);
+    });
+  });
 }
