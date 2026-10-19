@@ -200,6 +200,43 @@ void main() {
           reason: 'the silent seat ranks last, the survivor wins');
     });
 
+    test('the eviction announcement names the seat, not just the face', () async {
+      final (auth, room) = startedRoom();
+      final log = <String>[];
+      // A bystander sees the wall exactly as it goes out: seat id riding
+      // the left frame is what lets a client know the removal happened to
+      // ITS OWN seat and exit the table with the notice instead of staring
+      // at a game that dropped it.
+      auth.spectateRoom(
+        room.code,
+        _member(LudoColor.blue, id: 'c4', on: log.add),
+      );
+      for (var i = 0; i < 24 && !room.forfeited.contains('red'); i++) {
+        final state = room.stateOrNull!;
+        if (state.currentPlayer.id == 'green') {
+          auth.handleIntent(room: room, connectionId: 'c2', msg: {'type': 'roll'});
+          if (room.stateOrNull!.phase == LudoPhase.awaitingMove) {
+            final legal = ludo.legalMoves(room.stateOrNull!);
+            if (legal.isNotEmpty) {
+              auth.handleIntent(
+                room: room,
+                connectionId: 'c2',
+                msg: {'type': 'move', 'token': legal.first.tokenIndex},
+              );
+            }
+          }
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+      final left = _lastSent(log, 'left')!;
+      expect(left['reason'], 'timeout');
+      expect(left['name'], 'Red');
+      expect(left['seatId'], 'red',
+          reason: 'no seat id means every client evicted is news about '
+              'somebody else — the removed seat keeps sitting at an empty '
+              'game that already crowned its winner');
+    });
+
     test(
       'a third seat keeps playing after the eviction',
       () async {

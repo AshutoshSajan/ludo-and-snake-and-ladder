@@ -13,6 +13,7 @@ import '../../engine/ludo/ludo_models.dart';
 import '../../engine/ludo/ludo_rules.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../shared/online_leave_pop.dart';
 import '../shared/voice_button.dart';
 import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
@@ -28,7 +29,6 @@ import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
-import '../shared/speaking_chips.dart';
 import '../shared/bug_report_sheet.dart';
 import '../../services/server_url.dart';
 
@@ -171,7 +171,11 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   /// The online client notifies for transport events too (reconnecting,
-  /// errors) — the banner reads its status on every rebuild.
+  /// errors) — the banner reads its status on every rebuild. A walk-out of
+  /// *our own seat* (the turn-timer eviction) is the one notification that
+  /// must also end the screen: the server has already taken the seat, and a
+  /// game view that keeps showing a table the player is no longer part of
+  /// is a frozen game wearing the UI of a live one.
   void _onClientChanged() {
     final notice = widget.onlineClient?.leftNotice;
     if (notice != null) {
@@ -179,6 +183,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       // A seat can be announced mid-frame; a toast has to wait for the frame.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _showNotice(notice);
+      });
+    }
+    if (widget.onlineClient?.mySeatEvicted ?? false) {
+      // Frame-first so the toast above is already laid in when the route
+      // pops — the snackbar outlives the screen, on home where it explains
+      // the return.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final onLeave = widget.onOnlineLeave;
+        if (onLeave != null) {
+          onLeave();
+        } else {
+          Navigator.of(context).popUntil((r) => r.isFirst);
+        }
       });
     }
     if (mounted) setState(() {});
@@ -222,7 +240,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     if (onLeave != null) {
       onLeave();
     } else if (mounted) {
-      Navigator.of(context).pop();
+      // The pushed-page fallback with no screen to hand the exit to: pop to
+      // the first route the same way the victory dialog's Home does — and
+      // past any dialog still animating its exit above us.
+      Navigator.of(context).popUntil((r) => r.isFirst);
     }
   }
 
@@ -352,252 +373,256 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       _hintToken = null;
     }
 
-    return Scaffold(
-      appBar: PageAppBar(
-        title: widget.onlineClient?.isSpectator ?? false
-            ? const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.visibility, size: 18),
-                  SizedBox(width: 6),
-                  Text('Ludo — watching'),
-                ],
-              )
-            : const Text('Ludo'),
-        actions: [
-          const SoundToggleButton(),
-          // Chat is online-only: offline seats share a device, not a server,
-          // so there is nobody on the other end to talk to. The red dot is the
-          // unread count, and it clears when the sheet opens.
-          if (widget.onlineClient != null)
-            IconButton(
-              icon: Badge(
-                isLabelVisible: (widget.onlineClient?.unreadChats ?? 0) > 0,
-                backgroundColor: Colors.redAccent,
-                smallSize: 9,
-                child: const Icon(Icons.forum_outlined),
+    return OnlineLeavePop(
+      active: widget.onlineClient != null,
+      onLeave: _leave,
+      child: Scaffold(
+        appBar: PageAppBar(
+          title: widget.onlineClient?.isSpectator ?? false
+              ? const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.visibility, size: 18),
+                    SizedBox(width: 6),
+                    Text('Ludo — watching'),
+                  ],
+                )
+              : const Text('Ludo'),
+          actions: [
+            const SoundToggleButton(),
+            // Chat is online-only: offline seats share a device, not a server,
+            // so there is nobody on the other end to talk to. The red dot is the
+            // unread count, and it clears when the sheet opens.
+            if (widget.onlineClient != null)
+              IconButton(
+                icon: Badge(
+                  isLabelVisible: (widget.onlineClient?.unreadChats ?? 0) > 0,
+                  backgroundColor: Colors.redAccent,
+                  smallSize: 9,
+                  child: const Icon(Icons.forum_outlined),
+                ),
+                tooltip: (widget.onlineClient?.unreadChats ?? 0) > 0
+                    ? 'Table chat (${widget.onlineClient!.unreadChats} new)'
+                    : 'Table chat',
+                onPressed: () =>
+                    GameChatSheet.show(context, widget.onlineClient!),
               ),
-              tooltip: (widget.onlineClient?.unreadChats ?? 0) > 0
-                  ? 'Table chat (${widget.onlineClient!.unreadChats} new)'
-                  : 'Table chat',
-              onPressed: () =>
-                  GameChatSheet.show(context, widget.onlineClient!),
+            if (widget.onlineClient != null &&
+                !(widget.onlineClient!.isSpectator)) ...[
+              // Voice is seated-only: a watcher has no seat for the mesh to
+              // address, so no controls rather than a control that answers
+              // "no microphone" misleadingly.
+              VoiceButton(client: widget.onlineClient!),
+              MicButton(client: widget.onlineClient!),
+            ],
+            // Undo and hint are device-local conveniences for a turn nobody
+            // else is watching; online play is server-authoritative, so a
+            // disabled undo telling you "nothing to undo" is just clutter —
+            // they only render for local tables.
+            if (widget.onlineClient == null) ...[
+              IconButton(
+                icon: const Icon(Icons.undo),
+                tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
+                onPressed: session.canUndo
+                    ? () {
+                        Haptics.light();
+                        setState(() => _hintToken = null);
+                        session.undo();
+                      }
+                    : null,
+              ),
+              IconButton(
+                icon: const Icon(Icons.lightbulb_outline),
+                tooltip: _hintToken == null
+                    ? 'Hint (best move)'
+                    : 'Hint shown — tap a glowing pawn',
+                onPressed: session.canHint
+                    ? () =>
+                          setState(() => _hintToken = session.hintTokenIndex())
+                    : null,
+              ),
+            ],
+            IconButton(
+              icon: Icon(
+                session.autoPlayOn ? Icons.auto_mode : Icons.auto_mode_outlined,
+              ),
+              color: session.autoPlayOn ? AppColors.gold : null,
+              tooltip: session.autoPlayOn
+                  ? 'Autoplay on — tap to take over'
+                  : 'Autoplay — the table plays your turns',
+              onPressed: _canToggleAuto ? () => session.toggleAutoPlay() : null,
             ),
-          if (widget.onlineClient != null &&
-              !(widget.onlineClient!.isSpectator)) ...[
-            // Voice is seated-only: a watcher has no seat for the mesh to
-            // address, so no controls rather than a control that answers
-            // "no microphone" misleadingly.
-            VoiceButton(client: widget.onlineClient!),
-            MicButton(client: widget.onlineClient!),
+            if (session.isOnline)
+              IconButton(
+                icon: const Icon(Icons.logout),
+                tooltip: 'Leave game',
+                onPressed: _leave,
+              ),
+            IconButton(
+              icon: const Icon(Icons.pause),
+              onPressed: _showPauseMenu,
+              tooltip: 'Pause / players',
+            ),
+            IconButton(
+              icon: const Icon(Icons.bug_report_outlined),
+              tooltip: 'Report an issue',
+              onPressed: () => BugReportSheet.show(
+                context,
+                serverUrl: widget.onlineClient?.serverUrl ?? defaultServerUrl(),
+                seatId: widget.onlineClient?.seatId,
+              ),
+            ),
           ],
-          // Undo and hint are device-local conveniences for a turn nobody
-          // else is watching; online play is server-authoritative, so a
-          // disabled undo telling you "nothing to undo" is just clutter —
-          // they only render for local tables.
-          if (widget.onlineClient == null) ...[
-            IconButton(
-              icon: const Icon(Icons.undo),
-              tooltip: session.canUndo ? 'Undo last move' : 'Nothing to undo',
-              onPressed: session.canUndo
-                  ? () {
-                      Haptics.light();
-                      setState(() => _hintToken = null);
-                      session.undo();
-                    }
-                  : null,
-            ),
-            IconButton(
-              icon: const Icon(Icons.lightbulb_outline),
-              tooltip: _hintToken == null
-                  ? 'Hint (best move)'
-                  : 'Hint shown — tap a glowing pawn',
-              onPressed: session.canHint
-                  ? () => setState(() => _hintToken = session.hintTokenIndex())
-                  : null,
-            ),
-          ],
-          IconButton(
-            icon: Icon(
-              session.autoPlayOn ? Icons.auto_mode : Icons.auto_mode_outlined,
-            ),
-            color: session.autoPlayOn ? AppColors.gold : null,
-            tooltip: session.autoPlayOn
-                ? 'Autoplay on — tap to take over'
-                : 'Autoplay — the table plays your turns',
-            onPressed: _canToggleAuto ? () => session.toggleAutoPlay() : null,
-          ),
-          if (session.isOnline)
-            IconButton(
-              icon: const Icon(Icons.logout),
-              tooltip: 'Leave game',
-              onPressed: _leave,
-            ),
-          IconButton(
-            icon: const Icon(Icons.pause),
-            onPressed: _showPauseMenu,
-            tooltip: 'Pause / players',
-          ),
-          IconButton(
-            icon: const Icon(Icons.bug_report_outlined),
-            tooltip: 'Report an issue',
-            onPressed: () => BugReportSheet.show(
-              context,
-              serverUrl: widget.onlineClient?.serverUrl ?? defaultServerUrl(),
-              seatId: widget.onlineClient?.seatId,
-            ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (reconnecting)
-              Material(
-                color: AppColors.danger,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 6,
-                    horizontal: 12,
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              if (reconnecting)
+                Material(
+                  color: AppColors.danger,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 12,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Connection lost — reconnecting…',
+                          style: TextStyle(
+                            color: Colors.white.withAlpha(230),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                ),
+              if (widget.onlineClient != null)
+                SeatStatusStrip(
+                  seats: widget.onlineClient!.lobbySeats,
+                  mySeatId: widget.onlineSeatId,
+                ),
+              // Voice's speaking state lives on the mic button itself (a beam
+              // while the mic hears speech) — a chip row here used to slide
+              // the board downwards every time anyone said a word.
+              Expanded(
+                child: Semantics(
+                  label: _boardSemanticLabel(s, movable.isNotEmpty),
+                  liveRegion: true,
+                  child: Stack(
                     children: [
-                      const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
+                      Center(
+                        child: AspectRatio(
+                          aspectRatio: 1,
+                          child: LayoutBuilder(
+                            builder: (context, cons) {
+                              final boardSize = cons.biggest.width;
+                              // Captured for the corner dice below, which size
+                              // themselves against the board.
+                              _lastBoardSize = boardSize;
+                              final highlights = {
+                                for (final m in legalMoves(s))
+                                  if (movable.isNotEmpty &&
+                                      m.to >= 0 &&
+                                      m.to <= 50)
+                                    LudoBoard.absCell(
+                                      s.currentPlayer.color,
+                                      m.to,
+                                    ),
+                              };
+                              final playerNames = {
+                                for (final p in s.players) p.color: p.name,
+                              };
+                              // There is no AnimatedBuilder around this
+                              // subtree any more, and that was the single
+                              // biggest mobile-web lag source: the effects
+                              // clock breathes every frame, and it used to
+                              // rebuild the board, the token layer and the
+                              // four corner dice 60 times a second even when
+                              // nothing was happening. The per-frame pieces
+                              // are scoped instead: the board repaints via
+                              // the painter's `repaint` listenable (reading
+                              // pulseAnim at paint time), and the token
+                              // layer drives only its rings and its ghost
+                              // from [fx] — the layout above holds still.
+                              return Stack(
+                                children: [
+                                  CustomPaint(
+                                    size: Size.square(boardSize),
+                                    painter: LudoBoardPainter(
+                                      highlightCells: highlights,
+                                      playerNames: playerNames,
+                                      activeColor: s.currentPlayer.color,
+                                      pulseAnim: _fx,
+                                      repaint: _fx,
+                                    ),
+                                  ),
+                                  LudoTokenLayer(
+                                    state: s,
+                                    boardSize: boardSize,
+                                    movableTokenIndices: movable,
+                                    onTapToken: session.tapToken,
+                                    anim: session.activeAnim,
+                                    animStep: _animStep,
+                                    currentPlayerIndex: s.currentPlayerIndex,
+                                    fx: _fx,
+                                    stepStart: _stepStart,
+                                    hintTokenIndex: _hintToken,
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Text(
-                        'Connection lost — reconnecting…',
-                        style: TextStyle(
-                          color: Colors.white.withAlpha(230),
-                          fontSize: 13,
-                        ),
+                      // One die per player, pinned just outside the board's corners — never inside
+                      // a player's yard, but close enough to reach. They used to be
+                      // aligned to the corners of the play area, which on a wide
+                      // window put each die ~600px of empty felt away from the
+                      // board it belongs to: the roll control looked like it
+                      // belonged to nothing. Snapped to the board instead.
+                      LayoutBuilder(
+                        builder: (context, outer) {
+                          // Matches how the board above sizes itself: a square as
+                          // large as the play area allows.
+                          final boardSize = math.min(
+                            outer.maxWidth,
+                            outer.maxHeight,
+                          );
+                          // The felt margin the dice sit in, just outside the
+                          // board's own square.
+                          const felt = 18.0;
+                          return Center(
+                            child: SizedBox.square(
+                              dimension: boardSize + felt * 2,
+                              child: Stack(
+                                children: [
+                                  for (var i = 0; i < s.players.length; i++)
+                                    _cornerDice(s, i),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),
                 ),
               ),
-            if (widget.onlineClient != null)
-              SeatStatusStrip(
-                seats: widget.onlineClient!.lobbySeats,
-                mySeatId: widget.onlineSeatId,
-              ),
-            // The live talk state, straight under the seat strip: one gold
-            // chip per speaking seat; nothing at all while it is quiet.
-            if (widget.onlineClient != null)
-              SpeakingChips(names: widget.onlineClient!.voiceSpeakingNames),
-            Expanded(
-              child: Semantics(
-                label: _boardSemanticLabel(s, movable.isNotEmpty),
-                liveRegion: true,
-                child: Stack(
-                  children: [
-                    Center(
-                      child: AspectRatio(
-                        aspectRatio: 1,
-                        child: LayoutBuilder(
-                          builder: (context, cons) {
-                            final boardSize = cons.biggest.width;
-                            // Captured for the corner dice below, which size
-                            // themselves against the board.
-                            _lastBoardSize = boardSize;
-                            final highlights = {
-                              for (final m in legalMoves(s))
-                                if (movable.isNotEmpty &&
-                                    m.to >= 0 &&
-                                    m.to <= 50)
-                                  LudoBoard.absCell(
-                                    s.currentPlayer.color,
-                                    m.to,
-                                  ),
-                            };
-                            final playerNames = {
-                              for (final p in s.players) p.color: p.name,
-                            };
-                            // There is no AnimatedBuilder around this
-                            // subtree any more, and that was the single
-                            // biggest mobile-web lag source: the effects
-                            // clock breathes every frame, and it used to
-                            // rebuild the board, the token layer and the
-                            // four corner dice 60 times a second even when
-                            // nothing was happening. The per-frame pieces
-                            // are scoped instead: the board repaints via
-                            // the painter's `repaint` listenable (reading
-                            // pulseAnim at paint time), and the token
-                            // layer drives only its rings and its ghost
-                            // from [fx] — the layout above holds still.
-                            return Stack(
-                              children: [
-                                CustomPaint(
-                                  size: Size.square(boardSize),
-                                  painter: LudoBoardPainter(
-                                    highlightCells: highlights,
-                                    playerNames: playerNames,
-                                    activeColor: s.currentPlayer.color,
-                                    pulseAnim: _fx,
-                                    repaint: _fx,
-                                  ),
-                                ),
-                                LudoTokenLayer(
-                                  state: s,
-                                  boardSize: boardSize,
-                                  movableTokenIndices: movable,
-                                  onTapToken: session.tapToken,
-                                  anim: session.activeAnim,
-                                  animStep: _animStep,
-                                  currentPlayerIndex: s.currentPlayerIndex,
-                                  fx: _fx,
-                                  stepStart: _stepStart,
-                                  hintTokenIndex: _hintToken,
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                    // One die per player, pinned just outside the board's corners — never inside
-                    // a player's yard, but close enough to reach. They used to be
-                    // aligned to the corners of the play area, which on a wide
-                    // window put each die ~600px of empty felt away from the
-                    // board it belongs to: the roll control looked like it
-                    // belonged to nothing. Snapped to the board instead.
-                    LayoutBuilder(
-                      builder: (context, outer) {
-                        // Matches how the board above sizes itself: a square as
-                        // large as the play area allows.
-                        final boardSize = math.min(
-                          outer.maxWidth,
-                          outer.maxHeight,
-                        );
-                        // The felt margin the dice sit in, just outside the
-                        // board's own square.
-                        const felt = 18.0;
-                        return Center(
-                          child: SizedBox.square(
-                            dimension: boardSize + felt * 2,
-                            child: Stack(
-                              children: [
-                                for (var i = 0; i < s.players.length; i++)
-                                  _cornerDice(s, i),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            _controls(s),
-          ],
+              _controls(s),
+            ],
+          ),
         ),
       ),
     );

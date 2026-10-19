@@ -599,4 +599,86 @@ void main() {
       expect(find.byKey(const ValueKey('home-pawn-1')), findsNothing);
     });
   });
+
+  group('the back gesture on an online table', () {
+    Future<List<String>> pumpedTable(WidgetTester tester) async {
+      await connectAndEnterGame(tester);
+      final exits = <String>[];
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: OnlineSnakesView(
+                client: client,
+                onLeave: () => exits.add('left'),
+              ),
+            ),
+          ),
+        ),
+      );
+      channel.serverAdd({
+        'type': 'state',
+        'game': 'snakes',
+        'state': twoPlayerState(currentPlayerId: 'p2').toJson(),
+      });
+      await tester.pump(const Duration(milliseconds: 300));
+      return exits;
+    }
+
+    testWidgets('back walks out through the leave dialog, not a silent drop', (
+      tester,
+    ) async {
+      final exits = await pumpedTable(tester);
+
+      // The system back (Android / browser) must not peel the route off:
+      // that drops the socket, and the server keeps the seat seated for a
+      // reconnect that never comes while the other player waits.
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expect(find.text('Leave the game?'), findsOneWidget,
+          reason: 'leaving is a statement the table hears — so back asks '
+              'first, exactly like the leave button');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Leave'));
+      await tester.pump();
+      // The dialog exit runs its course first: the confirm future resolves
+      // once the route is gone, and only then do the leave intent and the
+      // exit fire.
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        channel.sent.any((m) => m['type'] == 'leave'),
+        isTrue,
+        reason: 'the walk-out must reach the server as a leave intent: the '
+            'seat forfeits, the others are told, and a two-player game ends '
+            'with the survivor winning',
+      );
+      expect(exits, ['left'],
+          reason: 'the screen exits by the same hand as the leave button');
+    });
+
+    testWidgets('back, then Stay: nothing is sent and the board goes on', (
+      tester,
+    ) async {
+      await pumpedTable(tester);
+
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expect(find.text('Leave the game?'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Stay'));
+      await tester.pump();
+
+      expect(
+        channel.sent.any((m) => m['type'] == 'leave'),
+        isFalse,
+        reason: 'a changed mind must not forfeit the seat',
+      );
+      expect(find.widgetWithText(FilledButton, 'ROLL'), findsOneWidget,
+          reason: 'the table is still the table — the back press changed '
+              'nothing but the dialog');
+    });
+  });
 }

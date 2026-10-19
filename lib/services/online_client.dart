@@ -22,6 +22,13 @@ import 'voice_rtc.dart';
 /// playing for them, or they have walked out.
 enum SeatStatus { connected, auto, left }
 
+/// The turn timer's eviction budget, as the server's default builds it.
+/// The copy that counts against it ("missed 2 · 3 left", "count of 5")
+/// reaches the client beside the misses themselves; if a room ever gets a
+/// different budget, the constant travels with that broadcast instead of
+/// staying a hard-coded five.
+const int maxTurnMisses = 5;
+
 /// The WS server URL's http(s) origin, where the voice-note store (and
 /// any other REST surface) lives. Kept public for the tests and for
 /// callers that frame player-facing links.
@@ -831,6 +838,9 @@ class OnlineClient extends ChangeNotifier {
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
         myColor = colorName == null ? null : LudoColor.values.byName(colorName);
+        // A (re)join is a clean slate: whatever eviction this client saw
+        // last belongs to the room we just left.
+        _mySeatEvicted = false;
         status = OnlineStatus.inLobby;
         _reconnectAttempts = 0; // we're back on the wire
       case 'lobby':
@@ -886,12 +896,19 @@ class OnlineClient extends ChangeNotifier {
         // Worth a line of its own: without it a departing player's pieces
         // just stop moving and the reason stays invisible. A 'timeout'
         // reason is the turn timer's five-missed-turns eviction, and its
-        // wording tells the table what actually happened to the seat.
+        // wording tells the table what actually happened to the seat. The
+        // seat id rides along (older servers omit it) so a client can know
+        // when the removal happened to ITS OWN seat — the one case where
+        // staying on the board is staring at a game that dropped you.
         final reason = msg['reason'] as String?;
         final gone = msg['name'] as String? ?? 'A player';
-        leftNotice = reason == 'timeout'
-            ? '$gone was removed — five turns missed'
-            : '$gone left the game';
+        final goneSeat = msg['seatId'] as String? ?? '';
+        final mine = goneSeat.isNotEmpty && goneSeat == seatId;
+        _mySeatEvicted = mine && reason == 'timeout';
+        leftNotice =
+            reason == 'timeout'
+            ? (mine ? 'You were removed — five turns missed' : '$gone was removed — five turns missed')
+            : (mine ? 'You left the game' : '$gone left the game');
         onLeft?.call(leftNotice!);
       case 'turnMissed':
         // One turn just burned because the seat on turn did not answer the
@@ -899,7 +916,7 @@ class OnlineClient extends ChangeNotifier {
         // list), with the remaining strikes so the player knows the stakes.
         final name = msg['name'] as String? ?? 'A player';
         final count = (msg['count'] as num?)?.toInt() ?? 0;
-        leftNotice = '$name missed a turn ($count of 5)';
+        leftNotice = '$name missed a turn ($count of $maxTurnMisses)';
         onLeft?.call(leftNotice!);
       case 'state':
         if ((msg['game'] as String?) == 'snakes') {
@@ -1109,6 +1126,18 @@ class OnlineClient extends ChangeNotifier {
   void Function()? onSeats;
   void Function(String notice)? onLeft;
 
+  /// True the moment the server walked *this* seat out of the table — five
+  /// consecutive turns missed on the turn timer. The server says so with the
+  /// seat id riding the `left` broadcast, because "Ashutosh was removed"
+  /// toward a table of two leaves one player knowing it is about them and
+  /// the other arguing: the game screens read this to finish the exit the
+  /// server started (a toast, then back to the lobby) instead of leaving
+  /// the removed seat staring at a table it is no longer part of — which is
+  /// exactly what looked like a frozen game when the other player already
+  /// held their win.
+  bool get mySeatEvicted => _mySeatEvicted;
+  bool _mySeatEvicted = false;
+
   // ------------------------------------------------------------ intents
 
   void sendStart() => _spectating ? _noop() : _send({'type': 'start'});
@@ -1248,7 +1277,10 @@ class OnlineClient extends ChangeNotifier {
     // while the socket cleanup below settles.
     status = OnlineStatus.idle;
     notifyListeners();
-    await _sub?.cancel();
+    // Cancel rides detached: detaching the reader is synchronous-local
+    // hygiene, and its future's completion is event-loop luggage the screen
+    // (and anything awaiting a deliberate leave) should never hang on.
+    unawaited(_sub?.cancel());
     _sub = null;
     await _channel?.sink.close();
     _channel = null;

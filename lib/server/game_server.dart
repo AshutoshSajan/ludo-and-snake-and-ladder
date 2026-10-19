@@ -918,6 +918,7 @@ class GameAuthority {
     room.broadcast({
       'type': 'left',
       'name': name,
+      'seatId': seatId,
       'color': color.name,
       'reason': reason,
     });

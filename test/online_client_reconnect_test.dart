@@ -524,4 +524,126 @@ void main() {
       });
     });
   });
+
+  group('the walk-out of my own seat (turn-timer eviction)', () {
+    test(
+      'my seat in the left frame marks the eviction and says "You were removed"',
+      () {
+        fakeAsync((async) {
+          final factory = FakeChannelFactory();
+          final client = OnlineClient(
+            'ws://test/ws',
+            seatId: 'p1',
+            name: 'A',
+            channelFactory: factory.create,
+          );
+          client.connect();
+          async.flushMicrotasks();
+          factory.last.serverAdd({
+            'type': 'joined', 'code': 'CODE', 'color': 'red',
+          });
+          async.flushMicrotasks();
+          expect(client.mySeatEvicted, isFalse);
+
+          final notices = <String>[];
+          client.onLeft = notices.add;
+          factory.last.serverAdd({
+            'type': 'left',
+            'name': 'A',
+            'seatId': 'p1',
+            'color': 'red',
+            'reason': 'timeout',
+          });
+          async.flushMicrotasks();
+
+          expect(client.mySeatEvicted, isTrue,
+              reason: 'the screen must know the removal happened to THIS '
+                  'seat — otherwise the removed player stays on a board '
+                  'they are no longer part of');
+          expect(notices, ['You were removed — five turns missed'],
+              reason: 'person-worded: the removed player is the reader');
+        });
+      },
+    );
+
+    test("someone else's eviction is news about them, not an exit trigger",
+        () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1', name: 'A', channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+        factory.last.serverAdd({
+          'type': 'joined', 'code': 'CODE', 'color': 'red',
+        });
+        async.flushMicrotasks();
+
+        final notices = <String>[];
+        client.onLeft = notices.add;
+        factory.last.serverAdd({
+          'type': 'left',
+          'name': 'B',
+          'seatId': 'p2',
+          'color': 'blue',
+          'reason': 'timeout',
+        });
+        async.flushMicrotasks();
+
+        expect(client.mySeatEvicted, isFalse);
+        expect(notices, ['B was removed — five turns missed']);
+      });
+    });
+
+    test('older servers omit the seat id — the notice stays table-facing',
+        () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1', name: 'A', channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+
+        final notices = <String>[];
+        client.onLeft = notices.add;
+        factory.last.serverAdd({
+          'type': 'left', 'name': 'A', 'color': 'red', 'reason': 'timeout',
+        });
+        async.flushMicrotasks();
+
+        // No seat id means the client cannot know it was them: no exit is
+        // triggered, and the old wording stands.
+        expect(client.mySeatEvicted, isFalse);
+        expect(notices, ['A was removed — five turns missed']);
+      });
+    });
+
+    test('a fresh join starts the next table clean', () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1', name: 'A', channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+
+        factory.last.serverAdd({
+          'type': 'left',
+          'name': 'A',
+          'seatId': 'p1',
+          'color': 'red',
+          'reason': 'timeout',
+        });
+        async.flushMicrotasks();
+        expect(client.mySeatEvicted, isTrue);
+
+        factory.last.serverAdd({
+          'type': 'joined', 'code': 'OTHER', 'color': 'blue',
+        });
+        async.flushMicrotasks();
+        expect(client.mySeatEvicted, isFalse,
+            reason: '(re)joining seats a clean table — last room\'s '
+                'eviction belongs to it, not to this one');
+      });
+    });
+  });
 }
