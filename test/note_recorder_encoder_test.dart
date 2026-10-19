@@ -53,6 +53,36 @@ void main() {
       expect(found, isNull);
     });
   });
+
+  group(
+    'recordConfig — the capture pipeline, pinned without a plugin call',
+    () {
+      // The web delegate copies these booleans straight into getUserMedia,
+      // and the plugin's own default is FALSE for all three: unset means
+      // "record the raw room" (hum, clatter, game bleed), which is how the
+      // noise got into voice notes while live calls stayed clean on their
+      // bare 'audio: true'. These expectations are the regression pin.
+      for (final encoder in [
+        AudioEncoder.opus,
+        AudioEncoder.aacLc,
+        AudioEncoder.wav,
+      ]) {
+        test(
+          '$encoder notes ride the speech clean-up and the compact format',
+          () {
+            final config = NoteRecorder.recordConfig(encoder);
+            expect(config.encoder, encoder);
+            expect(config.echoCancel, isTrue, reason: 'like the calls path');
+            expect(config.noiseSuppress, isTrue);
+            expect(config.autoGain, isTrue);
+            expect(config.sampleRate, 16000, reason: '2 MiB cap for a minute');
+            expect(config.numChannels, 1);
+            expect(config.bitRate, 96000);
+          },
+        );
+      }
+    },
+  );
 }
 
 /// Mirrors the probe loop in [NoteRecorder]: try candidates in order, take
