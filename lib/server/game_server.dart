@@ -913,15 +913,25 @@ class GameAuthority {
     room.leftSeats.add((seatId: seatId, name: name, color: color));
     room.autoSeats.remove(seatId);
     room.missedTurns.remove(seatId);
-    room.members.removeWhere((_, m) => m.seatId == seatId);
-    room.spectators.removeWhere((_, m) => m.seatId == seatId);
-    room.broadcast({
+    final departure = {
       'type': 'left',
       'name': name,
       'seatId': seatId,
       'color': color.name,
       'reason': reason,
-    });
+    };
+    // The seat itself must hear its own eviction while it is still a
+    // member: the removal below takes it off the roster, and no broadcast
+    // ever reaches a seat that is not on one. Without this a client whose
+    // turns were all timed out keeps staring at a live board asking for
+    // its roll — the clock burned out, the strikes on the strip say
+    // five-and-out, and the end screen the whole design points at never
+    // arrives. A voluntary leaver already knows (their client asked), so
+    // only the server-sided evictions need telling.
+    if (reason != 'left') room.sendToSeat(seatId, departure);
+    room.members.removeWhere((_, m) => m.seatId == seatId);
+    room.spectators.removeWhere((_, m) => m.seatId == seatId);
+    room.broadcast(departure);
     room.broadcast(room.seatsJson());
 
     final Object? game = room.started

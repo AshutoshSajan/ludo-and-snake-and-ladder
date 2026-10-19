@@ -237,6 +237,49 @@ void main() {
               'game that already crowned its winner');
     });
 
+    test('the evicted seat itself is told while it is still a member',
+        () async {
+      final victim = <String>[];
+      final auth = timerAuth();
+      final room = auth.createRoom(
+        _member(LudoColor.red, id: 'c1', on: victim.add),
+      );
+      auth.joinRoom(room.code, _member(LudoColor.green, id: 'c2', on: (_) {}));
+      auth.handleIntent(room: room, connectionId: 'c1', msg: {'type': 'start'});
+
+      // Green answers its clock; red answers nothing and misses its way
+      // out — the playtest round where the losing seat sat on a live board
+      // (its roll asked for, clock at zero) because the forfeit frames
+      // only ever went to the seat that remained.
+      for (var i = 0; i < 24 && !room.forfeited.contains('red'); i++) {
+        if (room.stateOrNull!.currentPlayer.id == 'green') {
+          auth.handleIntent(room: room, connectionId: 'c2', msg: {'type': 'roll'});
+          if (room.stateOrNull!.phase == LudoPhase.awaitingMove) {
+            final legal = ludo.legalMoves(room.stateOrNull!);
+            if (legal.isNotEmpty) {
+              auth.handleIntent(
+                room: room,
+                connectionId: 'c2',
+                msg: {'type': 'move', 'token': legal.first.tokenIndex},
+              );
+            }
+          }
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+
+      final left = _lastSent(victim, 'left');
+      expect(left, isNotNull,
+          reason: 'the forfeit takes the seat off the roster, and no '
+              'broadcast reaches a seat that is not on one — the eviction '
+              'is news only its own socket can deliver');
+      expect(left!['seatId'], 'red');
+      expect(left['reason'], 'timeout');
+      expect(_sentTypes(victim).last, 'left',
+          reason: "the last frame the frozen board receives is the one "
+              "that ends it");
+    });
+
     test(
       'a third seat keeps playing after the eviction',
       () async {

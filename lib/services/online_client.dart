@@ -918,6 +918,17 @@ class OnlineClient extends ChangeNotifier {
             for (final s in (msg['seats'] as List? ?? []))
               LobbySeat.fromJson((s as Map).cast<String, dynamic>()),
           ]);
+        // The corner dots read their strikes from here as well. The last
+        // seats frame before an eviction carries the fifth strike, and no
+        // state frame ever follows it for the removed seat — without this
+        // the dots show one strike fewer than the strip's miss chip.
+        seatMisses
+          ..clear()
+          ..addAll({
+            for (final s in (msg['seats'] as List? ?? []))
+              if ((s as Map)['misses'] is num)
+                (s['seatId'] as String): (s['misses'] as num).toInt(),
+          });
         onSeats?.call();
       case 'left':
         // Worth a line of its own: without it a departing player's pieces
