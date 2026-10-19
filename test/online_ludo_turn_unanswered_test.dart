@@ -21,7 +21,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/services/online_client.dart';
-import 'package:game_club/ui/ludo/ludo_board_painter.dart';
+import 'package:game_club/ui/ludo/ludo_corner_panel.dart';
 import 'package:game_club/ui/ludo/ludo_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'fake_channel.dart';
@@ -162,24 +162,93 @@ void main() {
             'ranked first is this client');
   });
 
-  testWidgets('strike dots ride the board: the painter sees the seat misses', (
+  testWidgets(
+    'a client that (re)joins an already-finished table still gets the end '
+    'screen', (tester) async {
+      // The state frame lands BEFORE the view mounts — a rejoin, not a live
+      // transition. The session assigns a preloaded snapshot directly
+      // (through the factory, never through _adoptState), so nothing opens
+      // the end screen by itself; this seat would sit on a frozen board in
+      // the UI of a live table — the playtest round's "no popup" report.
+      // This client rejoins as the LOSER: p1 (Ana) ranked first.
+      final s = twoPlayerState()
+        ..phase = LudoPhase.gameOver
+        ..lastRoll = null;
+      s.rankings.addAll(['p1', 'p2']);
+      await pumpTable(tester, state: s);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Ana wins Ludo!'), findsOneWidget,
+          reason: 'the rejoining loser reads the result on an end screen, '
+              'not on a table that pretends to still be going');
+      expect(find.text('Home'), findsOneWidget);
+
+      await tester.tap(find.text('Home'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Ana wins Ludo!'), findsNothing,
+          reason: 'Home leaves through the dialog');
+    },
+  );
+
+  testWidgets('the reconnect budget exhausted is a way back in, not a freeze', (
+    tester,
+  ) async {
+    await pumpTable(tester);
+
+    // Drop the socket: the client reconnects with backoff and, after the
+    // budget, settles into error — previously a silent dead table.
+    channel.dropConnection();
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(seconds: 3));
+    }
+    expect(find.text('Connection lost — could not reach the server.'),
+        findsOneWidget,
+        reason: 'the spent table says so instead of going silent forever');
+    expect(find.text('Retry'), findsOneWidget,
+        reason: 'the spent table offers the way back in');
+    expect(find.text('Leave'), findsOneWidget,
+        reason: 'and the way out, so nobody sits frozen in silence');
+  });
+
+  testWidgets('strike dots live outside the board, at each player corner', (
     tester,
   ) async {
     await pumpTable(tester, misses: {'p1': 2, 'p2': 4});
     await tester.pump();
 
-    final paint = tester.widget<CustomPaint>(find.byWidgetPredicate(
-      (w) => w is CustomPaint && w.painter is LudoBoardPainter,
-    ));
-    final dots =
-        (paint.painter! as LudoBoardPainter).missesByColor;
-    expect(dots[LudoColor.red], 2,
-        reason: 'p1 is red; their pill shows two struck dots');
-    expect(dots[LudoColor.green], 4,
-        reason: 'p2 is green; four strikes glow on their own corner');
-    expect(LudoBoardPainter.ludoStrikeDots, maxTurnMisses,
-        reason: 'one strike per allowed miss: the dot count mirrors the '
-            'turn tracker\'s rule exactly');
+    // The board painter no longer carries the dots — each corner square is
+    // covered by that corner's floating dice, so the strikes moved into
+    // the panels that stand outside the board, one per player corner.
+    final red = tester.widget<StrikeDotsRow>(
+      find.byKey(const Key('strike-dots-red')),
+    );
+    expect(
+      red.misses,
+      2,
+      reason: 'p1 is red; two spent strikes at their own corner',
+    );
+    final green = tester.widget<StrikeDotsRow>(
+      find.byKey(const Key('strike-dots-green')),
+    );
+    expect(
+      green.misses,
+      4,
+      reason: 'p2 is green; four of five strikes spent at their corner',
+    );
+    expect(
+      ludoStrikeDots,
+      maxTurnMisses,
+      reason:
+          'one strike per allowed miss: the dot count mirrors the '
+          'turn tracker\'s rule exactly',
+    );
+
+    // And the panels themselves exist per seated player — the corner the
+    // dice stand on no longer owns the only copy of someone's strikes.
+    expect(find.byKey(const Key('corner-panel-red')), findsOneWidget);
+    expect(find.byKey(const Key('corner-panel-green')), findsOneWidget);
   });
 
   testWidgets("another seat's missed turn never interrupts this player", (

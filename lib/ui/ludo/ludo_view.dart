@@ -23,6 +23,7 @@ import '../shared/table_notice.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'ludo_board_painter.dart';
+import 'ludo_corner_panel.dart';
 import 'ludo_overlays.dart';
 import 'ludo_token_layer.dart';
 import '../shared/sound_toggle_button.dart';
@@ -113,6 +114,26 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     }
     session.addListener(_onSessionChanged);
     widget.onlineClient?.addListener(_onClientChanged);
+    // A reconnect (or a rejoin after a dropped socket) can step onto a table
+    // that already ended: the snapshot arrives whole, so the session's live
+    // gameOver dispatch never runs (the factory assigns the state directly,
+    // not through `_adoptState`). Without this the player who lost their
+    // connection mid-victory comes back to a frozen board with no end
+    // screen — the exact playtest report. The same one-shot end dialog a
+    // live transition would open fires once the frame that can host it.
+    if (widget.onlineClient != null &&
+        session.state.phase == LudoPhase.gameOver) {
+      final s = session.state;
+      // The flag is consumed here, not in the dialog callback: a stray late
+      // frame repeating the finished state must not fire a second end
+      // screen while this one is still waiting for its frame.
+      session.markOver();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && session.state.phase == LudoPhase.gameOver) {
+          _onGameOver(s);
+        }
+      });
+    }
     // Don't tumble for whatever roll the session was born with — only for
     // rolls that happen from now on.
     _lastSeenSeq = session.state.rollSeq;
@@ -548,6 +569,53 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                       ],
                     ),
                   ),
+                )
+              // The retry budget SPENT: without this the table went silent
+              // forever — a frozen board wearing the UI of a live one, the
+              // playtest round's "no popup" report from the losing seat.
+              // The way back in and the way out are both one tap away.
+              else if (widget.onlineClient?.status == OnlineStatus.error)
+                Material(
+                  color: AppColors.danger,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 12,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.onlineClient?.errorText ??
+                                'Connection lost — could not reach the '
+                                    'server.',
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withAlpha(230),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: widget.onlineClient?.retry,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Retry'),
+                        ),
+                        TextButton(
+                          onPressed: _leave,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Leave'),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               if (widget.onlineClient != null)
                 SeatStatusStrip(
@@ -561,113 +629,130 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 child: Semantics(
                   label: _boardSemanticLabel(s, movable.isNotEmpty),
                   liveRegion: true,
-                  child: Stack(
+                  child: Column(
                     children: [
-                      Center(
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: LayoutBuilder(
-                            builder: (context, cons) {
-                              final boardSize = cons.biggest.width;
-                              // Captured for the corner dice below, which size
-                              // themselves against the board.
-                              _lastBoardSize = boardSize;
-                              final highlights = {
-                                for (final m in legalMoves(s))
-                                  if (movable.isNotEmpty &&
-                                      m.to >= 0 &&
-                                      m.to <= 50)
-                                    LudoBoard.absCell(
-                                      s.currentPlayer.color,
-                                      m.to,
-                                    ),
-                              };
-                              final playerNames = {
-                                for (final p in s.players) p.color: p.name,
-                              };
-                              // The live strike counts ride with the board:
-                              // each yard's name pill carries its seat's
-                              // missed-turn dots (red as they accrue), so the
-                              // countdown risk is visible from your own seat
-                              // without waiting for a removal.
-                              final missesByColor = <LudoColor, int>{
-                                for (final p in s.players)
-                                  p.color:
-                                      widget.onlineClient?.seatMisses[p.id] ??
-                                      0,
-                              };
-                              // There is no AnimatedBuilder around this
-                              // subtree any more, and that was the single
-                              // biggest mobile-web lag source: the effects
-                              // clock breathes every frame, and it used to
-                              // rebuild the board, the token layer and the
-                              // four corner dice 60 times a second even when
-                              // nothing was happening. The per-frame pieces
-                              // are scoped instead: the board repaints via
-                              // the painter's `repaint` listenable (reading
-                              // pulseAnim at paint time), and the token
-                              // layer drives only its rings and its ghost
-                              // from [fx] — the layout above holds still.
-                              return Stack(
-                                children: [
-                                  CustomPaint(
-                                    size: Size.square(boardSize),
-                                    painter: LudoBoardPainter(
-                                      highlightCells: highlights,
-                                      playerNames: playerNames,
-                                      missesByColor: missesByColor,
-                                      activeColor: s.currentPlayer.color,
-                                      pulseAnim: _fx,
-                                      repaint: _fx,
-                                    ),
-                                  ),
-                                  LudoTokenLayer(
-                                    state: s,
-                                    boardSize: boardSize,
-                                    movableTokenIndices: movable,
-                                    onTapToken: session.tapToken,
-                                    anim: session.activeAnim,
-                                    animStep: _animStep,
-                                    currentPlayerIndex: s.currentPlayerIndex,
-                                    fx: _fx,
-                                    stepStart: _stepStart,
-                                    hintTokenIndex: _hintToken,
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
+                      // The corner identity panels live OUTSIDE the board:
+                      // each corner square is covered by that corner's
+                      // floating dice, so strike dots and the yard name hid
+                      // behind the roll control on exactly the seat whose
+                      // state the table needs to read. Top-edge yards
+                      // (green, yellow) stand above the board; bottom-edge
+                      // yards (red, blue) below. The 14px gap also clears
+                      // the dice, which reach a few pixels beyond the board
+                      // line through their felt margin.
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 14),
+                        child: Row(children: _cornerPanels(s, top: true)),
                       ),
-                      // One die per player, pinned just outside the board's corners — never inside
-                      // a player's yard, but close enough to reach. They used to be
-                      // aligned to the corners of the play area, which on a wide
-                      // window put each die ~600px of empty felt away from the
-                      // board it belongs to: the roll control looked like it
-                      // belonged to nothing. Snapped to the board instead.
-                      LayoutBuilder(
-                        builder: (context, outer) {
-                          // Matches how the board above sizes itself: a square as
-                          // large as the play area allows.
-                          final boardSize = math.min(
-                            outer.maxWidth,
-                            outer.maxHeight,
-                          );
-                          // The felt margin the dice sit in, just outside the
-                          // board's own square.
-                          const felt = 18.0;
-                          return Center(
-                            child: SizedBox.square(
-                              dimension: boardSize + felt * 2,
-                              child: Stack(
-                                children: [
-                                  for (var i = 0; i < s.players.length; i++)
-                                    _cornerDice(s, i),
-                                ],
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            Center(
+                              child: AspectRatio(
+                                aspectRatio: 1,
+                                child: LayoutBuilder(
+                                  builder: (context, cons) {
+                                    final boardSize = cons.biggest.width;
+                                    // Captured for the corner dice below,
+                                    // which size themselves against the
+                                    // board.
+                                    _lastBoardSize = boardSize;
+                                    final highlights = {
+                                      for (final m in legalMoves(s))
+                                        if (movable.isNotEmpty &&
+                                            m.to >= 0 &&
+                                            m.to <= 50)
+                                          LudoBoard.absCell(
+                                            s.currentPlayer.color,
+                                            m.to,
+                                          ),
+                                    };
+                                    final playerNames = {
+                                      for (final p in s.players) p.color:
+                                          p.name,
+                                    };
+                                    // There is no AnimatedBuilder around this
+                                    // subtree any more, and that was the single
+                                    // biggest mobile-web lag source: the effects
+                                    // clock breathes every frame, and it used to
+                                    // rebuild the board, the token layer and the
+                                    // four corner dice 60 times a second even
+                                    // when nothing was happening. The per-frame
+                                    // pieces are scoped instead: the board
+                                    // repaints via the painter's `repaint`
+                                    // listenable (reading pulseAnim at paint
+                                    // time), and the token layer drives only
+                                    // its rings and its ghost from [fx] — the
+                                    // layout above holds still.
+                                    return Stack(
+                                      children: [
+                                        CustomPaint(
+                                          size: Size.square(boardSize),
+                                          painter: LudoBoardPainter(
+                                            highlightCells: highlights,
+                                            playerNames: playerNames,
+                                            activeColor: s.currentPlayer
+                                                .color,
+                                            pulseAnim: _fx,
+                                            repaint: _fx,
+                                          ),
+                                        ),
+                                        LudoTokenLayer(
+                                          state: s,
+                                          boardSize: boardSize,
+                                          movableTokenIndices: movable,
+                                          onTapToken: session.tapToken,
+                                          anim: session.activeAnim,
+                                          animStep: _animStep,
+                                          currentPlayerIndex:
+                                              s.currentPlayerIndex,
+                                          fx: _fx,
+                                          stepStart: _stepStart,
+                                          hintTokenIndex: _hintToken,
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
                               ),
                             ),
-                          );
-                        },
+                            // One die per player, pinned just outside the board's corners — never inside
+                            // a player's yard, but close enough to reach. They used to be
+                            // aligned to the corners of the play area, which on a wide
+                            // window put each die ~600px of empty felt away from the
+                            // board it belongs to: the roll control looked like it
+                            // belonged to nothing. Snapped to the board instead.
+                            LayoutBuilder(
+                              builder: (context, outer) {
+                                // Matches how the board above sizes itself: a
+                                // square as large as the play area allows.
+                                final boardSize = math.min(
+                                  outer.maxWidth,
+                                  outer.maxHeight,
+                                );
+                                // The felt margin the dice sit in, just
+                                // outside the board's own square.
+                                const felt = 18.0;
+                                return Center(
+                                  child: SizedBox.square(
+                                    dimension: boardSize + felt * 2,
+                                    child: Stack(
+                                      children: [
+                                        for (var i = 0; i < s.players.length;
+                                            i++)
+                                          _cornerDice(s, i),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Row(children: _cornerPanels(s, top: false)),
                       ),
                     ],
                   ),
@@ -681,8 +766,35 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     );
   }
 
-  // -------------------------------------------------- per-corner dice HUD
+  // ------------------------------------------------------- corner panels
 
+  /// The corner-sided identity strips above and below the board: every
+  /// seated player's color spot, name and strike dots, with the turn clock
+  /// beside the dots on the seat that currently owns the turn — the
+  /// question "whose turn and how long" answered on that seat's own
+  /// corner, instead of floating near the subtitle where nothing anchored
+  /// it to a player.
+  List<Widget> _cornerPanels(LudoState s, {required bool top}) {
+    return cornerPanels(
+      top: top,
+      seats: [
+        for (final p in s.players)
+          (
+            color: p.color,
+            name: p.name,
+            misses: widget.onlineClient?.seatMisses[p.id] ?? 0,
+            onTurn: p.id == s.currentPlayer.id,
+            clock: widget.onlineClient == null
+                ? null
+                : (p.id == s.currentPlayer.id
+                      ? TurnCountdown(client: widget.onlineClient!)
+                      : null),
+          ),
+      ],
+    );
+  }
+
+  // -------------------------------------------------- per-corner dice HUD
   /// The board's laid-out edge length, captured so the corner dice can size
   /// themselves against the board instead of the window.
   ///
@@ -780,11 +892,9 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
               style: const TextStyle(fontSize: 14, color: Colors.white70),
             ),
           ),
-          // The on-turn clock, live only on online tables. It sits with the
-          // subtitle because "whose turn and how long" is one question —
-          // and everyone at the table reads it the same way.
-          if (widget.onlineClient != null)
-            TurnCountdown(client: widget.onlineClient!),
+          // The turn clock lives on the on-turn seat's corner panel, beside
+          // its strike dots — where "whose turn and how long" points at a
+          // player instead of floating unanchored by the subtitle.
         ],
       ),
     );
