@@ -19,11 +19,36 @@ class ContentColumn extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) =>
-      Center(child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
-            child: child,
-          ));
+  Widget build(BuildContext context) => Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+      child: child,
+    ),
+  );
+}
+
+/// The toast a page speaks with: floating, and no wider than the reading
+/// column. A copied room code used to stretch a full-bleed stripe across a
+/// desktop window while everything else on the page stayed inside
+/// [kContentMaxWidth] — the one element that ignored rule 11. On a phone
+/// the inset floors at 16px, so the bar reads exactly as before.
+void showSnackInColumn(
+  BuildContext context,
+  String text, {
+  Duration duration = const Duration(seconds: 4),
+}) {
+  final inset = ((MediaQuery.sizeOf(context).width - kContentMaxWidth) / 2)
+      .clamp(16.0, double.infinity);
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(text),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.symmetric(horizontal: inset, vertical: 8),
+        duration: duration,
+      ),
+    );
 }
 
 /// An AppBar whose leading icon, title and actions sit inside that column.
