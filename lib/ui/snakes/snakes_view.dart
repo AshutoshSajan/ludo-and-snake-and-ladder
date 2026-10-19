@@ -13,6 +13,7 @@ import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
 import '../../services/saved_game.dart';
 import '../shared/dice_widget.dart';
+import '../shared/table_notice.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
@@ -48,6 +49,7 @@ class SnakesGameView extends ConsumerStatefulWidget {
 class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   late SnakesSession session;
   int _animStep = 0;
+  String? _lastNoticed;
   Timer? _animTimer;
 
   /// Ghost hop tick and dice tumble window. Both come from [SnakesAnim] so the
@@ -132,6 +134,16 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
         if (_animStep >= anim.waypoints.length - 1) t.cancel();
       });
     }
+    // A spent roll (pawn still out of the board, anything but a 1 rolled)
+    // passes the turn with no animation at all — without a word the player
+    // reads it as a swallowed tap. The die keeps the face; the toast
+    // explains the rules behind it.
+    if (session.state.lastEvent == 'skip' &&
+        _lastNoticed != session.state.lastEvent &&
+        mounted) {
+      showTableNotice(context, snakesSkipNotice(session.state));
+    }
+    _lastNoticed = session.state.lastEvent;
     if (mounted) setState(() {});
   }
 

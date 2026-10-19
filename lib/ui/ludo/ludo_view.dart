@@ -18,6 +18,7 @@ import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
+import '../shared/table_notice.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'ludo_board_painter.dart';
@@ -184,15 +185,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _showNotice(String text) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(text),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+    showTableNotice(context, text);
   }
 
   /// Spectators watch; they don't hand a seat to anyone, including themselves.
@@ -251,6 +244,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         _diceTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted) setState(() => _diceRolling = false);
         });
+        // A spent roll must not read as a swallowed tap: when the roll had
+        // no legal move the engine passed the turn right there, and the
+        // only evidence left is a corner die holding the face. Say why.
+        if (session.state.lastEvent == 'skip') {
+          _showNotice(ludoSkipNotice(session.state));
+        }
       }
       // A rewound sequence (undo, or a resync snapshot) only re-tracks the
       // sequence above — no tumble for a die that was never thrown.
