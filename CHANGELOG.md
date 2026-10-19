@@ -75,6 +75,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(online): spend the cold-start budget on refused first connections
 - Fix(extension): grant wss:// so online play can reach the game server
 ### Other
+- Ci(deploy): only main deploys to Netlify, and superseded action runs cancel
 - Refactor(friends): the room's own rows replace the all-users directory
 - Ci(web): build web on every push, not only before main
 - Ci(guard-dev): count merge parents from git instead of the push payload
