@@ -25,6 +25,7 @@ class ChatLineView extends StatelessWidget {
     this.quote,
     this.liked = false,
     this.gifImageProvider,
+    this.onOpenMenu,
   });
 
   final ChatLine line;
@@ -58,8 +59,27 @@ class ChatLineView extends StatelessWidget {
   /// chunk events.
   final ImageProvider? gifImageProvider;
 
+  /// Open a menu about this line's author (the table surfaces pass
+  /// friend/block/report here). Null — the default — means the line is
+  /// inert, which is how the 1:1 friends chat and any other non-table
+  /// lane keep the bubble gesture-free.
+  final VoidCallback? onOpenMenu;
+
   @override
   Widget build(BuildContext context) {
+    if (onOpenMenu == null) return buildLine(context);
+    // A tap or long press opens the author's menu — visible affordance,
+    // not a hidden gesture: table chat is where players meet each other,
+    // and the menu is how "who said that?" becomes "add / block / report".
+    return GestureDetector(
+      onTap: onOpenMenu,
+      onLongPress: onOpenMenu,
+      behavior: HitTestBehavior.translucent,
+      child: buildLine(context),
+    );
+  }
+
+  Widget buildLine(BuildContext context) {
     final mine = line.from == myName && myName.isNotEmpty;
     final accent = line.color == null
         ? AppColors.gold

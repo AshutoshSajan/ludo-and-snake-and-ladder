@@ -1010,6 +1010,10 @@ Future<shelf.Response> friendsRequestHandler(shelf.Request req) async {
       seatId,
       (body['name'] as String? ?? 'Player'),
       target,
+      // The room context passes the seatmate's roster name: the table
+      // add-friend flow targets ids, and a player who never opened the
+      // friends screen still has no profile to resolve until this mints.
+      targetName: (body['targetName'] as String?)?.trim(),
     );
     _recordFriendHit(
       ip,
@@ -1092,7 +1096,13 @@ Future<shelf.Response> friendsBlockHandler(shelf.Request req) async {
   }
   if (await _friendBanned(seatId) case final banned?) return banned;
   try {
-    await friendStore.block(seatId, target);
+    await friendStore.block(
+      seatId,
+      target,
+      // Roster-name mint for a tablemate with no friends profile yet —
+      // the block flow must not depend on the target's menu history.
+      targetName: (body['targetName'] as String?)?.trim(),
+    );
     return _friendJson({'ok': true, 'blocked': true});
   } on ArgumentError catch (e) {
     return _friendBadRequest(e.message.toString());

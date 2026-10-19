@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -7,14 +9,17 @@ import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/gif_picker_sheet.dart';
 import '../ui/shared/keyboard_content.dart';
 import '../ui/shared/note_composer.dart';
+import '../ui/shared/player_actions_sheet.dart';
 import '../ui/shared/voice_button.dart';
 import '../ui/shared/speaking_chips.dart';
 
 import '../engine/ludo/ludo_models.dart';
+import '../services/friend_client.dart';
 import '../services/online_client.dart';
 import '../services/storage_service.dart';
 import '../ui/ludo/ludo_view.dart';
 import '../ui/snakes/online_snakes_view.dart';
+import 'friends_screen.dart';
 import '../ui/theme.dart';
 
 /// Online lobby: connect to an authoritative Ludo server, create or join a
@@ -111,6 +116,18 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
 
+  /// Pending friend requests, polled so the app bar's friends doorway can
+  /// wear a badge while the table sits waiting. One client per screen;
+  /// the poll is cadence, the badge repainted only when the count moves.
+  FriendClient? _friendClient;
+
+  /// The server URL [_friendClient] was built for — the lobby can move
+  /// (a custom server typed in, a route-carried deep link), and a tray
+  /// polled on the wrong origin would badge requests that live elsewhere.
+  String _friendUrl = '';
+  Timer? _friendsPoll;
+  int _incomingRequests = 0;
+
   /// Game the host picks when creating a room; joiners inherit the room's.
   String _gameType = 'ludo';
 
@@ -141,6 +158,37 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       _client = adopted;
     }
     _restoreIdentity();
+    // The friends badge lives as long as the lobby does: 8s polls from
+    // the moment a client exists, immediate on return from Friends.
+    _friendsPoll = Timer.periodic(
+      const Duration(seconds: 8),
+      (_) => _pollTrays(),
+    );
+  }
+
+  Future<void> _pollTrays() async {
+    final client = _client;
+    if (client == null) return;
+    // Follow the room's own origin: the friend trays live on the same
+    // server the WS connects to, whatever the connect form holds now.
+    if (_friendClient == null || _friendUrl != client.serverUrl) {
+      _friendClient?.close();
+      _friendClient = FriendClient(serverUrl: client.serverUrl);
+      _friendUrl = client.serverUrl;
+    }
+    try {
+      final state = await _friendClient!.state(
+        seatId: client.seatId,
+        name: client.name,
+      );
+      if (!mounted) return;
+      if (state.incoming.length != _incomingRequests) {
+        setState(() => _incomingRequests = state.incoming.length);
+      }
+    } on FriendException {
+      // A silent badge is a smaller failure than a lobby that nags; the
+      // friends screen reports its own errors once opened.
+    }
   }
 
   Future<void> _restoreIdentity() async {
@@ -181,6 +229,23 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     return DefaultNames.unique(playerId: id);
   }
 
+  /// The player menu off a roster row: the sheet everything about that
+  /// seatmate routes through, addressed by seat id (names collide).
+  void _playerMenu(LobbySeat seat) {
+    final client = _client;
+    if (client == null || seat.seatId == client.seatId) return;
+    unawaited(
+      PlayerActionsSheet.show(
+        context,
+        serverUrl: client.serverUrl,
+        mySeatId: client.seatId,
+        myName: client.name,
+        peerSeatId: seat.seatId,
+        peerName: seat.name,
+      ),
+    );
+  }
+
   /// Remembers the name so it is offered next time. The id is never changed
   /// here: changing it would orphan the career already recorded under it.
   Future<void> _rememberName(String name) async {
@@ -190,6 +255,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   @override
   void dispose() {
+    _friendsPoll?.cancel();
+    _friendClient?.close();
     _client?.dispose();
     _serverCtrl.dispose();
     _nameCtrl.dispose();
@@ -264,6 +331,39 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           : PageAppBar(
               title: 'Play Online',
               actions: [
+                // The friends doorway: a badge when a friend request is
+                // waiting answers "did anyone want to be my friend?"
+                // without leaving the table, and the friends screen it
+                // opens owns the full accept/decline tray.
+                if (client != null)
+                  IconButton(
+                    icon: Badge(
+                      isLabelVisible: _incomingRequests > 0,
+                      backgroundColor: AppColors.gold,
+                      label: Text(
+                        '$_incomingRequests',
+                        style: const TextStyle(
+                          color: AppColors.ink,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      child: const Icon(Icons.group_outlined),
+                    ),
+                    tooltip: _incomingRequests > 0
+                        ? 'Friends ($_incomingRequests request${_incomingRequests == 1 ? '' : 's'} waiting)'
+                        : 'Friends',
+                    onPressed: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const FriendsScreen(),
+                        ),
+                      );
+                      // The tray may have changed inside; refresh now
+                      // rather than waiting out the next tick.
+                      if (mounted) await _pollTrays();
+                    },
+                  ),
                 // No message icon here. Chat lives on the game board's app bar,
                 // next to sound and autoplay, which is where a player is once
                 // a room exists. A second chat icon in the lobby put the same
@@ -619,12 +719,21 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               ),
               _ => null,
             },
-            trailing: seat.color == client.myColor
+            trailing: seat.seatId == client.seatId
                 ? const Chip(
                     label: Text('You'),
                     visualDensity: VisualDensity.compact,
                   )
-                : null,
+                : seat.seatId.isEmpty
+                // A bare name-and-color row (the light lobby feed) cannot
+                // be addressed by id — no menu rather than a menu that
+                // fails at tap time.
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.more_vert),
+                    tooltip: 'Friend, block or report',
+                    onPressed: () => _playerMenu(seat),
+                  ),
           ),
         for (final seat in gone)
           ListTile(
@@ -634,6 +743,13 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               child: const Icon(Icons.person_off, size: 18),
             ),
             title: Text('${seat.name} left the room', style: muted),
+            trailing: seat.seatId != client.seatId
+                ? IconButton(
+                    icon: const Icon(Icons.more_vert, size: 20),
+                    tooltip: 'Friend, block or report',
+                    onPressed: () => _playerMenu(seat),
+                  )
+                : null,
           ),
         // Seating stops at the room's table size, so the wait line tracks
         // the host's chosen size — (1/3) for a three-seat room, and gone
