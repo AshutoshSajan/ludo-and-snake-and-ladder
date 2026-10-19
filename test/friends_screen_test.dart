@@ -18,9 +18,13 @@ import 'package:game_club/services/friend_client.dart';
 const serverUrl = 'wss://friends.test/ws';
 
 /// The friends state one seat (p1) sees, shaped `friends/state`-like.
-Map<String, dynamic> _stateBody({int latestForP9 = 7}) => {
+Map<String, dynamic> _stateBody({
+  int latestForP9 = 7,
+  List<Map<String, Object?>> table = const [],
+}) => {
   'ok': true,
   'me': {'seatId': 'p1', 'name': 'Swift Otter', 'code': 'PRK7VW'},
+  'table': table,
   'friends': [
     {
       'seatId': 'p9',
@@ -85,6 +89,51 @@ void main() {
     expect(find.byIcon(Icons.circle), findsOneWidget);
     expect(find.byIcon(Icons.sports_esports), findsOneWidget);
   });
+
+  testWidgets(
+    'tablemates land in their own section and open the actions sheet',
+    (tester) async {
+      final stateCalls = <String>[];
+      await _pump(
+        tester,
+        FriendClient(
+          serverUrl: serverUrl,
+          httpClient: MockClient((req) async {
+            stateCalls.add(req.url.path);
+            return ok(
+              _stateBody(
+                table: [
+                  {'seatId': 'p5', 'name': 'Terry Test'},
+                ],
+              ),
+            );
+          }),
+        ),
+      );
+      expect(find.text('At your table'), findsOneWidget);
+      expect(find.text('Terry Test'), findsOneWidget);
+
+      // A tablemate row leads into the same actions sheet the table rows
+      // use — add, block, report — so the screen carries no second copy of
+      // the flow. The sheet's one-shot tray fetch goes over the same mock.
+      await tester.tap(find.text('Terry Test'));
+      await tester.pump();
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 150));
+      }
+      expect(stateCalls.where((p) => p == '/friends/state'), isNotEmpty);
+      final texts = [
+        for (final t in tester.widgetList<Text>(find.byType(Text)))
+          if (t.data != null) t.data!,
+      ].join(' | ');
+      expect(texts, contains('Report Terry Test'), reason: texts);
+      expect(
+        find.text('Add Terry Test as a friend'),
+        findsOneWidget,
+        reason: 'the sheet, not a bespoke flow, owns the tablemate actions',
+      );
+    },
+  );
 
   testWidgets('a caught-up friend shows no unread dot', (tester) async {
     await _pump(

@@ -210,6 +210,22 @@ class FriendChatPage {
   final int latest;
 }
 
+/// One row of "At your table": a player seated in the caller's room who
+/// is not already a friend, a pending request, or a block. The server
+/// sends only the id and the display name — everything else a friendship
+/// needs is minted when the row's actions ask for it.
+class TableMate {
+  const TableMate({required this.seatId, required this.name});
+
+  factory TableMate.fromJson(Map<String, dynamic> json) => TableMate(
+    seatId: json['seatId'] as String? ?? '',
+    name: json['name'] as String? ?? '',
+  );
+
+  final String seatId;
+  final String name;
+}
+
 /// One screen of friends state — what `POST friends/state` returns in
 /// total, so the screen can poll coarsely.
 class FriendState {
@@ -220,6 +236,7 @@ class FriendState {
     required this.outgoing,
     required this.invites,
     required this.blocked,
+    this.table = const [],
   });
 
   factory FriendState.fromJson(
@@ -256,6 +273,10 @@ class FriendState {
       for (final b in (json['blocked'] as List? ?? const []))
         FriendBlockView.fromJson(b as Map<String, dynamic>),
     ],
+    table: [
+      for (final t in (json['table'] as List? ?? const []))
+        TableMate.fromJson(t as Map<String, dynamic>),
+    ],
   );
 
   final FriendProfile me;
@@ -264,6 +285,11 @@ class FriendState {
   final List<FriendRequestView> outgoing;
   final List<FriendInviteView> invites;
   final List<FriendBlockView> blocked;
+
+  /// The people seated at the caller's table, current room only — the
+  /// discovery lane the retired all-users directory used to serve. Old
+  /// servers do not send `table`, so this stays empty there.
+  final List<TableMate> table;
 }
 
 class FriendClient {

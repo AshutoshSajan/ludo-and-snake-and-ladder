@@ -205,8 +205,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         for (final r in state.incoming) '${r.id}:${r.seatId}',
         for (final r in state.outgoing) '${r.id}:${r.seatId}',
       };
-      if (_stateSignature == null ||
-          !setEquals(_stateSignature, signature)) {
+      if (_stateSignature == null || !setEquals(_stateSignature, signature)) {
         setState(() {
           _stateSignature = signature;
           _friendState = state;
@@ -313,7 +312,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         accept: true,
       );
       _showSnack(
-        ok ? 'You and ${seat.name} are now friends' : 'Could not accept — try again',
+        ok
+            ? 'You and ${seat.name} are now friends'
+            : 'Could not accept — try again',
       );
     } on FriendException catch (e) {
       _showSnack(e.text);
@@ -391,9 +392,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   }
 
   void _showSnack(String text) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+    // Same column discipline as the body: lobby toasts never stretch a
+    // full window edge, the way the room card and header already don't.
+    showSnackInColumn(context, text);
   }
 
   Future<void> _disconnect() async {
@@ -485,26 +486,42 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           ),
         ),
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
+          child: switch (client) {
+            // Rule 11: the lobby and the join form are reading-width
+            // screens — they use the same column the header above does,
+            // so on a desktop window the room code card can no longer
+            // read wider than anything around it. The board branches
+            // stay full-bleed: a game board wants every pixel.
+            null => ContentColumn(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: switch (client) {
-                  null => _connectForm(),
-                  OnlineClient c
-                      when c.gameType == 'snakes' && c.snakesState != null =>
-                    OnlineSnakesView(client: c, onLeave: _disconnectAndClose),
-                  OnlineClient c when c.state != null => LudoGameView(
-                    onlineClient: c,
-                    onlineSeatId: c.seatId,
-                    onOnlineLeave: _disconnectAndClose,
-                  ),
-                  OnlineClient _ => _lobby(client),
-                },
+                child: _connectForm(),
               ),
             ),
-          ),
+            OnlineClient c
+                when c.gameType == 'snakes' && c.snakesState != null =>
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: OnlineSnakesView(
+                  client: c,
+                  onLeave: _disconnectAndClose,
+                ),
+              ),
+            OnlineClient c when c.state != null => Padding(
+              padding: const EdgeInsets.all(16),
+              child: LudoGameView(
+                onlineClient: c,
+                onlineSeatId: c.seatId,
+                onOnlineLeave: _disconnectAndClose,
+              ),
+            ),
+            OnlineClient _ => ContentColumn(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _lobby(client),
+              ),
+            ),
+          },
         ),
       ),
     );
@@ -899,7 +916,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         // screen is replaced by the board, which has its own chat control in
         // the app bar; the two are separate surfaces, not two views of one
         // panel, so the lobby keeps its inline list and never opens the sheet.
-        for (final line in client.chat.reversed.take(6))
+        // The last lines in replay order — the newest lands at the
+        // BOTTOM like every transcript does. (This used to feed
+        // reversed.take, which printed the newest line at the TOP and
+        // made the lobby read upside-down: older messages pushed newer
+        // ones down the screen.)
+        for (final line in recentChatLines(client.chat))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: ChatLineView(line: line, compact: true, myName: client.name),
@@ -1069,8 +1091,7 @@ class SeatFriendControl extends StatelessWidget {
           visualDensity: VisualDensity.compact,
         );
       }
-      final mine =
-          s.outgoing.any((r) => r.seatId == peerSeatId);
+      final mine = s.outgoing.any((r) => r.seatId == peerSeatId);
       if (mine) {
         return Chip(
           label: const Text('Sent'),
@@ -1103,6 +1124,13 @@ class SeatFriendControl extends StatelessWidget {
   }
 }
 
+/// The lobby's inline table talk shows the tail of the transcript — the
+/// lines a player is most likely replying to — in replay order, so the
+/// newest sits at the bottom the way every transcript does. Pure so the
+/// order itself can be pinned by a test without staging a room.
+List<ChatLine> recentChatLines(List<ChatLine> chat, {int keep = 6}) =>
+    chat.length > keep ? chat.sublist(chat.length - keep) : List.of(chat);
+
 /// The lobby's room-code card. Copying is a first-class button, not a hope:
 /// the code used to be the only thing in the card, with copying left to the
 /// platform's text selection — and a long-press selection on big,
@@ -1124,22 +1152,15 @@ class RoomCodeCard extends StatelessWidget {
       // Clipboard write can be denied (insecure origin, old browser). The
       // code is still selectable by hand — say so instead of failing silent.
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text('Could not copy — please select the code by hand'),
-            ),
-          );
+        showSnackInColumn(
+          context,
+          'Could not copy — please select the code by hand',
+        );
       }
       return;
     }
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(content: Text('$value copied — send it to your friends')),
-        );
+      showSnackInColumn(context, '$value copied — send it to your friends');
     }
   }
 

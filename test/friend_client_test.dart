@@ -90,6 +90,29 @@ void main() {
       expect(state.blocked.single.name, 'Troll');
     });
 
+    test('the state bundle parses the table lane and tolerates no table', () {
+      // The lane ships with the tablemate bundle; name-only rows, since
+      // everything else a friendship needs is minted on ask.
+      const withTable = {
+        'me': {'seatId': 'p1', 'name': 'Swift Otter', 'code': 'PRK7VW'},
+        'table': [
+          {'seatId': 'p2', 'name': 'Ash B'},
+          {'seatId': 'p3', 'name': 'Neo C'},
+        ],
+      };
+      final mine = FriendState.fromJson(withTable, mySeatId: 'p1');
+      expect([for (final t in mine.table) t.name], ['Ash B', 'Neo C']);
+
+      // Older servers (or a caller not seated anywhere) omit the lane;
+      // absence reads as an empty list, never a crash.
+      expect(
+        FriendState.fromJson(const {
+          'me': {'seatId': 'p1'},
+        }, mySeatId: 'p1').table,
+        isEmpty,
+      );
+    });
+
     test('lookup miss maps the 404 to null without throwing', () async {
       final mock = MockClient(
         (_) async => http.Response(

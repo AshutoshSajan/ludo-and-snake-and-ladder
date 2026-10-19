@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/friend_client.dart';
+import 'package:game_club/services/online_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -68,15 +69,17 @@ void main() {
       final copied = <String>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-        if (call.method == 'Clipboard.setData') {
-          copied.add(call.arguments['text'] as String);
-        }
-        return null;
-      });
+            if (call.method == 'Clipboard.setData') {
+              copied.add(call.arguments['text'] as String);
+            }
+            return null;
+          });
 
       await tester.pumpWidget(
         const MaterialApp(
-          home: Scaffold(body: Center(child: RoomCodeCard(code: 'LK2X'))),
+          home: Scaffold(
+            body: Center(child: RoomCodeCard(code: 'LK2X')),
+          ),
         ),
       );
 
@@ -84,18 +87,21 @@ void main() {
       await tester.pump();
 
       expect(copied, ['LK2X']);
-      expect(find.text('LK2X copied — send it to your friends'), findsOneWidget);
+      expect(
+        find.text('LK2X copied — send it to your friends'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('is disabled before the room exists', (tester) async {
       final copied = <String>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-        if (call.method == 'Clipboard.setData') {
-          copied.add(call.arguments['text'] as String);
-        }
-        return null;
-      });
+            if (call.method == 'Clipboard.setData') {
+              copied.add(call.arguments['text'] as String);
+            }
+            return null;
+          });
 
       await tester.pumpWidget(
         const MaterialApp(
@@ -142,17 +148,17 @@ void main() {
     );
 
     SeatFriendControl control({FriendState? state}) => SeatFriendControl(
-          state: state,
-          peerSeatId: 'cleo',
-          peerName: 'Cleo',
-          busy: false,
-          onAdd: () {},
-          onAccept: () {},
-        );
+      state: state,
+      peerSeatId: 'cleo',
+      peerName: 'Cleo',
+      busy: false,
+      onAdd: () {},
+      onAccept: () {},
+    );
 
     Widget host(SeatFriendControl child) => MaterialApp(
-          home: Scaffold(body: Center(child: child)),
-        );
+      home: Scaffold(body: Center(child: child)),
+    );
 
     testWidgets('a stranger at the table gets the one-tap add', (tester) async {
       // Before the first poll lands, the row still offers the add: the
@@ -180,8 +186,11 @@ void main() {
       );
       await tester.pumpWidget(host(ana));
       expect(find.text('Friends'), findsOneWidget);
-      expect(find.byType(FilledButton), findsNothing,
-          reason: 'a friend needs no action; the chip is the whole row');
+      expect(
+        find.byType(FilledButton),
+        findsNothing,
+        reason: 'a friend needs no action; the chip is the whole row',
+      );
     });
 
     testWidgets('my pending request shows Sent, and Add is gone', (
@@ -200,7 +209,9 @@ void main() {
       expect(find.text('+ Add'), findsNothing);
     });
 
-    testWidgets('an incoming request turns the row into Accept', (tester) async {
+    testWidgets('an incoming request turns the row into Accept', (
+      tester,
+    ) async {
       var accepted = 0;
       final ky = SeatFriendControl(
         state: tray(),
@@ -213,8 +224,11 @@ void main() {
       await tester.pumpWidget(host(ky));
       await tester.tap(find.text('Accept'));
       await tester.pump();
-      expect(accepted, 1,
-          reason: 'the tray asked me at the table, the tap answers right here');
+      expect(
+        accepted,
+        1,
+        reason: 'the tray asked me at the table, the tap answers right here',
+      );
     });
 
     testWidgets('a row sleeps while its request is in flight', (tester) async {
@@ -229,13 +243,41 @@ void main() {
       );
       await tester.pumpWidget(host(cleo));
       final button = tester.widget<FilledButton>(
-        find.ancestor(of: find.text('+ Add'), matching: find.byType(FilledButton)),
+        find.ancestor(
+          of: find.text('+ Add'),
+          matching: find.byType(FilledButton),
+        ),
       );
-      expect(button.onPressed, isNull,
-          reason: 'one slow link must not fire a request twice');
+      expect(
+        button.onPressed,
+        isNull,
+        reason: 'one slow link must not fire a request twice',
+      );
       await tester.tap(find.text('+ Add'));
       await tester.pump();
       expect(added, isZero);
+    });
+  });
+
+  group('recentChatLines — the inline table talk', () {
+    ChatLine line(int at) =>
+        ChatLine(from: 'Ash', text: 'message $at', at: at, seatId: 'seat-$at');
+
+    test('history lists the newest at the bottom, replay order', () {
+      final chat = [for (var i = 1; i <= 9; i++) line(i)];
+      final shown = recentChatLines(chat);
+      expect(
+        shown.map((l) => l.at),
+        [4, 5, 6, 7, 8, 9],
+        reason:
+            'the newest of the window must render at the bottom, '
+            'not push everything older down past itself',
+      );
+    });
+
+    test('a short history shows entire in replay order', () {
+      final chat = [line(1), line(2), line(3)];
+      expect(recentChatLines(chat).map((l) => l.at), [1, 2, 3]);
     });
   });
 }

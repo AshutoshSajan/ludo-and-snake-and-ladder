@@ -927,6 +927,39 @@ Future<shelf.Response?> _friendBanned(String seatId) async {
 /// minted friend code, accepted friends (each with the pair's latest
 /// message id for unread dots), pending requests in both directions and
 /// live play invites. One call = one screen of state, so the screen can
+/// The players seated in the rooms [seatId] is a member of right now,
+/// freshest seat names, capped — the friends screen's "At your table"
+/// rows. A seat id may appear under several connections (reconnects); a
+/// map keyed by seat id keeps it one row per person. Self is never her
+/// own discovery; lanes already covered ([covered]) are filtered so a
+/// section never re-lists someone the screen shows elsewhere.
+List<Map<String, Object?>> tableRowsFor(String seatId, Set<String> covered) {
+  final picked = <String, String>{};
+  for (final room in authority.rooms.values) {
+    final seated = room.members.values.any((m) => m.seatId == seatId);
+    if (!seated) continue;
+    for (final member in room.members.values) {
+      if (member.seatId == seatId ||
+          member.seatId.isEmpty ||
+          covered.contains(member.seatId)) {
+        continue;
+      }
+      picked.putIfAbsent(member.seatId, () => member.name);
+    }
+  }
+  // Name-sorted so one person's row does not hop between polls, and
+  // capped like every other store read: a room is four people and a
+  // handful of extras, but the generosity is bounded regardless.
+  final rows = [
+    for (final entry
+        in picked.entries.toList()..sort(
+          (a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()),
+        ))
+      {'seatId': entry.key, 'name': entry.value},
+  ];
+  return rows.length > 32 ? rows.sublist(0, 32) : rows;
+}
+
 /// poll coarsely.
 Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
   if (req.method != 'POST') {
@@ -949,10 +982,24 @@ Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
     for (final f in await friendStore.friends(seatId))
       {...f.toJson(), 'latest': friendStore.latestMessageId(seatId, f.seatId)},
   ];
+  // Table discovery: everyone seated in the rooms this caller is sitting
+  // in right now, minus the people a relationship lane already covers
+  // (friends, pending requests, blocks). The friends screen renders them
+  // as one "At your table" section, each row opening the same actions
+  // sheet the table rows use — the all-users directory is retired, so
+  // this poll is the only friend-discovery surface left, and it must
+  // reflect the room the caller can actually see.
+  final covered = <String>{
+    for (final f in friends) f['seatId'] as String,
+    for (final r in await friendStore.incoming(seatId)) r.fromSeat,
+    for (final r in await friendStore.outgoing(seatId)) r.toSeat,
+    for (final b in await friendStore.blocks(seatId)) b.blocked,
+  };
   return _friendJson({
     'ok': true,
     'me': profile.toJson(),
     'friends': friends,
+    'table': tableRowsFor(seatId, covered),
     'incoming': [
       for (final r in await friendStore.incoming(seatId)) r.toJson(),
     ],

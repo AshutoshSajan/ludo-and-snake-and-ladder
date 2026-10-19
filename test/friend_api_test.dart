@@ -7,6 +7,8 @@ library;
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:game_club/engine/ludo/ludo_models.dart';
+import 'package:game_club/server/game_server.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:sqlite3/sqlite3.dart' show sqlite3;
 
@@ -33,6 +35,7 @@ import '../bin/server.dart'
         friendsRespondHandler,
         friendsStateHandler,
         friendsUnblockHandler,
+        authority,
         reportStore,
         resetFeedbackAttempts,
         resetFriendAttempts;
@@ -59,11 +62,13 @@ Future<shelf.Response> _call(String path, shelf.Request req) => switch (path) {
   'friends/lookup' => friendsLookupHandler(req),
   // Retired route: mirrors bin/server.dart's in-switch 404 (the helper
   // that serves it there is private to the server library).
-  'friends/players' => Future.value(shelf.Response(
-    404,
-    body: jsonEncode({'ok': false, 'text': 'not found'}),
-    headers: {'content-type': 'application/json'},
-  )),
+  'friends/players' => Future.value(
+    shelf.Response(
+      404,
+      body: jsonEncode({'ok': false, 'text': 'not found'}),
+      headers: {'content-type': 'application/json'},
+    ),
+  ),
   'friends/request' => friendsRequestHandler(req),
   'friends/respond' => friendsRespondHandler(req),
   'friends/remove' => friendsRemoveHandler(req),
@@ -175,6 +180,66 @@ void main() {
       expect(blocked['seatId'], 'p2');
       expect(state['friends'], isEmpty, reason: 'block severed the pair');
     });
+
+    test('the table lane lists roommates no other section covers', () async {
+      final savedAuthority = authority;
+      authority = GameAuthority();
+      addTearDown(() => authority = savedAuthority);
+      final stranger = ServerMember(
+        id: 'c2',
+        seatId: 'p2',
+        name: 'Ash B',
+        color: LudoColor.blue,
+        sink: (_) {},
+      );
+      final room = authority.createRoom(
+        ServerMember(
+          id: 'c1',
+          seatId: 'p1',
+          name: 'Swift Otter',
+          color: LudoColor.red,
+          sink: (_) {},
+        ),
+        code: 'CSSPP1',
+      );
+      room.members['c2'] = stranger;
+      // A reconnect makes the same seat id appear under two connections;
+      // one replica row is what the screen shows.
+      room.members['c2b'] = ServerMember(
+        id: 'c2b',
+        seatId: 'p2',
+        name: 'Ash B',
+        color: LudoColor.blue,
+        sink: (_) {},
+      );
+      room.members['c3'] = ServerMember(
+        id: 'c3',
+        seatId: 'p3',
+        name: 'Small Fox',
+        color: LudoColor.green,
+        sink: (_) {},
+      );
+
+      // p3 is already a friend: the friend section shows them, so the
+      // table lane adds nothing new there.
+      await makeFriends('p1', 'p3');
+
+      final body = await _json(await _state('p1'));
+      final rows = (body['table'] as List).cast<Map>();
+      expect(
+        [for (final t in rows) t['seatId']],
+        ['p2'],
+        reason:
+            'self, already-friended and duplicate connection rows are '
+            'filtered; the stranger is the one discovery row',
+      );
+      expect(rows.single['name'], 'Ash B');
+
+      // With the room gone there is nothing to discover.
+      authority.rooms.remove('CSSPP1');
+      final after = await _json(await _state('p1'));
+      expect(after['table'], isEmpty);
+    });
   });
 
   group('lookup + requests', () {
@@ -203,10 +268,14 @@ void main() {
     test('the retired player enumeration answers 404, not a listing', () async {
       await _serve('pOld', 'Old Name');
       final r = await _call('friends/players', _get('friends/players'));
-      expect(r.statusCode, 404,
-          reason: 'add-a-friend discovery lives at the table now: the '
-              'server-wide player list was removed with the directory '
-              'screen, and a registry enumeration must not come back');
+      expect(
+        r.statusCode,
+        404,
+        reason:
+            'add-a-friend discovery lives at the table now: the '
+            'server-wide player list was removed with the directory '
+            'screen, and a registry enumeration must not come back',
+      );
     });
 
     test('unknown target maps to a readable 400', () async {

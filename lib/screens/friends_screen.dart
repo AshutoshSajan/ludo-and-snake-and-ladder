@@ -22,6 +22,7 @@ import '../services/online_client.dart';
 import '../services/server_url.dart';
 import '../services/storage_service.dart';
 import '../ui/page_app_bar.dart';
+import '../ui/shared/player_actions_sheet.dart';
 import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/player_avatar.dart';
 import '../ui/theme.dart';
@@ -144,6 +145,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
       final state = await _client.state(seatId: _seatId, name: _myName);
       String fingerprint(FriendState s) =>
           '${s.me.code}|${s.friends.map((f) => '${f.seatId}:${f.latest}').join(',')}'
+          '|${s.table.map((t) => t.seatId).join(',')}'
           '|${s.incoming.map((r) => '${r.id}:${r.seatId}').join(',')}'
           '|${s.outgoing.map((r) => '${r.id}:${r.seatId}').join(',')}'
           '|${s.invites.map((i) => '${i.id}:${i.status}').join(',')}'
@@ -524,6 +526,16 @@ class _FriendsScreenState extends State<FriendsScreen> {
                       padding: const EdgeInsets.all(12),
                       children: [
                         _meCode(state.me),
+                        // Discovery at the table: everyone seated in the
+                        // room the caller is in, who no other section
+                        // already shows. The row opens the same actions
+                        // sheet a tablemate row in the lobby does —
+                        // add, block, report — so the friends screen
+                        // needs no second pathway to the same buttons.
+                        if (state.table.isNotEmpty) ...[
+                          _sectionTitle('At your table'),
+                          for (final t in state.table) _tableTile(t),
+                        ],
                         if (state.incoming.isNotEmpty) ...[
                           _sectionTitle('Friend requests'),
                           for (final r in state.incoming)
@@ -596,6 +608,51 @@ class _FriendsScreenState extends State<FriendsScreen> {
         ),
       ),
     );
+  }
+
+  Widget _tableTile(TableMate t) {
+    return Card(
+      color: Colors.white.withValues(alpha: 0.06),
+      margin: const EdgeInsets.only(bottom: 6),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      // The same one-row shape the friend cards use; the trailing add
+      // icon and the row's own tap both lead into the actions sheet, so
+      // the whole card is the target and nothing is icon-only.
+      child: ListTile(
+        dense: true,
+        onTap: () => _openTableActions(t),
+        leading: _avatar(t.seatId),
+        title: Text(
+          t.name,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        trailing: TextButton.icon(
+          onPressed: () => _openTableActions(t),
+          icon: const Icon(Icons.person_add, size: 16),
+          label: const Text('Add'),
+        ),
+      ),
+    );
+  }
+
+  /// Someone currently seated at the caller's table: the sheet carries
+  /// the add / block / report actions and mints the tablemate's profile
+  /// when an add needs one. A background refresh follows, so a request
+  /// that just went out hops from this section to "Sent, waiting"
+  /// without waiting for the next tick.
+  Future<void> _openTableActions(TableMate t) async {
+    await PlayerActionsSheet.show(
+      context,
+      serverUrl: _client.serverUrl,
+      mySeatId: _seatId,
+      myName: _myName,
+      peerSeatId: t.seatId,
+      peerName: t.name,
+      // The test-injected client drives the sheet's own tray fetch too;
+      // production passes null and the sheet builds its own.
+      friendClientForTest: widget.client,
+    );
+    if (mounted) await _refresh();
   }
 
   Widget _sectionTitle(String text) => Padding(
