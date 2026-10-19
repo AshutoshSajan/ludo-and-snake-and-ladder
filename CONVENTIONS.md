@@ -264,6 +264,14 @@ player-facing change answers all of these before its PR opens:
 - **One visual language.** New screens reuse the shared widgets
   (chat bubbles, sheets, buttons) and the existing palette and spacing;
   a bespoke second way to do the same thing is a review finding.
+- **Screens read like a phone, whatever the window.** Every player-facing
+  screen body (the admin panel is exempt) lays its content out in the
+  reading-width column — [`ContentColumn`](
+  lib/ui/page_app_bar.dart) and its `kContentMaxWidth` — so the screen
+  matches the header width above it. A desktop window shows a centered
+  column, never cards or list rows stretched edge to edge across a
+  laptop. Full-bleed is reserved for the game boards themselves (the
+  table owns the whole canvas) and for page backgrounds/gradients.
 - **Motion serves comprehension.** Purposeful, short animations (a dice
   roll, a mover hop, a bubble arriving) at 150–300 ms; nothing decorative,
   and the platform's reduced-motion setting is respected.

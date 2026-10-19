@@ -331,6 +331,9 @@ void main() {
         'game': 'snakes',
         'state': finishedState().toJson(),
       });
+      // One pump to run the deferred reveal, one more to build the dialog
+      // route it pushed.
+      await tester.pump(const Duration(milliseconds: 300));
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Back to lobby'), findsOneWidget);
@@ -745,6 +748,47 @@ void main() {
       expect(find.text('You were removed'), findsNothing);
       expect(find.textContaining('was removed — five turns missed'),
           findsOneWidget);
+    });
+  });
+
+  group('a rejoin to a table that already ended', () {
+    testWidgets('still shows the end screen instead of a frozen board', (
+      tester,
+    ) async {
+      await connectAndEnterGame(tester);
+      // The finished snapshot lands while no view is mounted — the exact
+      // shape of a rejoin after a dropped socket. Nothing notifies about
+      // it ever again, so the end screen must come from the view's own
+      // first look, not from a transition that will never fire.
+      channel.serverAdd({
+        'type': 'state',
+        'game': 'snakes',
+        'state': finishedState().toJson(),
+      });
+      var left = false;
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: OnlineSnakesView(client: client, onLeave: () => left = true),
+            ),
+          ),
+        ),
+      );
+      // One pump for the deferred reveal, one for the dialog route.
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Ana wins!'), findsOneWidget,
+          reason: 'this seat (Bo) rejoined as the loser; the result reads '
+              'on an end screen instead of a table frozen mid-play');
+
+      await tester.tap(find.text('Back to lobby'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(left, isTrue, reason: 'Back to lobby hands the exit over');
+      expect(find.text('Ana wins!'), findsNothing,
+          reason: 'the end screen leaves with the player');
     });
   });
 }

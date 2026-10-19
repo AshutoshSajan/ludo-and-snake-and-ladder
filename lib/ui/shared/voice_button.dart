@@ -72,7 +72,7 @@ class MicButton extends StatefulWidget {
 
 class _MicButtonState extends State<MicButton>
     with SingleTickerProviderStateMixin {
-  /// One full beam sweep: a pair of rings expanding out and fading, then
+  /// One full beam sweep: a trio of rings expanding out and fading, then
   /// repeating for as long as speech holds.
   static const Duration _beamPeriod = Duration(milliseconds: 1300);
 
@@ -212,9 +212,12 @@ class _MicButtonState extends State<MicButton>
   }
 }
 
-/// The beam itself: two rings per period, staggered half a sweep apart, so
-/// speech reads as a continuous pulse rather than a metronome tick. Rings
-/// start outside the glyph's own radius and stay inside the button box.
+/// The beam itself: three rings per period, staggered a third of a sweep
+/// apart, so speech reads as a continuous ripple rather than a metronome
+/// tick — the playtest round asked for the rings to carry the animation,
+/// so the pair became a trio and the whole thing got bigger and brighter:
+/// the rings start just outside the glyph's own radius, reach the button
+/// edge, and fade late enough to actually be seen.
 class _BeamPainter extends CustomPainter {
   const _BeamPainter(this.progress);
 
@@ -224,12 +227,18 @@ class _BeamPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final centre = Offset(size.width / 2, size.height / 2);
-    for (final phase in [progress, (progress + 0.5) % 1.0]) {
+    for (final phase in [
+      progress,
+      (progress + 1 / 3) % 1.0,
+      (progress + 2 / 3) % 1.0,
+    ]) {
       final ring = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..color = AppColors.gold.withAlpha(((1 - phase) * 140).round());
-      canvas.drawCircle(centre, 13.5 + 10 * phase, ring);
+        ..strokeWidth = 2.6
+        ..color = AppColors.gold.withAlpha(((1 - phase) * 220).round());
+      // 11.5 + 12 phases out to 23.5 — the outer ring touches the edge of
+      // the button's own 48 px box and never crosses it.
+      canvas.drawCircle(centre, 11.5 + 12 * phase, ring);
     }
   }
 

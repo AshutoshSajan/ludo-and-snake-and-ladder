@@ -208,7 +208,13 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     if (s.phase == SnakesPhase.gameOver) {
       if (!_gameOverShown) {
         _gameOverShown = true;
-        _showGameOver(s);
+        // Deferred to the frame: this path also runs from initState for a
+        // player who (re)joins an already-finished table, and a route push
+        // while the first frame is still assembling throws instead of
+        // opening the end screen.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showGameOver(s);
+        });
       }
       return;
     }
@@ -393,6 +399,84 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         body: SafeArea(
           child: Column(
             children: [
+              // Transport banners: the ludo table shows them; snakes went
+              // without — a dropped socket sat on a frozen board the
+              // playtest round read as "the other player is still there in
+              // the game". Same two states, same two outs.
+              if (widget.client.status == OnlineStatus.reconnecting)
+                Material(
+                  color: AppColors.danger,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 12,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Connection lost — reconnecting…',
+                          style: TextStyle(
+                            color: Colors.white.withAlpha(230),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else if (widget.client.status == OnlineStatus.error)
+                Material(
+                  color: AppColors.danger,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 12,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.client.errorText ??
+                                'Connection lost — could not reach the '
+                                    'server.',
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withAlpha(230),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: widget.client.retry,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Retry'),
+                        ),
+                        TextButton(
+                          onPressed: _leave,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Leave'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               SeatStatusStrip(
                 seats: widget.client.lobbySeats,
                 mySeatId: widget.client.seatId,

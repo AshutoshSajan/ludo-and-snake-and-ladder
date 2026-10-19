@@ -26,6 +26,7 @@ import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/player_avatar.dart';
 import '../ui/theme.dart';
 import 'online_lobby_screen.dart';
+import 'player_directory_screen.dart';
 
 /// Per-pair read markers, persisted: key = friend's seat id, value =
 /// the highest message id I have laid eyes on. The friends list compares
@@ -486,6 +487,16 @@ class _FriendsScreenState extends State<FriendsScreen> {
         title: 'Friends',
         actions: [
           IconButton(
+            icon: const Icon(Icons.group),
+            tooltip: 'Browse all players',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => PlayerDirectoryScreen(client: _client),
+              ),
+            ),
+          ),
+          IconButton(
             icon: const Icon(Icons.person_add),
             tooltip: 'Add a friend',
             onPressed: _addFriendFlow,
@@ -501,63 +512,71 @@ class _FriendsScreenState extends State<FriendsScreen> {
           ),
         ),
         child: SafeArea(
-          child: state == null
-              ? Center(
-                  child: _busyText != null
-                      ? Text(
-                          _busyText!,
-                          style: const TextStyle(color: AppColors.ivory),
-                        )
-                      : const CircularProgressIndicator(color: AppColors.gold),
-                )
-              : RefreshIndicator(
-                  onRefresh: _refresh,
-                  color: AppColors.gold,
-                  child: ListView(
-                    padding: const EdgeInsets.all(12),
-                    children: [
-                      _meCode(state.me),
-                      if (state.incoming.isNotEmpty) ...[
-                        _sectionTitle('Friend requests'),
-                        for (final r in state.incoming)
-                          _requestTile(r, incoming: true),
-                      ],
-                      if (state.outgoing.isNotEmpty) ...[
-                        _sectionTitle('Sent, waiting'),
-                        for (final r in state.outgoing)
-                          _requestTile(r, incoming: false),
-                      ],
-                      if (state.invites.any((i) => i.pending)) ...[
-                        _sectionTitle('Play invites'),
-                        for (final i in state.invites)
-                          if (i.pending) _inviteTile(i),
-                      ],
-                      if (state.friends.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 28),
-                          child: Center(
-                            child: Text(
-                              'No friends yet.\nTap + and share your '
-                              'friend code.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: AppColors.ivory,
-                                height: 1.6,
+          // The reading-width column: this screen is a phone list (the
+          // header above already constrains itself to the same width), so
+          // a desktop window shows the tray as a centered column, not as
+          // friend cards stretched edge to edge across a laptop.
+          child: ContentColumn(
+            child: state == null
+                ? Center(
+                    child: _busyText != null
+                        ? Text(
+                            _busyText!,
+                            style: const TextStyle(color: AppColors.ivory),
+                          )
+                        : const CircularProgressIndicator(
+                            color: AppColors.gold,
+                          ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _refresh,
+                    color: AppColors.gold,
+                    child: ListView(
+                      padding: const EdgeInsets.all(12),
+                      children: [
+                        _meCode(state.me),
+                        if (state.incoming.isNotEmpty) ...[
+                          _sectionTitle('Friend requests'),
+                          for (final r in state.incoming)
+                            _requestTile(r, incoming: true),
+                        ],
+                        if (state.outgoing.isNotEmpty) ...[
+                          _sectionTitle('Sent, waiting'),
+                          for (final r in state.outgoing)
+                            _requestTile(r, incoming: false),
+                        ],
+                        if (state.invites.any((i) => i.pending)) ...[
+                          _sectionTitle('Play invites'),
+                          for (final i in state.invites)
+                            if (i.pending) _inviteTile(i),
+                        ],
+                        if (state.friends.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 28),
+                            child: Center(
+                              child: Text(
+                                'No friends yet.\nTap + and share your '
+                                'friend code, or browse all players.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: AppColors.ivory,
+                                  height: 1.6,
+                                ),
                               ),
                             ),
-                          ),
-                        )
-                      else ...[
-                        _sectionTitle('Your friends'),
-                        for (final f in state.friends) _friendTile(f),
+                          )
+                        else ...[
+                          _sectionTitle('Your friends'),
+                          for (final f in state.friends) _friendTile(f),
+                        ],
+                        if (state.blocked.isNotEmpty) ...[
+                          _sectionTitle('Blocked'),
+                          for (final b in state.blocked) _blockedTile(b),
+                        ],
                       ],
-                      if (state.blocked.isNotEmpty) ...[
-                        _sectionTitle('Blocked'),
-                        for (final b in state.blocked) _blockedTile(b),
-                      ],
-                    ],
+                    ),
                   ),
-                ),
+          ),
         ),
       ),
     );
@@ -1019,29 +1038,35 @@ class _FriendsChatScreenState extends State<FriendsChatScreen> {
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              Expanded(
-                child: _messages.isEmpty
-                    ? Center(
-                        child: Text(
-                          'Say hi to ${peer.name} — the first message '
-                          'is the hardest',
-                          style: const TextStyle(color: AppColors.ivory),
+          // The same reading-width column as every other screen: the DM
+          // thread is a phone conversation, so on a desktop window the
+          // bubbles and the composer sit in the centered column the header
+          // draws, not stretched the width of the laptop.
+          child: ContentColumn(
+            child: Column(
+              children: [
+                Expanded(
+                  child: _messages.isEmpty
+                      ? Center(
+                          child: Text(
+                            'Say hi to ${peer.name} — the first message '
+                            'is the hardest',
+                            style: const TextStyle(color: AppColors.ivory),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.all(12),
+                          itemCount: _messages.length,
+                          itemBuilder: (context, i) {
+                            final m = _messages[i];
+                            return _bubble(m);
+                          },
                         ),
-                      )
-                    : ListView.builder(
-                        controller: _scroll,
-                        padding: const EdgeInsets.all(12),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, i) {
-                          final m = _messages[i];
-                          return _bubble(m);
-                        },
-                      ),
-              ),
-              _composerBar(),
-            ],
+                ),
+                _composerBar(),
+              ],
+            ),
           ),
         ),
       ),

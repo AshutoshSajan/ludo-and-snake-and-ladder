@@ -759,8 +759,30 @@ class OnlineClient extends ChangeNotifier {
   /// tests can shrink it rather than spend 22 seconds proving it gives up.
   static Duration coldStartBaseDelay = const Duration(milliseconds: 400);
 
-  void _onClosed() {
-    if (_userClosed) {
+  /// Re-opens the socket from an [OnlineStatus.error] surface, after the
+  /// reconnect budget ran out. A live or connecting client has its own
+  /// flow; a spent one sat ("Connection lost — could not reach the
+  /// server") without a way back in. The room code rides along exactly
+  /// like the reconnect path does, so the rejoin lands on the table again
+  /// — finished mid-victory or not, the end screen greets what it finds.
+  void retry() {
+    assert(
+      status == OnlineStatus.error || status == OnlineStatus.idle,
+      'retry is for a spent connection, not for interrupting a live one',
+    );
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempts = 0;
+    _coldStartTimer?.cancel();
+    _coldStartAttempts = 0;
+    waitingForColdStart = false;
+    status = OnlineStatus.connecting;
+    errorText = null;
+    notifyListeners();
+    _openAndHello();
+  }
+
+  void _onClosed() {    if (_userClosed) {
       status = OnlineStatus.idle;
       notifyListeners();
       return;

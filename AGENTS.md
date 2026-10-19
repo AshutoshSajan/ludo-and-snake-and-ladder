@@ -45,6 +45,12 @@ every edit, every commit, every push.
     and reuse the shared widgets instead of a second bespoke pattern. Run
     the affected screens once before pushing — the full bar is
     **[CONVENTIONS.md](CONVENTIONS.md) → "Product craft"**.
+11. **Screens are laid out like a phone, whatever the window.** Every
+    player-facing screen body (the admin panel is exempt) uses the
+    reading-width column (`ContentColumn`, `kContentMaxWidth`) so it
+    matches the header width; a desktop window shows a centered column,
+    not full-width stretched rows. Full-bleed is only for game boards and
+    page backgrounds.
 
 ## Command map
 

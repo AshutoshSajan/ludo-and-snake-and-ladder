@@ -16,6 +16,7 @@
 ///                        friends w/ latest-message ids, requests,
 ///                        invites, blocks) for one seat
 ///   POST /friends/lookup   -> resolve a friend code / seat id to a profile
+///   GET  /friends/players  -> every registered player (the directory)
 ///   POST /friends/request  -> send (or match) a friend request
 ///   POST /friends/respond  -> accept / decline / withdraw a request
 ///   POST /friends/remove   -> un-friend (either side)
@@ -981,6 +982,22 @@ Future<shelf.Response> friendsLookupHandler(shelf.Request req) async {
     return _friendBadRequest('no player with that friend code', code: 404);
   }
   return _friendJson({'ok': true, 'profile': target.toJson()});
+}
+
+/// Every registered player, freshest first — the player directory's list.
+/// A GET (the one friends read that takes no caller identity: the rows are
+/// public presence — name, code, last seen — and every relationship decision
+/// still runs through the caller's own request/respond calls), capped by
+/// the store so an open list can never balloon.
+Future<shelf.Response> friendsPlayersHandler(shelf.Request req) async {
+  if (req.method != 'GET') {
+    return _friendBadRequest('GET only', code: 405);
+  }
+  final players = await friendStore.directory();
+  return _friendJson({
+    'ok': true,
+    'players': [for (final p in players) p.toJson()],
+  });
 }
 
 /// Sends (or matches, when the reverse request is standing) a friend
@@ -2168,6 +2185,8 @@ Future<void> main(List<String> args) async {
             return friendsStateHandler(req);
           case 'friends/lookup':
             return friendsLookupHandler(req);
+          case 'friends/players':
+            return friendsPlayersHandler(req);
           case 'friends/request':
             return friendsRequestHandler(req);
           case 'friends/respond':

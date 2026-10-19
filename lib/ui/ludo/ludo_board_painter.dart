@@ -20,7 +20,6 @@ class LudoBoardPainter extends CustomPainter {
   LudoBoardPainter({
     this.highlightCells = const {},
     this.playerNames = const {},
-    this.missesByColor = const {},
     this.activeColor,
     this.pulse = 0,
     this.pulseAnim,
@@ -30,12 +29,6 @@ class LudoBoardPainter extends CustomPainter {
   final Set<int> highlightCells; // absolute track indices
   final Map<LudoColor, String> playerNames; // color -> seat name
   final LudoColor? activeColor; // corner that breathes on their turn
-
-  /// Missed turns per seat, by the seat's color: the strike dots drawn on
-  /// each player's own name pill. An absent entry reads as no misses (all
-  /// dots still green) — offline tables and servers without the turn clock
-  /// stay at the clean five-dot row.
-  final Map<LudoColor, int> missesByColor;
 
   /// Static fallback phase for callers that pass no animation (tests).
   final double pulse; // 0..1 phase of the breathing glow
@@ -261,6 +254,13 @@ class LudoBoardPainter extends CustomPainter {
   /// bottom players (red, blue) get it on the bottom, top players
   /// (green, yellow) on the top. Never overlaps the pieces inside.
   ///
+  /// The strike dots and the turn clock do NOT live here — each corner's
+  /// floating dice sit over exactly this band, so anything on the yard's
+  /// outer edge disappears behind the roll control on the very seat whose
+  /// state the table needs to read. They draw in the corner panels
+  /// outside the board instead ([LudoCornerPanel]). The pill keeps only
+  /// the yard's name, at its full width again.
+  ///
   /// The shaped text is memoized on the class, not per painter instance: the
   /// board repaints every breathing frame, and re-running [TextPainter.layout]
   /// — full text shaping — four times a frame is the single most expensive
@@ -283,20 +283,9 @@ class LudoBoardPainter extends CustomPainter {
       (o.col + 3) * cell,
       (o.row + (atTop ? 0.5 : 5.5)) * cell,
     );
-    // The strike row rides on the pill's right end: five dots, one per
-    // allowed miss (the turn tracker's five-strike rule, mirroring the
-    // server's), missed ones red, the rest green. It is the at-a-glance
-    // answer to "why is this corner about to disappear" that every seat
-    // can read from their side of the table. The cache key must track
-    // everything that effects the pill's look (text, tint, cell size),
-    // so a mid-game rename or a window resize shapes a fresh pill rather
-    // than stretching an old one; the miss count only affects the DOTS,
-    // which are painted fresh every frame.
-    final dotsW = strikeRowWidth(cell);
-    final dotR = dotRadius(cell);
     final fontSize = cell * 0.52;
     const maxPillW = 4.7; // cells
-    final textMax = cell * (maxPillW - 0.5) - dotsW;
+    final textMax = cell * (maxPillW - 0.5);
     final key = '$name|${color.toARGB32()}|$fontSize';
     final tp = _namePillCache.putIfAbsent(key, () {
       if (_namePillCache.length > 64) _namePillCache.clear();
@@ -315,7 +304,7 @@ class LudoBoardPainter extends CustomPainter {
       )..layout(maxWidth: textMax));
     });
     final thickness = cell * 0.84;
-    final len = math.min(tp.width + cell * 0.5 + dotsW, cell * maxPillW);
+    final len = math.min(tp.width + cell * 0.5, cell * maxPillW);
     final rect = Rect.fromCenter(
       center: Offset.zero,
       width: len,
@@ -335,40 +324,7 @@ class LudoBoardPainter extends CustomPainter {
         ..color = color.withValues(alpha: 0.5),
     );
     tp.paint(canvas, Offset(-rect.width / 2 + cell * 0.22, -tp.height / 2));
-    // The strike dots, right-aligned inside the pill; one dot per miss
-    // turns red, in seat order, so "2 of 5 missed" reads as two red dots.
-    final misses = (missesByColor[seat] ?? 0).clamp(0, ludoStrikeDots);
-    final gap = _strikeDotGap * cell;
-    final rowW = dotR * 2 * ludoStrikeDots + gap * (ludoStrikeDots - 1);
-    final dotsRight = rect.width / 2 - cell * 0.16;
-    final dotY = -cell * 0.02;
-    for (var i = 0; i < ludoStrikeDots; i++) {
-      canvas.drawCircle(
-        Offset(dotsRight - rowW + dotR + i * (dotR * 2 + gap), dotY),
-        dotR,
-        Paint()..color = i < misses ? AppColors.danger : Colors.green.shade500,
-      );
-    }
     canvas.restore();
-  }
-
-  /// Five strikes live both in the turn tracker (`maxTurnMisses`, with its
-  /// own copy on the server) and here, painted on the name pill. The count
-  /// is duplicated on purpose: a custom painter cannot reach the service
-  /// layer that owns the rule, so the number is pinned by the dot-row test
-  /// — change the rule and the test breaks instead of the board drifting.
-  static const ludoStrikeDots = 5;
-  static const _strikeDotGap = 0.07;
-
-  /// Radius of one strike dot, sized off the cell so the row scales with
-  /// the board.
-  static double dotRadius(double cell) => cell * 0.16;
-
-  /// Full width of the strike row (dots and gaps) for a cell size.
-  static double strikeRowWidth(double cell) {
-    final dotR = dotRadius(cell);
-    return dotR * 2 * ludoStrikeDots +
-        _strikeDotGap * cell * (ludoStrikeDots - 1);
   }
 
   /// Simple flat arrow "→" at [c] pointing along [dir]: a straight shaft
@@ -411,6 +367,5 @@ class LudoBoardPainter extends CustomPainter {
       old.highlightCells.length != highlightCells.length ||
       !old.highlightCells.containsAll(highlightCells) ||
       old.activeColor != activeColor ||
-      !mapEquals(old.playerNames, playerNames) ||
-      !mapEquals(old.missesByColor, missesByColor);
+      !mapEquals(old.playerNames, playerNames);
 }

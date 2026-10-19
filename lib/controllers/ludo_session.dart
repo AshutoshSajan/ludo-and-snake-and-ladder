@@ -132,6 +132,14 @@ class LudoSession extends ChangeNotifier {
   bool _busy = false;
   bool _over = false;
 
+  /// Marks an already-finished snapshot as consumed for the end-screen
+  /// dispatch. A client that resumes onto a table which ended while it was
+  /// away shows the end screen through the view's own path; without
+  /// consuming _over there, the next stray frame repeating the same
+  /// finished state would fire [onGameOver] a second time and stack a
+  /// second dialog.
+  void markOver() => _over = true;
+
   /// When true, human seats roll and move automatically (autoplay / break).
   bool autoPlay = false;
 
