@@ -27,6 +27,7 @@ import '../bin/server.dart'
         friendsInviteHandler,
         friendsInviteRespondHandler,
         friendsLookupHandler,
+        friendsPlayersHandler,
         friendsRemoveHandler,
         friendsReportHandler,
         friendsRequestHandler,
@@ -57,6 +58,7 @@ Future<Map<String, dynamic>> _json(shelf.Response r) async =>
 Future<shelf.Response> _call(String path, shelf.Request req) => switch (path) {
   'friends/state' => friendsStateHandler(req),
   'friends/lookup' => friendsLookupHandler(req),
+  'friends/players' => friendsPlayersHandler(req),
   'friends/request' => friendsRequestHandler(req),
   'friends/respond' => friendsRespondHandler(req),
   'friends/remove' => friendsRemoveHandler(req),
@@ -191,6 +193,25 @@ void main() {
       await makeFriends('p1', 'p2');
       final state = await _json(await _state('p1'));
       expect((state['friends'] as List).single['seatId'], 'p2');
+    });
+
+    test('the directory lists every registered player, freshest first', () async {
+      await _serve('pOld', 'Old Name');
+      await _serve('pNew', 'New Name');
+      final r = await _call('friends/players', _get('friends/players'));
+      expect(r.statusCode, 200);
+      final players = (await _json(r))['players'] as List;
+      final ids = [for (final p in players) (p as Map)['seatId']];
+      expect(ids, containsAll(['pOld', 'pNew']),
+          reason: 'every profile the server knows is a row');
+      expect(ids.first, 'pNew',
+          reason: 'freshest presence first — the person you just played '
+              'with is at the top, not buried');
+    });
+
+    test('the directory is a read: it answers GET and refuses writes', () async {
+      final wrong = await _call('friends/players', _post('friends/players', {}));
+      expect(wrong.statusCode, 405);
     });
 
     test('unknown target maps to a readable 400', () async {
