@@ -16,10 +16,22 @@ on:
     #
     # Four activity types, no more: with no types filter GitHub also runs on
     # labeled, assigned, converted_to_draft and the rest, so editing a PR's
-    # metadata triggers a full suite. 'closed' stays because prune-branch acts
-    # once the PR merges.
+    # metadata triggers a full suite. `closed` is deliberately NOT one of them:
+    # a merge fires push-on-main, which already runs the full verify, so a
+    # closed event would bill the same commit's suite a second time in
+    # parallel — exactly the queue-pile this policy exists to prevent.
+    # Branch cleanup after a merge is prune-branch.yml's job, not this
+    # workflow's.
     branches: [main]
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
+
+# One live workflow per ref: a newer event replaces the queued one instead of
+# stacking behind it on the shared runner pool. A PR and the push its merge
+# produces carry different refs, so they do not fight each other; same-ref
+# churn (a re-pushed tag, a rebased PR) is what this collapses.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   guard-main:
@@ -47,11 +59,10 @@ jobs:
 
   test:
     # Pull requests into main only - the `on.pull_request.branches` filter is
-    # what scopes that, not this `if`. Full analyze + suite + release build costs
-    # several minutes of metered runner time, so it runs where a change is about
-    # to ship, not at every hop on the way there. A PR into the integration
-    # branch is covered by `tool/ci.sh` locally, which runs the same checks.
-    if: github.event_name == 'pull_request'
+    # what scopes that, not this `if`. The closed action is named out too: if
+    # anyone reintroduces it in the types above, a closed event still must
+    # not bill the whole suite behind a push to main that already ran it.
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

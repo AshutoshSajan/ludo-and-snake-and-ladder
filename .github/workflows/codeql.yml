@@ -19,6 +19,13 @@ on:
   schedule:
     - cron: '43 8 * * 0'
 
+# Two languages analyzed per push can hold the shared runner pool for
+# several minutes; a second push to main (or an edited PR) replaces the
+# superseded analysis instead of waiting for it.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
