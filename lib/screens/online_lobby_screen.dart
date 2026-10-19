@@ -11,7 +11,6 @@ import '../ui/shared/keyboard_content.dart';
 import '../ui/shared/note_composer.dart';
 import '../ui/shared/player_actions_sheet.dart';
 import '../ui/shared/voice_button.dart';
-import '../ui/shared/speaking_chips.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../services/friend_client.dart';
@@ -825,12 +824,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               MicButton(client: client),
             ],
           ),
-        if (client.voiceJoined) ...[
-          const SizedBox(height: 10),
-          // The live talk state: one gold chip per speaking seat, gone
-          // entirely (not an empty plate) while the table is quiet.
-          SpeakingChips(names: client.voiceSpeakingNames),
-        ],
+        // Talk state plays on the mic button (the gold beam), exactly like
+        // on the game views: a second indicator here — a chip row that grew
+        // whenever anyone spoke — kept shoving the controls around while
+        // callers talked, which read like the screen was breaking.
         if (!spectating)
           Row(
             children: [

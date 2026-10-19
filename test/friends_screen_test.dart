@@ -129,8 +129,9 @@ void main() {
         httpClient: MockClient((_) async => ok(_stateBody())),
       ),
     );
-    // The buddy row: long-press the tap-to-chat subtitle text under it.
-    await tester.longPress(find.text('tap to chat · long-press for more'));
+    // The buddy row: long-press the friend's name tile itself (the row is
+    // one line now — the old instructing subtitle lives in no card).
+    await tester.longPress(find.text('Small Fox'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Remove Small Fox'), findsOneWidget);
     expect(find.textContaining('Block Small Fox'), findsOneWidget);
