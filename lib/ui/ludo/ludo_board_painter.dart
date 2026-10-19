@@ -9,18 +9,40 @@ import '../theme.dart';
 
 /// Paints the classic 15x15 Ludo board: ivory playing field, lacquered
 /// quadrant yards, colored home columns and a four-triangle center.
+///
+/// The breathing turn glow is driven by a listenable ([repaint]) rather than
+/// by widget rebuilds: the swing rides a [pulseAnim] (the view's effects
+/// clock) read at paint time, so the pulsing costs one board repaint per
+/// frame and nothing else — no widget tree rebuild while the board breathes.
+/// The painter must therefore not be asked to cache anything derived from
+/// [pulseAnim]: values are re-read on every paint.
 class LudoBoardPainter extends CustomPainter {
   LudoBoardPainter({
     this.highlightCells = const {},
     this.playerNames = const {},
     this.activeColor,
     this.pulse = 0,
+    this.pulseAnim,
     super.repaint,
   });
+
   final Set<int> highlightCells; // absolute track indices
   final Map<LudoColor, String> playerNames; // color -> seat name
   final LudoColor? activeColor; // corner that breathes on their turn
+
+  /// Static fallback phase for callers that pass no animation (tests).
   final double pulse; // 0..1 phase of the breathing glow
+
+  /// The live breathing clock. Read at paint time, re-evaluated on every
+  /// repaint tick, so the glow animates without a single widget rebuild.
+  final Animation<double>? pulseAnim;
+
+  /// Where the breathing glow stands right now: 0..1 with one full swing
+  /// per clock period.
+  double get _pulsePhase {
+    final v = (pulseAnim?.value ?? pulse) * 2 * math.pi;
+    return 0.5 + 0.5 * math.sin(v);
+  }
 
   static const n = 15.0;
 
@@ -55,6 +77,7 @@ class LudoBoardPainter extends CustomPainter {
       final base = AppColors.ludo(color);
       final isActive = color == activeColor;
       final isDimmed = activeColor != null && !isActive;
+      final pulse = _pulsePhase;
       canvas.drawRRect(yardRRect, Paint()..color = base);
 
       // Inner white square: staging area for the 4 pawns.
@@ -196,6 +219,16 @@ class LudoBoardPainter extends CustomPainter {
   /// Draws the player name pill horizontally on the outer edge of the yard:
   /// bottom players (red, blue) get it on the bottom, top players
   /// (green, yellow) on the top. Never overlaps the pieces inside.
+  ///
+  /// The shaped text is memoized on the class, not per painter instance: the
+  /// board repaints every breathing frame, and re-running [TextPainter.layout]
+  /// — full text shaping — four times a frame is the single most expensive
+  /// thing this painter did. A cache entry is one shaped promise keyed by
+  /// everything that can change it (text, tint, size), and the cap clears the
+  /// map wholesale when a burst of new names exhausts it; pill text changes
+  /// a handful of times per session at most, so the hit rate stays ~100%.
+  static final Map<String, TextPainter> _namePillCache = {};
+
   void _drawNamePill(Canvas canvas, GridPos o, double cell, String name,
       Color color, LudoColor seat) {
     final atTop =
@@ -204,19 +237,27 @@ class LudoBoardPainter extends CustomPainter {
       (o.col + 3) * cell,
       (o.row + (atTop ? 0.5 : 5.5)) * cell,
     );
-    final tp = TextPainter(
-      text: TextSpan(
-        text: name,
-        style: TextStyle(
-          fontSize: cell * 0.52,
-          fontWeight: FontWeight.w800,
-          color: color,
+    // The cache key must track everything that effects the pill's look
+    // (text length, seat tint, cell size), so a mid-game rename or a
+    // window resize shapes a fresh entry rather than stretching an old one.
+    final fontSize = cell * 0.52;
+    final key = '$name|${color.toARGB32()}|$fontSize';
+    final tp = _namePillCache.putIfAbsent(key, () {
+      if (_namePillCache.length > 64) _namePillCache.clear();
+      return (TextPainter(
+        text: TextSpan(
+          text: name,
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
         ),
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-      ellipsis: '…',
-    )..layout();
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout());
+    });
     final thickness = cell * 0.84;
     final len = math.min(tp.width + cell * 0.5, cell * 4.7);
     final rect =

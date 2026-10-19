@@ -520,50 +520,43 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                             final playerNames = {
                               for (final p in s.players) p.color: p.name,
                             };
-                            // Rebuild every _fx tick: corner breathing glow, spinning
-                            // rings and the per-step hop bounce all live off this.
-                            return AnimatedBuilder(
-                              animation: _fx,
-                              builder: (context, _) {
-                                final pulse =
-                                    0.5 +
-                                    0.5 * math.sin(_fx.value * 2 * math.pi);
-                                final spin = _fx.value * 2 * math.pi;
-                                final anim = session.activeAnim;
-                                final bounce = anim == null
-                                    ? 0.0
-                                    : (DateTime.now()
-                                                  .difference(_stepStart)
-                                                  .inMilliseconds /
-                                              anim.stepMs)
-                                          .clamp(0.0, 1.0);
-                                return Stack(
-                                  children: [
-                                    CustomPaint(
-                                      size: Size.square(boardSize),
-                                      painter: LudoBoardPainter(
-                                        highlightCells: highlights,
-                                        playerNames: playerNames,
-                                        activeColor: s.currentPlayer.color,
-                                        pulse: pulse,
-                                        repaint: _fx,
-                                      ),
-                                    ),
-                                    LudoTokenLayer(
-                                      state: s,
-                                      boardSize: boardSize,
-                                      movableTokenIndices: movable,
-                                      onTapToken: session.tapToken,
-                                      anim: anim,
-                                      animStep: _animStep,
-                                      currentPlayerIndex: s.currentPlayerIndex,
-                                      hintTokenIndex: _hintToken,
-                                      spinAngle: spin,
-                                      bounce: bounce,
-                                    ),
-                                  ],
-                                );
-                              },
+                            // There is no AnimatedBuilder around this
+                            // subtree any more, and that was the single
+                            // biggest mobile-web lag source: the effects
+                            // clock breathes every frame, and it used to
+                            // rebuild the board, the token layer and the
+                            // four corner dice 60 times a second even when
+                            // nothing was happening. The per-frame pieces
+                            // are scoped instead: the board repaints via
+                            // the painter's `repaint` listenable (reading
+                            // pulseAnim at paint time), and the token
+                            // layer drives only its rings and its ghost
+                            // from [fx] — the layout above holds still.
+                            return Stack(
+                              children: [
+                                CustomPaint(
+                                  size: Size.square(boardSize),
+                                  painter: LudoBoardPainter(
+                                    highlightCells: highlights,
+                                    playerNames: playerNames,
+                                    activeColor: s.currentPlayer.color,
+                                    pulseAnim: _fx,
+                                    repaint: _fx,
+                                  ),
+                                ),
+                                LudoTokenLayer(
+                                  state: s,
+                                  boardSize: boardSize,
+                                  movableTokenIndices: movable,
+                                  onTapToken: session.tapToken,
+                                  anim: session.activeAnim,
+                                  animStep: _animStep,
+                                  currentPlayerIndex: s.currentPlayerIndex,
+                                  fx: _fx,
+                                  stepStart: _stepStart,
+                                  hintTokenIndex: _hintToken,
+                                ),
+                              ],
                             );
                           },
                         ),
