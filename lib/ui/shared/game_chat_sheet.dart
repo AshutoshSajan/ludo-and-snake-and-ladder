@@ -7,6 +7,7 @@ import '../../screens/friends_screen.dart';
 import '../../services/friend_client.dart';
 import '../../services/note_recorder.dart';
 import '../../services/online_client.dart';
+import '../page_app_bar.dart';
 import '../theme.dart';
 import 'chat_line_view.dart';
 import 'gif_picker_sheet.dart';
@@ -32,12 +33,21 @@ class GameChatSheet extends ConsumerStatefulWidget {
   /// playing, and turns kept passing underneath a chat they could not see.
   /// The cap, instead of a fixed height, keeps a quiet table's sheet small
   /// and a busy one's scrollable without ever covering the board outright.
+  ///
+  /// The sheet is also capped to the app's reading width: on a desktop
+  /// window a bottom sheet spans the whole width by default, and a chat
+  /// stretched across a laptop is the same "not like every other screen"
+  /// problem the page bodies were fixed for. Constrained, it reads as the
+  /// same centered column the headers draw.
   static Future<void> show(BuildContext context, OnlineClient client) {
     final screen = MediaQuery.sizeOf(context).height;
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      constraints: BoxConstraints(maxHeight: screen * 0.55),
+      constraints: BoxConstraints(
+        maxHeight: screen * 0.55,
+        maxWidth: kContentMaxWidth,
+      ),
       backgroundColor: AppColors.feltLight,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
