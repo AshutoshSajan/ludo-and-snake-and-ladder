@@ -68,6 +68,7 @@ class ChatLine {
     this.note,
     this.color,
     this.at,
+    this.seatId = '',
   });
 
   factory ChatLine.fromJson(Map<String, dynamic> j, {String? serverUrl}) =>
@@ -85,6 +86,12 @@ class ChatLine {
                     )),
         color: LudoColor.tryParse(j['color'] as String? ?? ''),
         at: (j['at'] as num?)?.toInt(),
+        // The author's seat id, from the server's chat broadcast. It keys
+        // friendship (add / block / report address the id, not the name —
+        // names collide and get ambiguity tags). Older lines relaid by
+        // server versions lack it; the send/block affordances simply stay
+        // quiet for them.
+        seatId: j['seatId'] as String? ?? '',
       );
 
   final String from;
@@ -93,6 +100,10 @@ class ChatLine {
   final VoiceNote? note;
   final LudoColor? color;
   final int? at;
+
+  /// The author's seat id when the server broadcasts it ('' on lines from
+  /// older server versions). Friends actions address this, never the name.
+  final String seatId;
 
   /// '14:32' — fresh enough to matter in a tablet session, and cheap: no
   /// date math, just the wall clock at arrival.
