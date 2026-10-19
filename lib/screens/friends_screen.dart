@@ -26,7 +26,6 @@ import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/player_avatar.dart';
 import '../ui/theme.dart';
 import 'online_lobby_screen.dart';
-import 'player_directory_screen.dart';
 
 /// Per-pair read markers, persisted: key = friend's seat id, value =
 /// the highest message id I have laid eyes on. The friends list compares
@@ -487,16 +486,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
         title: 'Friends',
         actions: [
           IconButton(
-            icon: const Icon(Icons.group),
-            tooltip: 'Browse all players',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => PlayerDirectoryScreen(client: _client),
-              ),
-            ),
-          ),
-          IconButton(
             icon: const Icon(Icons.person_add),
             tooltip: 'Add a friend',
             onPressed: _addFriendFlow,
@@ -555,8 +544,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
                             padding: EdgeInsets.only(top: 28),
                             child: Center(
                               child: Text(
-                                'No friends yet.\nTap + and share your '
-                                'friend code, or browse all players.',
+                                'No friends yet.\nAdd the players you meet '
+                                'at a table straight from their row in the '
+                                'room, or tap + for a friend code.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   color: AppColors.ivory,

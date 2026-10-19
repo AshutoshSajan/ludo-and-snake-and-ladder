@@ -251,6 +251,41 @@ void main() {
     expect(find.byKey(const Key('corner-panel-green')), findsOneWidget);
   });
 
+  testWidgets('the fifth strike reaches the corner dots with no state frame', (
+    tester,
+  ) async {
+    await pumpTable(tester, misses: {'p1': 2, 'p2': 4});
+    await tester.pump();
+
+    // The evicting miss rides a seats frame — the state frame it would
+    // normally be followed by never ships to the removed seat, which is
+    // off the roster before the next broadcast. The dots read the seats
+    // feed too, or the corner shows one strike fewer than the strip's
+    // miss chip (the playtest board frozen at "missed 5" with four dots).
+    channel.serverAdd({
+      'type': 'seats',
+      'seats': [
+        {
+          'seatId': 'p1', 'name': 'Ana', 'color': 'red',
+          'connected': true, 'auto': false, 'misses': 2,
+        },
+        {
+          'seatId': 'p2', 'name': 'Bo', 'color': 'green',
+          'connected': true, 'auto': false, 'misses': 5,
+        },
+      ],
+    });
+    await tester.pump();
+
+    expect(client.seatMisses['p2'], 5,
+        reason: 'the strip and the corner dots read the same count');
+    final green = tester.widget<StrikeDotsRow>(
+      find.byKey(const Key('strike-dots-green')),
+    );
+    expect(green.misses, 5,
+        reason: 'five silent turns is five spent strikes on the corner');
+  });
+
   testWidgets("another seat's missed turn never interrupts this player", (
     tester,
   ) async {

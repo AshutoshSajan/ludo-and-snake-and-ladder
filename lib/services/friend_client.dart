@@ -368,18 +368,6 @@ class FriendClient {
     return FriendState.fromJson(body, mySeatId: seatId);
   }
 
-  /// Every registered player, freshest presence first — the player
-  /// directory's rows. Public presence reads (name, code); anything that
-  /// changes a relationship still goes through [request]/[respond] with
-  /// the caller's own identity.
-  Future<List<FriendProfile>> players() async {
-    final body = await _get('friends/players', const {});
-    return [
-      for (final p in (body['players'] as List? ?? const []))
-        FriendProfile.fromJson(p as Map<String, dynamic>),
-    ];
-  }
-
   /// Resolves a friend code (or seat id) to a profile; null on a miss —
   /// a miss is AN answer (the add-friend dialog says so plainly), not a
   /// crash. The miss wording is the server's.

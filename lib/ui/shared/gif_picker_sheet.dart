@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../../services/gif_search.dart';
+import '../page_app_bar.dart';
 import '../theme.dart';
 
 /// The GIF picker: trending-first search (through the game server's
@@ -41,9 +42,13 @@ class GifPickerSheet extends StatefulWidget {
     required void Function(String url) onPick,
     http.Client? httpClient,
   }) {
+    // Same reading width as the chat sheet it opens from: a picker
+    // belted across a desktop window under a 720px chat column would
+    // read as a second, wider app.
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
       backgroundColor: AppColors.feltLight,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),

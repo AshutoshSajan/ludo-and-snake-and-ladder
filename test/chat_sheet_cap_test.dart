@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/services/online_client.dart';
+import 'package:game_club/ui/page_app_bar.dart';
 import 'package:game_club/ui/shared/game_chat_sheet.dart';
 
 void main() {
@@ -69,6 +70,30 @@ void main() {
         reason: 'the oldest messages live below the fold of the cap');
     expect(find.text('message 29'), findsOneWidget,
         reason: 'the newest line still leads');
+  });
+
+  testWidgets('on a desktop window the chat reads in the header column', (
+    tester,
+  ) async {
+    // A laptop-sized window is where a default bottom sheet goes wrong:
+    // it stretches the full window width while every page body and its
+    // header reads in the 720px column — the playtest finding that the
+    // message screen was "still full length" even after the page bodies
+    // were fixed.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await openChat(tester, clientWithHistory(5));
+
+    final sheetWidth = tester.getSize(find.byType(GameChatSheet)).width;
+    expect(sheetWidth, lessThanOrEqualTo(kContentMaxWidth),
+        reason: 'the sheet is the same column the headers draw, not the '
+            'window width');
+    // And centered, not hugging either edge at exactly the cap.
+    final left = tester.getTopLeft(find.byType(GameChatSheet)).dx;
+    expect(left, greaterThan(100),
+        reason: 'a constrained sheet floats centered over the board');
   });
 
   testWidgets('a quiet table keeps the sheet compact, not half-stretched', (
