@@ -120,6 +120,19 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   /// the poll is cadence, the badge repainted only when the count moves.
   FriendClient? _friendClient;
 
+  /// The latest friends-tray snapshot from the lobby's 8s poll — the same
+  /// read that drives the badge also decides what each seat row offers
+  /// (add / sent / friends / accept).
+  FriendState? _friendState;
+
+  /// The seat id a friend action is in flight for, so one slow link
+  /// cannot fire a request twice.
+  String? _workingSeat;
+
+  /// The last rendered relationship picture — polled state only re-renders
+  /// the seats when it changes.
+  Set<String>? _stateSignature;
+
   /// The server URL [_friendClient] was built for — the lobby can move
   /// (a custom server typed in, a route-carried deep link), and a tray
   /// polled on the wrong origin would badge requests that live elsewhere.
@@ -184,6 +197,21 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       if (state.incoming.length != _incomingRequests) {
         setState(() => _incomingRequests = state.incoming.length);
       }
+      // Rows re-render only when the relationship picture actually moved:
+      // friend ids, pending requests both ways — the badge count is a part
+      // of that but not the whole of it.
+      final signature = {
+        for (final f in state.friends) f.profile.seatId,
+        for (final r in state.incoming) '${r.id}:${r.seatId}',
+        for (final r in state.outgoing) '${r.id}:${r.seatId}',
+      };
+      if (_stateSignature == null ||
+          !setEquals(_stateSignature, signature)) {
+        setState(() {
+          _stateSignature = signature;
+          _friendState = state;
+        });
+      }
     } on FriendException {
       // A silent badge is a smaller failure than a lobby that nags; the
       // friends screen reports its own errors once opened.
@@ -230,6 +258,71 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   /// The player menu off a roster row: the sheet everything about that
   /// seatmate routes through, addressed by seat id (names collide).
+  /// The one-tap room add. Direct request, outcome named in the snack:
+  /// when the reverse request is already pending the server accepts on
+  /// the spot and the row flips to Friends on the refresh that follows.
+  Future<void> _addFriend(LobbySeat seat) async {
+    final client = _client;
+    final friendClient = _friendClient;
+    if (client == null || friendClient == null || _workingSeat != null) {
+      return;
+    }
+    setState(() => _workingSeat = seat.seatId);
+    try {
+      final status = await friendClient.request(
+        seatId: client.seatId,
+        name: client.name,
+        target: seat.seatId,
+        targetName: seat.name,
+      );
+      _showSnack(
+        status == 'accepted'
+            ? 'You and ${seat.name} are now friends'
+            : 'Friend request sent to ${seat.name}',
+      );
+    } on FriendException catch (e) {
+      _showSnack(e.text);
+    } finally {
+      if (mounted) setState(() => _workingSeat = null);
+    }
+    // The row's chip follows the server, not a guess: one immediate poll
+    // repaints Sent/Friends without waiting for the 8s beat.
+    await _pollTrays();
+  }
+
+  /// Accepting a friend request straight from the row: the request id
+  /// rides the polled tray state the row was rendered from.
+  Future<void> _acceptFriendFromRow(LobbySeat seat) async {
+    final client = _client;
+    final friendClient = _friendClient;
+    final pending = [
+      for (final r in _friendState?.incoming ?? const <FriendRequestView>[])
+        if (r.seatId == seat.seatId) r,
+    ];
+    if (client == null ||
+        friendClient == null ||
+        pending.isEmpty ||
+        _workingSeat != null) {
+      return;
+    }
+    setState(() => _workingSeat = seat.seatId);
+    try {
+      final ok = await friendClient.respond(
+        seatId: client.seatId,
+        id: pending.first.id,
+        accept: true,
+      );
+      _showSnack(
+        ok ? 'You and ${seat.name} are now friends' : 'Could not accept — try again',
+      );
+    } on FriendException catch (e) {
+      _showSnack(e.text);
+    } finally {
+      if (mounted) setState(() => _workingSeat = null);
+    }
+    await _pollTrays();
+  }
+
   void _playerMenu(LobbySeat seat) {
     final client = _client;
     if (client == null || seat.seatId == client.seatId) return;
@@ -728,10 +821,23 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 // be addressed by id — no menu rather than a menu that
                 // fails at tap time.
                 ? null
-                : IconButton(
-                    icon: const Icon(Icons.more_vert),
-                    tooltip: 'Friend, block or report',
-                    onPressed: () => _playerMenu(seat),
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SeatFriendControl(
+                        state: _friendState,
+                        peerSeatId: seat.seatId,
+                        peerName: seat.name,
+                        busy: _workingSeat == seat.seatId,
+                        onAdd: () => _addFriend(seat),
+                        onAccept: () => _acceptFriendFromRow(seat),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.more_vert),
+                        tooltip: 'Friend, block or report',
+                        onPressed: () => _playerMenu(seat),
+                      ),
+                    ],
                   ),
           ),
         for (final seat in gone)
@@ -914,6 +1020,87 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     LudoColor.yellow => AppColors.ludoYellow,
     LudoColor.green => AppColors.ludoGreen,
   };
+}
+
+/// One friend action per seated row, reflection included.
+///
+/// The playtest asked for the players **in the current room** — username
+/// and a button to send a friend request directly — because stepping
+/// through a menu, or hunting down an id nobody prints, is how adding a
+/// friend became work. The lobby already polls the friends tray every few
+/// seconds, so the same state that lights the badge also decides what the
+/// row shows: friends read as a chip, own pending requests as "Sent", an
+/// incoming request turns into an Accept, and anyone else gets the
+/// one-tap add. Rows without a server-wide view of themselves (the state
+/// has not arrived yet) still show the add — the endpoint is idempotent
+/// and the tap reports its own outcome.
+class SeatFriendControl extends StatelessWidget {
+  const SeatFriendControl({
+    required this.state,
+    required this.peerSeatId,
+    required this.peerName,
+    required this.busy,
+    required this.onAdd,
+    required this.onAccept,
+    super.key,
+  });
+
+  /// The lobby's latest friends-tray state, or null before the first poll.
+  final FriendState? state;
+
+  /// The row's profile id and display name.
+  final String peerSeatId;
+  final String peerName;
+
+  /// While a request for this row is in flight the buttons sleep — a slow
+  /// link must not double-fire a friend request.
+  final bool busy;
+  final VoidCallback onAdd;
+  final VoidCallback onAccept;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    if (s != null) {
+      final isFriend = s.friends.any((f) => f.profile.seatId == peerSeatId);
+      if (isFriend) {
+        return Chip(
+          label: const Text('Friends'),
+          visualDensity: VisualDensity.compact,
+        );
+      }
+      final mine =
+          s.outgoing.any((r) => r.seatId == peerSeatId);
+      if (mine) {
+        return Chip(
+          label: const Text('Sent'),
+          visualDensity: VisualDensity.compact,
+        );
+      }
+      final incoming = [
+        for (final r in s.incoming)
+          if (r.seatId == peerSeatId) r,
+      ];
+      if (incoming.isNotEmpty) {
+        return FilledButton.tonal(
+          onPressed: busy ? null : onAccept,
+          style: FilledButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: const Text('Accept'),
+        );
+      }
+    }
+    return FilledButton.tonal(
+      onPressed: busy ? null : onAdd,
+      style: FilledButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: const Text('+ Add'),
+    );
+  }
 }
 
 /// The lobby's room-code card. Copying is a first-class button, not a hope:
