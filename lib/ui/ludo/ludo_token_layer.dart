@@ -104,18 +104,24 @@ class LudoTokenLayer extends StatelessWidget {
             !state.currentPlayer.isAI &&
             t.color == state.currentPlayer.color &&
             movableTokenIndices.contains(t.index);
+        // The generous tap box must ship CENTERED on the pawn's anchor: the
+        // top-left is half the box away from the cell center, exactly like
+        // the pawn art (the dot) is centered inside the box. Halves of the
+        // DOT size go here and the dot drags toward every cell's bottom
+        // right — on a small phone the pawn leaves its cell outright.
+        final hit = hitTargetFor(cell);
         final positioned = AnimatedPositioned(
           key: ValueKey('tok-${t.gid}'),
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
-          left: center.dx - cell * 0.30 + off.dx,
-          top: center.dy - cell * 0.44 + off.dy,
+          left: center.dx - hit / 2 + off.dx,
+          top: center.dy - hit / 2 + off.dy,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: canMove ? () => onTapToken(t.index) : null,
             child: SizedBox(
-              width: hitTargetFor(cell),
-              height: hitTargetFor(cell),
+              width: hit,
+              height: hit,
               child: Stack(clipBehavior: Clip.none, alignment: Alignment.center,
                   children: [
                     _tokenStack(t, cell, canMove,
