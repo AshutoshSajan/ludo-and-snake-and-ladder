@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../screens/friends_screen.dart';
+import '../../services/friend_client.dart';
 import '../../services/note_recorder.dart';
 import '../../services/online_client.dart';
 import '../theme.dart';
@@ -8,6 +12,7 @@ import 'chat_line_view.dart';
 import 'gif_picker_sheet.dart';
 import 'keyboard_content.dart';
 import 'note_composer.dart';
+import 'player_actions_sheet.dart';
 
 /// In-game chat, as a sheet over the board.
 ///
@@ -43,6 +48,11 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
   /// make way for the recording bar.
   bool _recording = false;
 
+  /// Pending friend requests, counted once when the sheet opens so the
+  /// friends entry in the header can wear a badge. The sheet is a brief
+  /// surface — one fetch, no poller.
+  int _pendingRequests = 0;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +61,7 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     // otherwise a message arriving while it is open would still count as
     // unread and the dot on the app bar icon would never clear.
     widget.client.setChatOpen(true);
+    _countRequests();
   }
 
   @override
@@ -59,6 +70,48 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
     widget.client.removeListener(_onClient);
     _input.dispose();
     super.dispose();
+  }
+
+  /// The friends HTTP identity mirrors the friends screen: the id and the
+  /// name the client itself holds — both stored values, so no room
+  /// context can retint the friend profile with a tagged display name.
+  Future<void> _countRequests() async {
+    try {
+      final state = await FriendClient(serverUrl: widget.client.serverUrl)
+          .state(seatId: widget.client.seatId, name: widget.client.name);
+      if (!mounted) return;
+      setState(() => _pendingRequests = state.incoming.length);
+    } on FriendException {
+      // A silent badge is a smaller failure than a sheet that nags; the
+      // full friends screen reports its own errors once opened.
+    }
+  }
+
+  /// One tap or long press on a line opens the author's menu.
+  void _lineMenu(ChatLine line) {
+    if (line.seatId.isEmpty) {
+      _chatError('This message predates the friend options — reload the room');
+      return;
+    }
+    if (line.seatId == widget.client.seatId) {
+      _chatError('That is your own message');
+      return;
+    }
+    unawaited(
+      PlayerActionsSheet.show(
+        context,
+        serverUrl: widget.client.serverUrl,
+        mySeatId: widget.client.seatId,
+        myName: widget.client.name,
+        peerSeatId: line.seatId,
+        peerName: line.from,
+      ),
+    );
+  }
+
+  void _openFriends() {
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const FriendsScreen()));
   }
 
   void _onClient() {
@@ -101,7 +154,7 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 10),
-            const _Header(),
+            _Header(pending: _pendingRequests, onFriends: _openFriends),
             Flexible(child: _history(lines)),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
@@ -235,21 +288,31 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
       shrinkWrap: true,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       itemCount: lines.length,
-      itemBuilder: (_, i) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: ChatLineView(
-          line: lines[lines.length - 1 - i],
-          myName: widget.client.name,
-        ),
-      ),
+      itemBuilder: (_, i) {
+        final line = lines[lines.length - 1 - i];
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: ChatLineView(
+            line: line,
+            myName: widget.client.name,
+            onOpenMenu: () => _lineMenu(line),
+          ),
+        );
+      },
     );
   }
 }
 
 /// The sheet's title bar: drag handle, a gold chat chip and the title —
 /// unchanged in meaning from when it was a bare icon row, only set-like.
+/// The trailing friends icon is the "receive" half of table friendship:
+/// incoming requests wear a badge and open the friends screen, where
+/// accept/decline lives.
 class _Header extends StatelessWidget {
-  const _Header();
+  const _Header({required this.pending, required this.onFriends});
+
+  final int pending;
+  final VoidCallback onFriends;
 
   @override
   Widget build(BuildContext context) {
@@ -264,19 +327,44 @@ class _Header extends StatelessWidget {
             borderRadius: BorderRadius.circular(2),
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 10, 16, 2),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 8, 2),
           child: Row(
             children: [
-              _ChipIcon(icon: Icons.forum),
-              SizedBox(width: 9),
-              Text(
-                'Table chat',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                  color: AppColors.ivory,
+              const _ChipIcon(icon: Icons.forum),
+              const SizedBox(width: 9),
+              const Expanded(
+                child: Text(
+                  'Table chat',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                    color: AppColors.ivory,
+                  ),
                 ),
+              ),
+              // The friends doorway: every line's tap opens the actions
+              // sheet, and this icon is where incoming requests are
+              // accepted. The badge answers "did anyone want to be my
+              // friend?" without opening anything.
+              IconButton(
+                icon: Badge(
+                  isLabelVisible: pending > 0,
+                  backgroundColor: AppColors.gold,
+                  label: Text(
+                    '$pending',
+                    style: const TextStyle(
+                      color: AppColors.ink,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  child: const Icon(Icons.group_outlined),
+                ),
+                tooltip: pending > 0
+                    ? 'Friends ($pending request${pending == 1 ? '' : 's'} waiting)'
+                    : 'Friends',
+                onPressed: onFriends,
               ),
             ],
           ),

@@ -669,6 +669,12 @@ class GameAuthority {
         room.broadcast({
           'type': 'chat',
           'from': member.name,
+          // The seat id, stable across reconnects, so clients can peer at
+          // a line's AUTHOR for friendship: add friend, block, report.
+          // Names collide (two tabs can join with the same display name)
+          // and display names get ambiguity tags, but the seat id keys
+          // the friends store — the id, not the string, identifies.
+          'seatId': member.seatId,
           // The seat color paints the bubble — it is how a string of text
           // becomes a person at the table.
           'color': member.color.name,

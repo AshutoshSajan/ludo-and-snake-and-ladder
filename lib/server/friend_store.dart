@@ -541,16 +541,37 @@ class FriendStore {
   /// request already exists: two players who both pressed add are friends
   /// the moment they match, which is what players read as intent.
   ///
+  /// A target shaped like a friend code must resolve to a minted profile.
+  /// A bare seat id resolves the same way — unless that player has never
+  /// opened the friends surface and has no profile yet, which is the
+  /// normal case for a tablemate met mid-game: with [targetName] supplied
+  /// (the roster name the room already shows), their profile mints here
+  /// instead of failing, and heals the moment their own friends call
+  /// re-registers them under their own name. Without it, the miss is an
+  /// answer ("no player matches"), as before.
+  ///
   /// Throws [ArgumentError] for malformed/unknown targets and [StateError]
   /// with a user-presentable reason for relationship states (self, already
   /// friends, blocked, list full, caps) — the handler maps both to 400s.
   Future<String> sendRequest(
     String fromSeat,
     String fromName,
-    String target,
-  ) async {
+    String target, {
+    String? targetName,
+  }) async {
     final (from, nm) = _checkCaller(fromSeat, fromName);
-    final to = resolveTarget(target);
+    var to = resolveTarget(target);
+    if (to == null) {
+      final mintName = (targetName ?? '').trim();
+      final looksLikeCode =
+          target.trim().length == 6 &&
+          RegExp(r'^[2-9A-HJ-NP-Z]+$').hasMatch(target.trim());
+      // Codes must be minted by their owner (a code is proof the player
+      // shared it); a seat id plus roster name mints the tablemate.
+      if (mintName.isNotEmpty && !looksLikeCode) {
+        to = await serve(target, mintName);
+      }
+    }
     if (to == null) {
       throw ArgumentError('no player matches "$target"');
     }
@@ -712,7 +733,13 @@ class FriendStore {
   /// Blocks [about] for [blocker]: severs the friendship (if any), drops
   /// every pending request or invite between them, and denies all future
   /// contact until unblocked. Idempotent.
-  Future<bool> block(String blocker, String about) async {
+  ///
+  /// [targetName] mints a profile for a seat id that never produced one
+  /// (a tablemate who has never opened the friends screen) with the roster
+  /// name the room shows — the block must not depend on the target having
+  /// visited a menu. Codes still stay unmintable: only the owner mints a
+  /// code. The minted name self-heals on the target's own next friends call.
+  Future<bool> block(String blocker, String about, {String? targetName}) async {
     final by = blocker.trim();
     final them = about.trim();
     if (by.isEmpty || them.isEmpty) {
@@ -720,6 +747,14 @@ class FriendStore {
     }
     if (by == them) throw StateError('you cannot block yourself');
     _requireProfile(by);
+    if (profile(them) == null) {
+      final mintName = (targetName ?? '').trim();
+      final looksLikeCode =
+          them.length == 6 && RegExp(r'^[2-9A-HJ-NP-Z]+$').hasMatch(them);
+      if (mintName.isNotEmpty && !looksLikeCode) {
+        await serve(them, mintName);
+      }
+    }
     _requireProfile(them);
     final n =
         _db.select(

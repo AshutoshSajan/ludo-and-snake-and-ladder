@@ -79,4 +79,50 @@ void main() {
     expect(find.byIcon(Icons.favorite), findsNothing);
     expect(find.text('table talk'), findsOneWidget);
   });
+
+  // ------------------------------------------------- the author menu hook
+
+  testWidgets('tap and long press open the author menu when wired', (
+    tester,
+  ) async {
+    var opens = 0;
+    const line = ChatLine(
+      from: 'Small Fox',
+      text: 'add me?',
+      at: 1000,
+      seatId: 'p7',
+    );
+    await _pump(tester, ChatLineView(line: line, onOpenMenu: () => opens++));
+
+    await tester.tap(find.text('add me?'));
+    await tester.pump();
+    expect(opens, 1, reason: 'a tap is the visible affordance');
+
+    await tester.longPress(find.text('add me?'));
+    await tester.pump();
+    expect(opens, 2, reason: 'long press still works for chat veterans');
+  });
+
+  testWidgets('no menu callback means the line is perfectly inert', (
+    tester,
+  ) async {
+    const line = ChatLine(from: 'Small Fox', text: 'quiet', at: 1000);
+    await _pump(tester, ChatLineView(line: line));
+    // No GestureDetector in the tree: the friends 1:1 lane and any other
+    // consumer that supervented no callback keeps its gesture-free bubble.
+    expect(find.byType(GestureDetector), findsNothing);
+  });
+
+  test('a chat line carries its author seat id, tolerating lines without', () {
+    final fromServer = ChatLine.fromJson({
+      'from': 'Small Fox',
+      'text': 'hi',
+      'seatId': 'p7',
+    });
+    expect(fromServer.seatId, 'p7');
+
+    // Older relays / tests that never had the field: the empty id simply
+    // keeps the menu affordance quiet instead of addressing nobody.
+    expect(ChatLine.fromJson({'from': 'A', 'text': 'x'}).seatId, '');
+  });
 }

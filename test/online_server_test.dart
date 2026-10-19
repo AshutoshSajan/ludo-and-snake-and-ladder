@@ -297,10 +297,7 @@ void main() {
 
     test('a host-picked table size closes the room at that count', () {
       final auth = GameAuthority(rng: Random(1));
-      final room = auth.createRoom(
-        _member(LudoColor.red),
-        capacity: 2,
-      );
+      final room = auth.createRoom(_member(LudoColor.red), capacity: 2);
       expect(room.capacity, 2);
       expect(room.full, isFalse);
 
@@ -590,6 +587,10 @@ void main() {
       final message = hostChat.firstWhere((m) => m['type'] == 'chat');
       expect(message['from'], isNotNull);
       expect(message['text'], 'nice ladder!');
+      // The author's seat id rides along: table friendship (add / block /
+      // report) addresses the id, not the name, because two tabs can share
+      // a display name and the id survives reconnects.
+      expect(message['seatId'], 'blue');
       // Everyone at the table hears it, not just the sender.
       expect(
         guestChat.any(
@@ -667,44 +668,50 @@ void main() {
         );
       }
       // No broadcast carries any GIF at all.
-      for (final m
-          in log.map((j) => jsonDecode(j) as Map<String, dynamic>)) {
+      for (final m in log.map((j) => jsonDecode(j) as Map<String, dynamic>)) {
         expect(m['gif'], isNull, reason: 'refused links must not broadcast');
       }
     });
 
-    test('an uploaded voice note broadcasts with the store url and duration', () {
-      final log = <String>[];
-      final auth = GameAuthority(rng: Random(1));
-      final room = auth.createRoom(_member(LudoColor.red, on: log.add));
-      auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
+    test(
+      'an uploaded voice note broadcasts with the store url and duration',
+      () {
+        final log = <String>[];
+        final auth = GameAuthority(rng: Random(1));
+        final room = auth.createRoom(_member(LudoColor.red, on: log.add));
+        auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
 
-      auth.mediaNotes.put(
-        kind: MediaKind.voice,
-        code: room.code,
-        id: 'eadada55',
-        data: Uint8List.fromList([1]),
-        mime: 'audio/mp4',
-        durMs: 1400,
-      );
-      auth.handleIntent(
-        room: room,
-        connectionId: 'blue',
-        msg: {'type': 'chat', 'text': 'listen to this', 'note': 'eadada55'},
-      );
+        auth.mediaNotes.put(
+          kind: MediaKind.voice,
+          code: room.code,
+          id: 'eadada55',
+          data: Uint8List.fromList([1]),
+          mime: 'audio/mp4',
+          durMs: 1400,
+        );
+        auth.handleIntent(
+          room: room,
+          connectionId: 'blue',
+          msg: {'type': 'chat', 'text': 'listen to this', 'note': 'eadada55'},
+        );
 
-      final line = _lastSent(log, 'chat')!;
-      expect(line['note']['url'], '/media/voice/${room.code}/eadada55');
-      // The duration comes from the store, not the client's say-so — a
-      // client claiming 90 000 ms is corrected by the file it uploaded.
-      expect(line['note']['dur'], 1400);
-      expect(line['text'], 'listen to this', reason: 'a caption can ride a note');
-      // The bubble painter data rides every broadcast now: the sender's
-      // seat color is whatever the room assigned, not what they claimed
-      // at hello.
-      expect(line['color'], room.members['blue']!.color.name);
-      expect(line['at'], isA<int>());
-    });
+        final line = _lastSent(log, 'chat')!;
+        expect(line['note']['url'], '/media/voice/${room.code}/eadada55');
+        // The duration comes from the store, not the client's say-so — a
+        // client claiming 90 000 ms is corrected by the file it uploaded.
+        expect(line['note']['dur'], 1400);
+        expect(
+          line['text'],
+          'listen to this',
+          reason: 'a caption can ride a note',
+        );
+        // The bubble painter data rides every broadcast now: the sender's
+        // seat color is whatever the room assigned, not what they claimed
+        // at hello.
+        expect(line['color'], room.members['blue']!.color.name);
+        expect(line['at'], isA<int>());
+      },
+    );
 
     test('an unuploaded or malformed note id is dropped, not announced', () {
       final log = <String>[];
@@ -732,7 +739,11 @@ void main() {
       );
       final line = _lastSent(log, 'chat')!;
       expect(line['text'], 'trust me');
-      expect(line['note'], isNull, reason: 'no key for an unexplained audio url');
+      expect(
+        line['note'],
+        isNull,
+        reason: 'no key for an unexplained audio url',
+      );
     });
   });
 
@@ -787,11 +798,7 @@ void main() {
           's': 'a' * (64 * 1024 + 1),
         },
       ]) {
-        auth.handleIntent(
-          room: room,
-          connectionId: 'blue',
-          msg: junk,
-        );
+        auth.handleIntent(room: room, connectionId: 'blue', msg: junk);
       }
       expect(hostLog, isEmpty);
       expect(guestLog, isEmpty);
@@ -1240,7 +1247,8 @@ void main() {
       },
     );
 
-    test('/stats counts live WebSockets and drops them after close', () async {      // The test binding stubs every HTTP client with empty 400 responses
+    test('/stats counts live WebSockets and drops them after close', () async {
+      // The test binding stubs every HTTP client with empty 400 responses
       // via a global HttpOverrides; a zone-local no-op override opts back
       // into real networking (the base createHttpClient builds the real
       // HttpClient) without touching the global mock.
@@ -1280,29 +1288,35 @@ void main() {
       );
     });
 
-    test('/media/gif without a provider is a JSON 503, no upstream call',
-        () async {
-      // A keyless deployment's picker degrades to paste-a-link; the route
-      // must still answer as JSON so the client surfaces the reason. The
-      // archived tenor path answers identically — same handler.
-      Future<http.Response> get(String path) =>
-          HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
-            () => http.get(Uri.parse('http://127.0.0.1:${srv.port}$path')),
-            _RealHttpOverrides(),
-          );
-      final resp = await get('/media/gif?q=dice');
-      expect(resp.statusCode, 503);
-      final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      expect(body['ok'], isFalse);
-      expect((body['text'] as String).isNotEmpty, isTrue);
-      final alias = await get('/media/tenor?q=dice');
-      expect(alias.statusCode, 503);
-    });
+    test(
+      '/media/gif without a provider is a JSON 503, no upstream call',
+      () async {
+        // A keyless deployment's picker degrades to paste-a-link; the route
+        // must still answer as JSON so the client surfaces the reason. The
+        // archived tenor path answers identically — same handler.
+        Future<http.Response> get(String path) =>
+            HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
+              () => http.get(Uri.parse('http://127.0.0.1:${srv.port}$path')),
+              _RealHttpOverrides(),
+            );
+        final resp = await get('/media/gif?q=dice');
+        expect(resp.statusCode, 503);
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        expect(body['ok'], isFalse);
+        expect((body['text'] as String).isNotEmpty, isTrue);
+        final alias = await get('/media/tenor?q=dice');
+        expect(alias.statusCode, 503);
+      },
+    );
 
     test('voice notes ride HTTP into a live room and play back by url', () async {
       // The upload requires the room to be live, so seat one first.
       host.sink.add(
-        jsonEncode({'type': 'hello', 'seatId': 'vn-host', 'name': 'Note Reporter'}),
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'vn-host',
+          'name': 'Note Reporter',
+        }),
       );
       final joined = await nextMsg(hostBuf, 'joined');
       final code = joined['code'] as String;
@@ -1310,15 +1324,18 @@ void main() {
 
       // Production goes through the real HTTP stack; the test binding's
       // global stub is zone-optimized back out for these calls.
-      Future<http.Response> overRealHttp(Future<http.Response> Function() call) =>
-          HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
-            call,
-            _RealHttpOverrides(),
-          );
+      Future<http.Response> overRealHttp(
+        Future<http.Response> Function() call,
+      ) => HttpOverrides.runWithHttpOverrides<Future<http.Response>>(
+        call,
+        _RealHttpOverrides(),
+      );
 
       final post = await overRealHttp(
         () => http.post(
-          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=$code&id=ab12cd34'),
+          Uri.parse(
+            'http://127.0.0.1:${srv.port}/media/voice?room=$code&id=ab12cd34',
+          ),
           headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
           body: Uint8List.fromList([1, 2, 3]),
         ),
@@ -1348,7 +1365,9 @@ void main() {
       // be announced — refused instead of silently stored.
       final noRoom = await overRealHttp(
         () => http.post(
-          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=NOTHERE&id=ab12cd34'),
+          Uri.parse(
+            'http://127.0.0.1:${srv.port}/media/voice?room=NOTHERE&id=ab12cd34',
+          ),
           headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
           body: Uint8List.fromList([1]),
         ),
@@ -1358,7 +1377,9 @@ void main() {
       // Ids end up in a URL path; junk is refused at the door.
       final badId = await overRealHttp(
         () => http.post(
-          Uri.parse('http://127.0.0.1:${srv.port}/media/voice?room=$code&id=AB'),
+          Uri.parse(
+            'http://127.0.0.1:${srv.port}/media/voice?room=$code&id=AB',
+          ),
           headers: {'content-type': 'audio/mp4', 'x-voice-duration': '1100'},
           body: Uint8List.fromList([1]),
         ),
@@ -2876,12 +2897,12 @@ void main() {
 
   group('duplicate display names in one room', () {
     ServerMember member(String id, String name) => ServerMember(
-          id: 'conn-$id',
-          seatId: id,
-          name: name,
-          color: LudoColor.red,
-          sink: (_) {},
-        );
+      id: 'conn-$id',
+      seatId: id,
+      name: name,
+      color: LudoColor.red,
+      sink: (_) {},
+    );
 
     test('are left alone when nothing clashes', () {
       final m = member('uhmrA', 'Asha');

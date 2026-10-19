@@ -385,15 +385,22 @@ class FriendClient {
   }
 
   /// Sends (or matches) a friend request; returns the server status.
+  ///
+  /// [targetName] is the seatmate's roster name for the table flow: when
+  /// the target seat id has no friends profile yet (they never opened the
+  /// friends screen), the server mints it from this name — the add must
+  /// not depend on the peer having visited a menu.
   Future<String> request({
     required String seatId,
     required String name,
     required String target,
+    String? targetName,
   }) async {
     final body = await _post('friends/request', {
       'seatId': seatId,
       'name': name,
       'target': target,
+      'targetName': targetName,
     });
     return body['status'] as String? ?? 'pending';
   }
@@ -512,8 +519,17 @@ class FriendClient {
   }
 
   /// Blocks a player (severs friendship + pendings, denies contact).
-  Future<void> block({required String seatId, required String target}) =>
-      _post('friends/block', {'seatId': seatId, 'target': target});
+  /// [targetName] mints an unopened profile server-side the same way —
+  /// blocking a tablemate works even if they never opened friends.
+  Future<void> block({
+    required String seatId,
+    required String target,
+    String? targetName,
+  }) => _post('friends/block', {
+    'seatId': seatId,
+    'target': target,
+    'targetName': targetName,
+  });
 
   /// Lifts a block; true when one actually existed (a false here is an
   /// answer the UI shows, so `ok: false` rides through).

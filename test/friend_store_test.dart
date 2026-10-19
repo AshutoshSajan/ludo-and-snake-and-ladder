@@ -389,7 +389,8 @@ void main() {
       expect((await store.invites('p2')).single.isPending, isTrue);
 
       // Two hours pass: the invitation is closed for us, not merely old.
-      now = now.add(FriendCaps.inviteLifetime * 2);      final list = await store.invites('p2');
+      now = now.add(FriendCaps.inviteLifetime * 2);
+      final list = await store.invites('p2');
       expect(list.single.status, 'expired');
       expect(await store.respondInvite('p2', invite.id, accept: true), isNull);
     });
@@ -515,5 +516,102 @@ void main() {
         throwsStateError,
       );
     });
+  });
+
+  group('tablemate mint (the roster name rides the seat id)', () {
+    // A gameplay-sourced target is usually a player who has never opened
+    // the friends screen — no profile, no code. The room already knows
+    // their name, so the request carries it as targetName and the store
+    // mints; the minted name heals when the target's own friends call
+    // re-registers them under their own typed name.
+    test(
+      'seat-id request mints a profile for a player who never opened friends',
+      () async {
+        await store.serve('p1', 'Sam');
+        final status = await store.sendRequest(
+          'p1',
+          'Sam',
+          'p9',
+          targetName: 'Rally Bo',
+        );
+        expect(status, 'pending');
+        final minted = store.profile('p9');
+        expect(
+          minted,
+          isNotNull,
+          reason: 'the tablemate resolves for later traffic',
+        );
+        expect(minted!.name, 'Rally Bo');
+        final incoming = await store.incoming('p9');
+        expect(incoming.single.fromSeat, 'p1');
+        expect(incoming.single.toName, 'Rally Bo');
+      },
+    );
+
+    test(
+      'the both-pressed-add match still wins when the mint path is taken',
+      () async {
+        await store.serve('p1', 'Sam');
+        // The tablemate's side came in first (their own server minted them).
+        await store.serve('p9', 'Rally Bo');
+        await store.sendRequest('p9', 'Rally Bo', 'p1');
+        final status = await store.sendRequest(
+          'p1',
+          'Sam',
+          'p9',
+          targetName: 'Rally Bo',
+        );
+        expect(
+          status,
+          'accepted',
+          reason: 'both pressed add — friends at once',
+        );
+      },
+    );
+
+    test(
+      'code-shaped targets stay unmintable: only the owner mints a code',
+      () async {
+        await store.serve('p1', 'Sam');
+        expect(
+          store.sendRequest('p1', 'Sam', 'XZK246', targetName: 'Ghost'),
+          throwsArgumentError,
+        );
+        expect(store.profile('XZK246'), isNull);
+      },
+    );
+
+    test(
+      'no targetName means an unknown seat id is an answer, not a mint',
+      () async {
+        await store.serve('p1', 'Sam');
+        expect(store.sendRequest('p1', 'Sam', 'p9'), throwsArgumentError);
+        expect(store.profile('p9'), isNull);
+      },
+    );
+
+    test(
+      'block mints the same way — it must not depend on a target menu',
+      () async {
+        await store.serve('p1', 'Sam');
+        final created = await store.block(
+          'p1',
+          'p9',
+          targetName: 'Quiet Guest',
+        );
+        expect(created, isTrue);
+        expect(store.isBlocked('p1', 'p9'), isTrue);
+        expect(store.profile('p9')!.name, 'Quiet Guest');
+      },
+    );
+
+    test(
+      'block without a mint name on a profileless target explains itself',
+      () async {
+        await store.serve('p1', 'Sam');
+        expect(store.block('p1', 'p9'), throwsArgumentError);
+        expect(store.profile('p9'), isNull);
+      },
+    );
   });
 }
