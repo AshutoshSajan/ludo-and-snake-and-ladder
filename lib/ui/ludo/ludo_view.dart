@@ -116,13 +116,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     _lastSeenSeq = session.state.rollSeq;
   }
 
+  // ---------------------------------------------------------------- online
+  // SAVE & RESUME — PARKED. Autosave is held out of the build while the
+  // gameplay smoothness pass ships; LudoSession.resume and SavedGameStore
+  // keep their tests, and uncommenting everything marked "SAVE & RESUME"
+  // below restores the feature end to end.
+  /*
   /// Autosave debounce. The session notifies on every animation tick, so the
   /// save is trailing-debounced instead of written per frame — and flushed on
   /// dispose, which is the case that actually matters: leaving is the moment a
   /// player expects their position to be kept.
-  static const _saveDebounce = Duration(milliseconds: 800);
-  Timer? _saveTimer;
-
+  */
+  // static const _saveDebounce = Duration(milliseconds: 800);
+  // Timer? _saveTimer;
+  /*
   void _scheduleSave() {
     if (widget.onlineClient != null) return; // the server owns online state
     _saveTimer?.cancel();
@@ -145,12 +152,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       ),
     );
   }
+  */
 
   @override
   void dispose() {
     // Flush rather than debounce: this is the "player left" moment.
-    _saveTimer?.cancel();
-    unawaited(_saveNow());
+    // _saveTimer?.cancel(); // SAVE & RESUME — parked.
+    // unawaited(_saveNow()); // SAVE & RESUME — parked.
     _animTimer?.cancel();
     _diceTimer?.cancel();
     _fx.dispose();
@@ -225,7 +233,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _onSessionChanged() {
-    _scheduleSave();
+    // _scheduleSave(); // SAVE & RESUME — parked; see the note on _saveTimer.
     // Kick off the 3D dice tumble whenever a fresh roll appears — tracked by
     // roll sequence, so it tumbles even when the same number comes up again.
     // Every roll animates, including the ones the engine resolves before this

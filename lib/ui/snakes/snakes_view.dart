@@ -82,6 +82,11 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     session.addListener(_onSessionChanged);
   }
 
+  // SAVE & RESUME — PARKED, same as LudoGameView: the store and
+  // SnakesSession.resume keep their tests; the autosave surface is commented
+  // until the gameplay smoothness pass ships. Uncomment everything marked
+  // "SAVE & RESUME" to restore.
+  /*
   /// Trailing-debounced, then flushed on dispose — see LudoGameView for why.
   static const _saveDebounce = Duration(milliseconds: 800);
   Timer? _saveTimer;
@@ -103,11 +108,12 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
       savedAt: DateTime.now(),
     ));
   }
+  */
 
   @override
   void dispose() {
-    _saveTimer?.cancel();
-    unawaited(_saveNow());
+    // _saveTimer?.cancel(); // SAVE & RESUME — parked.
+    // unawaited(_saveNow()); // SAVE & RESUME — parked.
     _animTimer?.cancel();
     session.removeListener(_onSessionChanged);
     session.dispose();
@@ -115,7 +121,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   }
 
   void _onSessionChanged() {
-    _scheduleSave();
+    // _scheduleSave(); // SAVE & RESUME — parked; see the note on _saveTimer.
     final anim = session.activeAnim;
     _animTimer?.cancel();
     _animStep = 0;
