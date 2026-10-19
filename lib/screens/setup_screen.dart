@@ -8,7 +8,7 @@ import '../../engine/ludo/ludo_models.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart' show DefaultNames;
 import '../../controllers/ludo_session.dart';
-import '../../services/saved_game.dart';
+
 import '../../services/sound_service.dart';
 import '../../ui/ludo/ludo_view.dart';
 import '../../ui/snakes/snakes_view.dart';
@@ -84,11 +84,17 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       _SeatDraft(name: _freshSeatName(taken), isAI: true),
     ];
     _normalizeColors();
+    // SAVE & RESUME — parked (see the note on _saved / the start section
+    // below); the store is untouched and the feature returns when this and
+    // the button block are unwrapped with their matching "SAVE & RESUME"
+    // markers.
+    /*
     // Resume is offered only if there is a game to resume, so a player who
     // never left one in progress never sees the button.
     SavedGameStore().load(widget.game).then((g) {
       if (mounted && g != null) setState(() => _saved = g);
     });
+    */
   }
 
   /// A generated name for a new seat, distinct from the seats already at the
@@ -178,6 +184,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             const SizedBox(height: 12),
             // Offered only when there is something to resume, so a player who
             // never left a game in progress never sees it.
+            // SAVE & RESUME — parked; see the note on _saved below.
+            /*
             if (_saved != null) ...[
               OutlinedButton.icon(
                 icon: const Icon(Icons.restore),
@@ -188,6 +196,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               ),
               const SizedBox(height: 8),
             ],
+            */
             FilledButton.icon(
               icon: const Icon(Icons.casino),
               label: const Text('Start game'),
@@ -401,6 +410,14 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
   // ---------------------------------------------------------------- start
 
+  // ---------------------------------------------------------------- start
+
+  // SAVE & RESUME — PARKED. The feature is intact (SavedGameStore and
+  // LudoSession.resume / SnakesSession.resume still pass their tests) but its
+  // player-facing surfaces are held out of the build until the gameplay
+  // smoothness pass ships; uncomment the blocks marked SAVE & RESUME below to
+  // bring the "Resume saved game" button back.
+  /*
   /// Reads the save on open. Started in initState and awaited into state
   /// rather than blocking the first frame — the setup screen is usable either
   /// way, and a slow disk should not delay it.
@@ -427,6 +444,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           : SnakesGameView(seats: const [], savedGame: saved),
     ));
   }
+  */
 
   void _start() {
     for (final s in _seats) {

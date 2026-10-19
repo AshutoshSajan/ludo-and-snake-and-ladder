@@ -13,12 +13,15 @@ import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
 import '../../services/saved_game.dart';
 import '../shared/dice_widget.dart';
+import '../shared/table_notice.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 import 'snakes_overlays.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/pulse.dart';
+import '../shared/bug_report_sheet.dart';
+import '../../services/server_url.dart';
 
 /// Full Snakes & Ladders game screen (2..10 players, human or bot seats).
 class SnakesGameView extends ConsumerStatefulWidget {
@@ -46,6 +49,7 @@ class SnakesGameView extends ConsumerStatefulWidget {
 class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   late SnakesSession session;
   int _animStep = 0;
+  String? _lastNoticed;
   Timer? _animTimer;
 
   /// Ghost hop tick and dice tumble window. Both come from [SnakesAnim] so the
@@ -80,6 +84,11 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     session.addListener(_onSessionChanged);
   }
 
+  // SAVE & RESUME — PARKED, same as LudoGameView: the store and
+  // SnakesSession.resume keep their tests; the autosave surface is commented
+  // until the gameplay smoothness pass ships. Uncomment everything marked
+  // "SAVE & RESUME" to restore.
+  /*
   /// Trailing-debounced, then flushed on dispose — see LudoGameView for why.
   static const _saveDebounce = Duration(milliseconds: 800);
   Timer? _saveTimer;
@@ -101,11 +110,12 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
       savedAt: DateTime.now(),
     ));
   }
+  */
 
   @override
   void dispose() {
-    _saveTimer?.cancel();
-    unawaited(_saveNow());
+    // _saveTimer?.cancel(); // SAVE & RESUME — parked.
+    // unawaited(_saveNow()); // SAVE & RESUME — parked.
     _animTimer?.cancel();
     session.removeListener(_onSessionChanged);
     session.dispose();
@@ -113,7 +123,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
   }
 
   void _onSessionChanged() {
-    _scheduleSave();
+    // _scheduleSave(); // SAVE & RESUME — parked; see the note on _saveTimer.
     final anim = session.activeAnim;
     _animTimer?.cancel();
     _animStep = 0;
@@ -124,6 +134,16 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
         if (_animStep >= anim.waypoints.length - 1) t.cancel();
       });
     }
+    // A spent roll (pawn still out of the board, anything but a 1 rolled)
+    // passes the turn with no animation at all — without a word the player
+    // reads it as a swallowed tap. The die keeps the face; the toast
+    // explains the rules behind it.
+    if (session.state.lastEvent == 'skip' &&
+        _lastNoticed != session.state.lastEvent &&
+        mounted) {
+      showTableNotice(context, snakesSkipNotice(session.state));
+    }
+    _lastNoticed = session.state.lastEvent;
     if (mounted) setState(() {});
   }
 
@@ -200,6 +220,14 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
             icon: const Icon(Icons.pause),
             onPressed: () => showSnakesPauseMenu(context, ref, session),
             tooltip: 'Pause / players',
+          ),
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: 'Report an issue',
+            onPressed: () => BugReportSheet.show(
+              context,
+              serverUrl: defaultServerUrl(),
+            ),
           ),
         ],
       ),

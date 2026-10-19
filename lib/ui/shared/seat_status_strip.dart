@@ -30,7 +30,11 @@ class SeatStatusStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final notable = [
       for (final s in seats)
-        if (s.status != SeatStatus.connected || !s.live) s,
+        // Three things make a seat worth a chip: it is played for by the
+        // table, its link dropped, or it is drifting toward the turn
+        // timer's removal (misses show on an otherwise healthy seat too —
+        // that is exactly the case the strip must catch).
+        if (s.status != SeatStatus.connected || !s.live || s.misses > 0) s,
     ];
     if (notable.isEmpty) return const SizedBox.shrink();
     return Material(
@@ -81,7 +85,7 @@ class SeatStatusStrip extends StatelessWidget {
     }
 
     // Everything else keeps the name-plus-status shape and the chip tooltip.
-    final (IconData icon, String theirs, String mineText, Color tint) =
+    final (IconData icon, String theirs, String mineText, Color baseTint) =
         switch (s.status) {
       SeatStatus.left => (
           Icons.person_off_outlined,
@@ -99,15 +103,34 @@ class SeatStatusStrip extends StatelessWidget {
               Colors.white70,
             ),
     };
+    // Turn-timer drift rides the same chip: a seat can be connected and
+    // still be burning through the five misses. The copy answers BOTH
+    // halves of the only question that matters ("how many did I skip, and
+    // how many chalked-up turn finish me?") — from three up the note turns
+    // warning red, two quiet turns from the drop.
+    final missNote = s.misses > 0
+        ? 'missed ${s.misses} · ${maxTurnMisses - s.misses} left'
+        : '';
+    final statusText = [
+      if (theirs.isNotEmpty) theirs,
+      if (missNote.isNotEmpty) missNote,
+    ].join(' · ');
+    final tint = s.misses >= 3 ? AppColors.danger : baseTint;
     return Tooltip(
       message: mine
           ? switch (s.status) {
               SeatStatus.left => 'You left this game.',
               SeatStatus.connected when !s.live =>
                 'Your own link to the table has dropped — the others are waiting it out.',
-              _ => 'You',
+              _ => missNote.isEmpty
+                  ? 'You'
+                  : 'You have missed ${s.misses} turns in a row — '
+                      '${maxTurnMisses - s.misses} quiet turns left before '
+                      'the table removes you.',
             }
-          : '${s.name} — $theirs',
+          : statusText.isEmpty
+          ? '${s.name} — $theirs'
+          : '${s.name} — $statusText',
       child: Row(
         key: ValueKey('seat-${s.seatId}'),
         mainAxisSize: MainAxisSize.min,
@@ -115,11 +138,23 @@ class SeatStatusStrip extends StatelessWidget {
           dot,
           const SizedBox(width: 4),
           Text(
-            mine ? 'You · $mineText' : '${s.name} · $theirs',
+            mine
+                ? (mineText.isEmpty && missNote.isEmpty
+                      ? 'You'
+                      : 'You · ${[if (mineText.isNotEmpty) mineText, if (missNote.isNotEmpty) missNote].join(' · ')}')
+                : statusText.isEmpty
+                ? s.name
+                : '${s.name} · $statusText',
             style: TextStyle(fontSize: 12, color: tint),
           ),
           const SizedBox(width: 3),
-          Icon(icon, size: 13, color: tint),
+          Icon(
+            s.misses > 0 && s.live && s.status == SeatStatus.connected
+                ? Icons.timer_off_outlined
+                : icon,
+            size: 13,
+            color: tint,
+          ),
         ],
       ),
     );

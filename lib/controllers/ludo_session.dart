@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../engine/ludo/ludo_ai.dart';
+import '../engine/core/dice.dart';
 import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
@@ -121,11 +122,23 @@ class LudoSession extends ChangeNotifier {
   final void Function(LudoState) onGameOver;
 
   final Random _rng;
+
+  /// The roll stream with the game-feel duplicate guard: shared by every
+  /// seat here, humans and bots and autoplays alike (see DieStreak).
+  final DieStreak _die = DieStreak();
   Timer? _timer;
   final _stepTimers = <Timer>[];
   MoveAnim? activeAnim;
   bool _busy = false;
   bool _over = false;
+
+  /// Marks an already-finished snapshot as consumed for the end-screen
+  /// dispatch. A client that resumes onto a table which ended while it was
+  /// away shows the end screen through the view's own path; without
+  /// consuming _over there, the next stray frame repeating the same
+  /// finished state would fire [onGameOver] a second time and stack a
+  /// second dialog.
+  void markOver() => _over = true;
 
   /// When true, human seats roll and move automatically (autoplay / break).
   bool autoPlay = false;
@@ -290,7 +303,7 @@ class LudoSession extends ChangeNotifier {
     // Snapshot for undo: restores the pre-roll state (roll + move both go).
     _undoStack.add(state.copy());
     if (_undoStack.length > 10) _undoStack.removeAt(0);
-    rollDice(state, _rng.nextInt(6) + 1);
+    rollDice(state, _die.next(_rng));
     sound.dice();
     Haptics.light();
     notifyListeners();

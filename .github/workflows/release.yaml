@@ -23,6 +23,14 @@ on:
 permissions:
   contents: read
 
+# Builds seven artifacts (phone, desktop, web, snap, appimage, extension);
+# each build matrix leg is minutes of metered runner. A re-tagged or
+# re-dispatched version replaces the run it supersedes instead of letting
+# both build the whole artifact matrix at once.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-24.04

@@ -1,0 +1,302 @@
+# 📜 Project conventions
+
+How work lands in this repo. **README.md is the product** — what the games
+are and how to run them; this file is **how we work**. Every contributor —
+human or agent (see [AGENTS.md](AGENTS.md)) — follows these rules.
+
+---
+
+## 🌲 Branch model
+
+Every task gets its own branch, cut **from `dev`**:
+
+```
+feat/…  fix/…  chore/…  docs/…        # task branches, always cut from dev
+        ↓ pull request
+        dev                           # integration branch
+        ↓ release PR (merge commit)
+        main                          # ships
+```
+
+| Branch | Role | PRs into it come from | Gate |
+|---|---|---|---|
+| `feat/…` `fix/…` `chore/…` `docs/…` `ci/…` `test/…` `perf/…` `refactor/…` `release/…` | one task, one branch | — | `tool/ci.sh` locally |
+| `dev` | **day-to-day development integration** | task branches **only** | merge-commit guard (CI) + pre-push hook |
+| `main` | production | `dev` **only** | merge-commit guard (`guard-main`) + pre-push hook |
+
+**The rules:**
+
+- **Cut every branch from `dev`.** Never from `main`, never from another task
+  branch, and never re-purpose an old branch for a new task.
+- **PRs target `dev`** for all task work. The only PR into `main` is the
+  release promotion (`dev` → `main`) and the bot's `chore: release prep` PR.
+- **Tests must pass before a PR merges** — `tool/ci.sh` locally is the same
+  gate as CI's analyze + full suite + release build.
+- **PRs into `main` must merge with a merge commit** — squash-merges are
+  rejected (`guard-main` will fail the push). Keep that true for `dev` too.
+- **Merges are a human review action.** Agents (and any automation) open the
+  pull request and stop — `gh pr merge` is never an agent's call. The
+  repository owner reads the diff and merges. Nothing transfers that
+  authority: not a plan, a handoff summary, a "next step" that says merge,
+  or a merge option the tool helpfully offers after `gh pr create`. If a
+  check fails on an open PR, the agent's job is to diagnose and propose the
+  fix as a reviewed PR — not to force the pipeline through.
+
+---
+
+## 🚫 Critical rules — never do, ever
+
+These are the hard stops. Breaking them loses data or history; Chapter 2 of
+git forbids re-excavating it afterwards.
+
+- **`main` and `dev` are protected trunks.** Never commit to them, never push
+  to them, never merge into them locally, never force-push or rewrite them,
+  never delete them — not even `--force`, not even "just to sync", not even
+  when CI looks green without it. **All** changes arrive via a pull request.
+- **No database destruction.** Never delete or overwrite any `*.db` file
+  (`ludo_leaderboard.db` or a configured server DB), no `DROP TABLE`, no
+  destructive or reversed data migration, no `TRUNCATE`/bulk deletes against
+  the SQLite or Turso stores, never point a script's DB path elsewhere to
+  "start fresh". Schema changes are additive; migration = new tables/columns,
+  not surgery on ships.
+- **Never rewrite shared history.** No `git reset --hard` on a pushed branch,
+  no `rebase` of a branch other people/agents may have pulled, no mid-branch
+  `git push --force` — force-pushes are treated as lost work, not as fixes.
+- **No secrets in the repo.** `.env` never gets committed — only
+  `.env.example` reflects new variables. Credentials belong in service
+  dashboards or repository secrets; never in code, tests, or fixtures.
+- **`CHANGELOG.md` is generated** — never hand-edit it; it is rewritten by
+  git-cliff (`cliff.toml` holds the rules) and CI owns the file. Write commit
+  subjects in Conventional Commits so the generated log groups correctly.
+- **Hooks are not decorations.** The git hooks run the same checks CI does
+  without queueing for a metered runner. Bypassing with `--no-verify` is at
+  most a deliberate, stated exception (say so in the PR and why); `SKIP_LOCAL_CI=1`
+  short-circuits only the analyze/test half.
+- **Don't delete what you didn't create.** Files and branches owned by other
+  in-flight work (another session's uncommitted changes, another task's branch)
+  are off-limits; coordinate before touching.
+
+---
+
+## 🧹 Branch cleanup
+
+Merged branches are cleaned automatically — task branches are disposable and
+a pile-up of merged `origin/feat/*` refs is noise, not an archive:
+
+- **Remote**: a dedicated workflow deletes the head branch once its PR merges
+  (`.github/workflows/prune-branch.yml`, for PRs into `dev` and `main`).
+  Protections: a trunk (`main`/`dev`) is never deleted, a branch not on the
+  prefix allowlist is left alone, and a branch holding commits that did not
+  reach the base is kept rather than discarded (that also catches a
+  force-push after review). Fork PRs are skipped.
+- **Local**: the `post-merge` hook runs `git fetch --prune`, so stale
+  remote-tracking refs vanish the next time you pull. Local checkout copies
+  are yours to delete (`git branch -d feat/…` — a merged branch answers `-d`
+  cleanly; if it doesn't, the commit isn't in `dev` yet).
+
+---
+
+## ⚙️ Git hooks
+
+Enable once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+| Hook | Does | Why |
+|---|---|---|
+| `commit-msg` | Enforces [Conventional Commits](https://www.conventionalcommits.org/) (`feat`, `fix`, `docs`, `chore`, …) so git-cliff can group the changelog | history is the generator's input format |
+| `pre-push` | **Rejects any push to `main`/`dev`** (direct push, force-push, branch deletion — all forms), then runs `tool/ci.sh` (analyze + full suite + release web build) | the trunks only ever advance via PRs; get the cheap failures locally |
+| `post-merge` | Checks whether `CHANGELOG.md` is behind this history and says so — `--check` rewrites nothing; regeneration (`tool/changelog.sh`) stays a deliberate action — and `git fetch --prune` | clean pulls + branch hygiene |
+
+`tool/ci.sh` runs the same checks as CI's test job, on the spot, free:
+
+```bash
+flutter test                    # engine rules, online server, UI, deploy config
+flutter analyze --fatal-infos
+./tool/ci.sh                    # analyze + test + release web build
+```
+
+The release web build is part of the default run because the app ships to
+web: under a conditional export the analyzer resolves only the native
+branch, so a web-only missing symbol passes analyze and test and first
+fails inside `flutter run -d chrome`. A web build on every push is the
+only check that catches that (this shipped once and was found the hard
+way).
+
+---
+
+## 🤖 CI & guards
+
+Branch protection settings are **unavailable on this repo** (free plan), so
+the "you cannot just push to a trunk" rule is enforced by standing jobs:
+
+| Workflow | Trigger | Enforces |
+|---|---|---|
+| `ci.yml` → `guard-main` | push to `main` | head of `main` must be a **merge commit** (direct pushes and squash merges fail) |
+| `guard-dev.yml` → `guard-dev` | push to `dev` | same merge-commit rule for `dev` — cheap (no checkout: it disproves a commit from the push event payload) |
+| `pre-push` hook | every local push | rejects pushes to `main`/`dev` before they happen, then the full local suite |
+| `deps-audit.yml` | weekly cron + PRs into `main` touching `pubspec*` | `pubspec.lock` scanned against OSV.dev advisories (`osv-scanner`); a known-vulnerable package fails the run — see [Dependency health](#-dependency-health) |
+| `prune-branch.yml` | PR into `dev`/`main` closed+merged | deletes the merged head branch (trunks and unknown prefixes excepted) |
+
+---
+
+## 📦 Dependency health
+
+Packages age two ways: **staleness** (patch silently available for months)
+and **vulnerability** (an advisory lands against the version you ship). This
+repo handles each with its own lane, both landing in `dev` like any other
+task branch:
+
+- **Dependabot** (`.github/dependabot.yml`, weekly, targets `dev`) raises the
+  update PRs — pub packages and the pinned GitHub Actions themselves. Review
+  and merge them like any other PR; stale branches prune themselves.
+- **OSV scan** (`.github/workflows/deps-audit.yml`, weekly + on dependency
+  PRs into `main`) runs Google's `osv-scanner` over the committed
+  `pubspec.lock` — a known-advisory version **fails the run** with a patch
+  hint, so a critical package cannot quietly ship.
+- **Locally**: `tool/deps.sh` runs the same scan (when `osv-scanner` is
+  installed) plus `dart pub outdated`. Run it when adding or bumping deps and
+  before trusting that weekly cron to catch a crisis.
+- **The scanner itself is pinned** (version + sha256, like git-cliff in
+  ci.yml) — an audit chain-of-trust applies to the audit tool too.
+
+Upgrade cadence to prefer: patch bumps promptly, minor bumps when tests pass,
+and major bumps as their own `chore/deps-…` PR with the changelog diff read
+before the merge — the `chore:` type keeps them out of the generated log.
+
+The full `test` job runs only on **PRs targeting `main`**; PRs into `dev` get
+`tool/ci.sh` locally — the metered-runner story is in the ci.yml comments, and
+the pre-push hook exists exactly so that "no hosted CI on integration PRs"
+still means every push was checked by the same code.
+
+<details>
+<summary>Which CI event runs what — and why only <code>main</code></summary>
+
+`ci.yml` runs on **PRs targeting `main`** and on **pushes to `main`**, plus
+`v*` tags.
+
+- A **pull request into `main`** runs the `test` job and nothing else —
+  analyze, the full suite, and a release web build.
+- A **push to `main`** runs the release path, in this order:
+  1. `release-prep` regenerates `CHANGELOG.md` and bumps the declared version,
+     then **opens a pull request** with both in one commit. It cannot push to
+     `main` directly: `guard-main` requires the head of `main` to be a merge
+     commit, and a bot commit is not one.
+  2. You merge that `chore: release prep` PR. That merge re-runs the workflow.
+  3. `verify-release` runs analyze + the full suite — the only test gate on a
+     push path, since `test` is pull-request-scoped.
+  4. `publish-firefox` builds the add-on and uploads it to addons.mozilla.org.
+
+So a release is: land your PR into `dev` → release-promote `dev` → `main` →
+merge the bot's `chore: release prep` PR → the add-on is uploaded. No tagging
+and nothing typed by hand. A `v*` tag runs the same path, for cutting a
+release without merging anything new.
+
+**Why PRs into `dev` have no hosted CI.** Hosted runner minutes are metered
+and this repo exhausted them once already, so a full run happens where a
+change is about to ship rather than at every hop. Scoping is a trigger filter
+(`on.pull_request.branches: [main]`) rather than an `if:` inside the job,
+because an `if` still starts the runner and every job only to skip them. Run
+`tool/ci.sh` locally — the same gate, and what the `pre-push` hook runs.
+</details>
+
+<details>
+<summary>Changelog (git-cliff)</summary>
+
+`CHANGELOG.md` is **generated** by [git-cliff](https://git-cliff.org) from the
+commit history using `cliff.toml` (Keep a Changelog format) — never hand-edit
+it. The CI `release-prep` job is the only writer of record; humans and hooks
+regenerate locally to preview or to catch up, never to commit from a bot race.
+
+```bash
+tool/changelog.sh           # rewrite it
+tool/changelog.sh --check   # fail if out of date, change nothing
+```
+
+Write commit subjects as `feat: …`, `fix: …`, `docs: …`, `chore: …`
+(Conventional Commits) so entries land in the right *Added / Fixed / …* group.
+</details>
+
+<details>
+<summary>Code review (Greptile)</summary>
+
+[Greptile](https://www.greptile.com) reviews pull requests through the
+committed `.greptile/config.json` (`{"includeBranches": ["main"]}`). Notes:
+
+- Both lists take globs (`release/*`, `dependabot/**`), matched
+  case-insensitively against the PR's **base** branch.
+- Draft PRs are skipped by default; a skipped PR can still be reviewed on
+  demand by commenting `@greptileai review`.
+- The committed file overrides the dashboard settings, and Greptile reads it
+  from the PR's *source* branch — so a branch only obeys the filter once it
+  contains this file (i.e. once it has merged `dev`).
+</details>
+
+---
+
+## 🎨 Product craft — UX is part of done
+
+A feature is not finished when the tests pass; it is finished when the
+player can use it without puzzling over anything. Implementation that only
+works "when everything goes right" is an incomplete feature, and a UX
+complaint is fixed with the same severity discipline as a crash. Every
+player-facing change answers all of these before its PR opens:
+
+- **Every state is designed.** Loading (progress on the actual action),
+  empty ("No messages yet — say hi"), error (what happened, plus a retry),
+  and offline ("Reconnecting…"). No white rectangles, no raw exception
+  text, no spinner that can spin forever.
+- **Every tap answers.** Controls acknowledge instantly (ripple/pressed
+  state); networked actions disable their button and show progress while
+  waiting so they cannot double-fire — waiting without feedback reads as
+  a frozen app.
+- **No dead ends.** From any screen there is a way forward or back.
+  Destructive actions (leave a table, admin deletes) confirm first, with
+  the consequence spelled out in the button's own wording.
+- **Copy is player-facing.** Brief, friendly, plain language; errors name
+  the fix ("Room code not found — check the four letters"), never the
+  machine ("Bad request: 400").
+- **Accessible by default.** Touch targets ≥ 44 logical px, contrast that
+  survives outdoors, a label or `Semantics` on every icon-only button, and
+  color never the *only* signal (seat colors also carry player names).
+- **One visual language.** New screens reuse the shared widgets
+  (chat bubbles, sheets, buttons) and the existing palette and spacing;
+  a bespoke second way to do the same thing is a review finding.
+- **Screens read like a phone, whatever the window.** Every player-facing
+  screen body (the admin panel is exempt) lays its content out in the
+  reading-width column — [`ContentColumn`](
+  lib/ui/page_app_bar.dart) and its `kContentMaxWidth` — so the screen
+  matches the header width above it. A desktop window shows a centered
+  column, never cards or list rows stretched edge to edge across a
+  laptop. Full-bleed is reserved for the game boards themselves (the
+  table owns the whole canvas) and for page backgrounds/gradients.
+- **Motion serves comprehension.** Purposeful, short animations (a dice
+  roll, a mover hop, a bubble arriving) at 150–300 ms; nothing decorative,
+  and the platform's reduced-motion setting is respected.
+- **Try the flow, not only the function.** Run the affected screens once
+  before pushing, and pin new UI states with widget tests (the chat-bubble
+  suite is the pattern to extend).
+
+**The UX signal loop is a first-class lane:** in-app player reports
+(`BugReportSheet` → the server's `feedback` route) land in the admin
+dashboard triage; recurring report themes are treated as UX defects with a
+fix branch like any other bug.
+
+---
+
+## ✅ Pull-request checklist
+
+1. Branch cut **from `dev`**, prefixed `feat/|fix/|chore/|docs/|ci/|test/|perf/|refactor/|release/`.
+2. Conventional-commit subjects (verified by `commit-msg`).
+3. `tool/ci.sh` green — analyze + full suite (add tests with the change; new
+   features without tests don't merge).
+4. No secrets, no generated-file hand-edits (`CHANGELOG.md`, icons, sounds —
+   regenerate with `tools/gen_*` instead).
+5. `gh pr create --base dev` — never `--base main`.
+6. New or bumped dependencies pass `tool/deps.sh` (OSV scan + outdated
+   report); `deps-audit.yml` re-checks and blocks a known-vulnerable lock.
+7. Player-facing changes meet the [Product craft](#-product-craft--ux-is-part-of-done)
+   bar: designed states, acknowledged taps, player-facing copy,
+   accessibility, one visual language.

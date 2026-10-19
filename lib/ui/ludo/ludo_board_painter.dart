@@ -9,18 +9,40 @@ import '../theme.dart';
 
 /// Paints the classic 15x15 Ludo board: ivory playing field, lacquered
 /// quadrant yards, colored home columns and a four-triangle center.
+///
+/// The breathing turn glow is driven by a listenable ([repaint]) rather than
+/// by widget rebuilds: the swing rides a [pulseAnim] (the view's effects
+/// clock) read at paint time, so the pulsing costs one board repaint per
+/// frame and nothing else — no widget tree rebuild while the board breathes.
+/// The painter must therefore not be asked to cache anything derived from
+/// [pulseAnim]: values are re-read on every paint.
 class LudoBoardPainter extends CustomPainter {
   LudoBoardPainter({
     this.highlightCells = const {},
     this.playerNames = const {},
     this.activeColor,
     this.pulse = 0,
+    this.pulseAnim,
     super.repaint,
   });
+
   final Set<int> highlightCells; // absolute track indices
   final Map<LudoColor, String> playerNames; // color -> seat name
   final LudoColor? activeColor; // corner that breathes on their turn
+
+  /// Static fallback phase for callers that pass no animation (tests).
   final double pulse; // 0..1 phase of the breathing glow
+
+  /// The live breathing clock. Read at paint time, re-evaluated on every
+  /// repaint tick, so the glow animates without a single widget rebuild.
+  final Animation<double>? pulseAnim;
+
+  /// Where the breathing glow stands right now: 0..1 with one full swing
+  /// per clock period.
+  double get _pulsePhase {
+    final v = (pulseAnim?.value ?? pulse) * 2 * math.pi;
+    return 0.5 + 0.5 * math.sin(v);
+  }
 
   static const n = 15.0;
 
@@ -49,19 +71,33 @@ class LudoBoardPainter extends CustomPainter {
     // player name on the outer edge of the board arm (Ludo-King style).
     for (final color in LudoColor.values) {
       final o = LudoBoard.yardOrigin[color]!;
-      final yard = Rect.fromLTWH(o.col * cell, o.row * cell, cell * 6, cell * 6);
-      final yardRRect =
-          RRect.fromRectAndRadius(yard, Radius.circular(cell * 0.35));
+      final yard = Rect.fromLTWH(
+        o.col * cell,
+        o.row * cell,
+        cell * 6,
+        cell * 6,
+      );
+      final yardRRect = RRect.fromRectAndRadius(
+        yard,
+        Radius.circular(cell * 0.35),
+      );
       final base = AppColors.ludo(color);
       final isActive = color == activeColor;
       final isDimmed = activeColor != null && !isActive;
+      final pulse = _pulsePhase;
       canvas.drawRRect(yardRRect, Paint()..color = base);
 
       // Inner white square: staging area for the 4 pawns.
       final inner = Rect.fromLTWH(
-          o.col * cell + cell, o.row * cell + cell, cell * 4, cell * 4);
-      final innerRRect =
-          RRect.fromRectAndRadius(inner, Radius.circular(cell * 0.3));
+        o.col * cell + cell,
+        o.row * cell + cell,
+        cell * 4,
+        cell * 4,
+      );
+      final innerRRect = RRect.fromRectAndRadius(
+        inner,
+        Radius.circular(cell * 0.3),
+      );
       canvas.drawRRect(innerRRect, Paint()..color = AppColors.ivory);
       canvas.drawRRect(
         innerRRect,
@@ -129,8 +165,12 @@ class LudoBoardPainter extends CustomPainter {
       // derived from the engine so they can never drift out of sync.
       if (LudoBoard.safeCells.contains(i) &&
           !LudoBoard.startIndex.containsValue(i)) {
-        _drawStar(canvas, cellCenter(p.row, p.col, size), cell * 0.3,
-            AppColors.ink.withValues(alpha: 0.7));
+        _drawStar(
+          canvas,
+          cellCenter(p.row, p.col, size),
+          cell * 0.3,
+          AppColors.ink.withValues(alpha: 0.7),
+        );
       }
     }
 
@@ -150,7 +190,9 @@ class LudoBoardPainter extends CustomPainter {
       final from = LudoBoard.track[LudoBoard.absCell(color, 50)];
       final to = LudoBoard.homeColumns[color]!.first;
       final dir = Offset(
-          (to.col - from.col).toDouble(), (to.row - from.row).toDouble());
+        (to.col - from.col).toDouble(),
+        (to.row - from.row).toDouble(),
+      );
       _drawArrow(
         canvas,
         cellCenter(from.row, from.col, size),
@@ -165,62 +207,109 @@ class LudoBoardPainter extends CustomPainter {
     // green left arm, yellow top arm, blue right arm, red bottom arm.
     final c0 = Rect.fromLTWH(6 * cell, 6 * cell, cell * 3, cell * 3);
     final center = c0.center;
-    final tl = c0.topLeft, tr = c0.topRight, bl = c0.bottomLeft, br = c0.bottomRight;
+    final tl = c0.topLeft,
+        tr = c0.topRight,
+        bl = c0.bottomLeft,
+        br = c0.bottomRight;
     void tri(Path path, LudoColor color) {
       canvas.drawPath(path, Paint()..color = AppColors.ludo(color));
       canvas.drawPath(path, line);
     }
 
-    tri(Path()
-      ..moveTo(tl.dx, tl.dy)
-      ..lineTo(tr.dx, tr.dy)
-      ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.yellow);
-    tri(Path()
-      ..moveTo(tr.dx, tr.dy)
-      ..lineTo(br.dx, br.dy)
-      ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.blue);
-    tri(Path()
-      ..moveTo(br.dx, br.dy)
-      ..lineTo(bl.dx, bl.dy)
-      ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.red);
-    tri(Path()
-      ..moveTo(bl.dx, bl.dy)
-      ..lineTo(tl.dx, tl.dy)
-      ..lineTo(center.dx, center.dy)
-      ..close(), LudoColor.green);
+    tri(
+      Path()
+        ..moveTo(tl.dx, tl.dy)
+        ..lineTo(tr.dx, tr.dy)
+        ..lineTo(center.dx, center.dy)
+        ..close(),
+      LudoColor.yellow,
+    );
+    tri(
+      Path()
+        ..moveTo(tr.dx, tr.dy)
+        ..lineTo(br.dx, br.dy)
+        ..lineTo(center.dx, center.dy)
+        ..close(),
+      LudoColor.blue,
+    );
+    tri(
+      Path()
+        ..moveTo(br.dx, br.dy)
+        ..lineTo(bl.dx, bl.dy)
+        ..lineTo(center.dx, center.dy)
+        ..close(),
+      LudoColor.red,
+    );
+    tri(
+      Path()
+        ..moveTo(bl.dx, bl.dy)
+        ..lineTo(tl.dx, tl.dy)
+        ..lineTo(center.dx, center.dy)
+        ..close(),
+      LudoColor.green,
+    );
   }
 
   /// Draws the player name pill horizontally on the outer edge of the yard:
   /// bottom players (red, blue) get it on the bottom, top players
   /// (green, yellow) on the top. Never overlaps the pieces inside.
-  void _drawNamePill(Canvas canvas, GridPos o, double cell, String name,
-      Color color, LudoColor seat) {
-    final atTop =
-        seat == LudoColor.green || seat == LudoColor.yellow;
+  ///
+  /// The strike dots and the turn clock do NOT live here — each corner's
+  /// floating dice sit over exactly this band, so anything on the yard's
+  /// outer edge disappears behind the roll control on the very seat whose
+  /// state the table needs to read. They draw in the corner panels
+  /// outside the board instead ([LudoCornerPanel]). The pill keeps only
+  /// the yard's name, at its full width again.
+  ///
+  /// The shaped text is memoized on the class, not per painter instance: the
+  /// board repaints every breathing frame, and re-running [TextPainter.layout]
+  /// — full text shaping — four times a frame is the single most expensive
+  /// thing this painter did. A cache entry is one shaped promise keyed by
+  /// everything that can change it (text, tint, size), and the cap clears the
+  /// map wholesale when a burst of new names exhausts it; pill text changes
+  /// a handful of times per session at most, so the hit rate stays ~100%.
+  static final Map<String, TextPainter> _namePillCache = {};
+
+  void _drawNamePill(
+    Canvas canvas,
+    GridPos o,
+    double cell,
+    String name,
+    Color color,
+    LudoColor seat,
+  ) {
+    final atTop = seat == LudoColor.green || seat == LudoColor.yellow;
     final stripC = Offset(
       (o.col + 3) * cell,
       (o.row + (atTop ? 0.5 : 5.5)) * cell,
     );
-    final tp = TextPainter(
-      text: TextSpan(
-        text: name,
-        style: TextStyle(
-          fontSize: cell * 0.52,
-          fontWeight: FontWeight.w800,
-          color: color,
+    final fontSize = cell * 0.52;
+    const maxPillW = 4.7; // cells
+    final textMax = cell * (maxPillW - 0.5);
+    final key = '$name|${color.toARGB32()}|$fontSize';
+    final tp = _namePillCache.putIfAbsent(key, () {
+      if (_namePillCache.length > 64) _namePillCache.clear();
+      return (TextPainter(
+        text: TextSpan(
+          text: name,
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
         ),
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-      ellipsis: '…',
-    )..layout();
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: textMax));
+    });
     final thickness = cell * 0.84;
-    final len = math.min(tp.width + cell * 0.5, cell * 4.7);
-    final rect =
-        Rect.fromCenter(center: Offset.zero, width: len, height: thickness);
+    final len = math.min(tp.width + cell * 0.5, cell * maxPillW);
+    final rect = Rect.fromCenter(
+      center: Offset.zero,
+      width: len,
+      height: thickness,
+    );
     canvas.save();
     canvas.translate(stripC.dx, stripC.dy);
     canvas.drawRRect(
@@ -234,7 +323,7 @@ class LudoBoardPainter extends CustomPainter {
         ..strokeWidth = 1.2
         ..color = color.withValues(alpha: 0.5),
     );
-    tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+    tp.paint(canvas, Offset(-rect.width / 2 + cell * 0.22, -tp.height / 2));
     canvas.restore();
   }
 
@@ -263,7 +352,10 @@ class LudoBoardPainter extends CustomPainter {
     for (var i = 0; i < 10; i++) {
       final angle = -math.pi / 2 + i * math.pi / 5;
       final rad = i.isEven ? r : r * 0.45;
-      final p = Offset(c.dx + rad * math.cos(angle), c.dy + rad * math.sin(angle));
+      final p = Offset(
+        c.dx + rad * math.cos(angle),
+        c.dy + rad * math.sin(angle),
+      );
       i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
     }
     path.close();

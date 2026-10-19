@@ -1,4 +1,5 @@
 import '../page_app_bar.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -8,14 +9,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
+import '../shared/online_leave_pop.dart';
+import '../shared/voice_button.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
+import '../shared/table_notice.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
+import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/bug_report_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
 /// snapshots ([OnlineClient.snakesState]) and forwards intents.
@@ -57,6 +63,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   /// awaitingRoll -> awaitingMove is exactly when the server has accepted a
   /// roll and published its value.
   SnakesPhase? _lastPhase;
+  String? _lastEvent;
 
   /// How long the die tumbles. Matches the online Ludo view, and fits inside
   /// the 700ms beat before the forced move is sent, so the roll is seen before
@@ -76,10 +83,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     // The chime is wired from the view, not from the chat sheet: from the sheet
     // it could only fire after that sheet had been opened once, so the first
     // messages of a game — the ones you most want to hear — arrived silently.
-    widget.client.onMessageArrived = (_) =>
-        ProviderScope.containerOf(context, listen: false)
-            .read(soundServiceProvider)
-            .message();
+    widget.client.onMessageArrived = (_) => ProviderScope.containerOf(
+      context,
+      listen: false,
+    ).read(soundServiceProvider).message();
     _onClientUpdate();
   }
 
@@ -102,10 +109,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       }
       widget.client.addListener(_onClientUpdate);
       widget.client.onRoll = _onRoll;
-      widget.client.onMessageArrived = (_) =>
-          ProviderScope.containerOf(context, listen: false)
-              .read(soundServiceProvider)
-              .message();
+      widget.client.onMessageArrived = (_) => ProviderScope.containerOf(
+        context,
+        listen: false,
+      ).read(soundServiceProvider).message();
       _onClientUpdate();
     }
   }
@@ -128,13 +135,49 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   void _onClientUpdate() {
     if (!mounted) return;
     setState(() {});
-    final notice = widget.client.leftNotice;
-    if (notice != null) {
+    if (widget.client.mySeatEvicted) {
+      // The server walked this seat out mid-game (five silent turns), and
+      // the final state never reaches this client — the seat is already off
+      // the room's roster before the gameOver snapshot goes out. The removal
+      // itself IS the end screen: a banner that says what happened plus the
+      // one way out, instead of a toast that scrolls away above a board
+      // frozen forever. Both flags are consumed BEFORE scheduling:
+      // clearLeftNotice re-enters this listener, and an unconsumed eviction
+      // would stack the card.
+      widget.client.clearMySeatEviction();
       widget.client.clearLeftNotice();
-      // A seat can be announced mid-frame; a toast has to wait for the frame.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showNotice(notice);
+        if (!mounted) return;
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('You were removed'),
+            content: const Text(
+              'Five turns in a row were missed, so the table carried on '
+              'without your seat. The result counts as a loss for you.',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  widget.onLeave();
+                },
+                child: const Text('Back to lobby'),
+              ),
+            ],
+          ),
+        );
       });
+    } else {
+      final notice = widget.client.leftNotice;
+      if (notice != null) {
+        widget.client.clearLeftNotice();
+        // A seat can be announced mid-frame; a toast has to wait for the frame.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showNotice(notice);
+        });
+      }
     }
     final s = widget.client.snakesState;
     if (s == null) return;
@@ -154,10 +197,24 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     }
     _lastPhase = s.phase;
 
+    // A spent roll rides the same broadcast everyone else sees: without
+    // the explanation, "their turn advanced and nothing moved" reads as
+    // the server swallowing a dice tap.
+    if (s.lastEvent == 'skip' && _lastEvent != 'skip' && mounted) {
+      _showNotice(snakesSkipNotice(s));
+    }
+    _lastEvent = s.lastEvent;
+
     if (s.phase == SnakesPhase.gameOver) {
       if (!_gameOverShown) {
         _gameOverShown = true;
-        _showGameOver(s);
+        // Deferred to the frame: this path also runs from initState for a
+        // player who (re)joins an already-finished table, and a route push
+        // while the first frame is still assembling throws instead of
+        // opening the end screen.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showGameOver(s);
+        });
       }
       return;
     }
@@ -263,7 +320,13 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   Widget build(BuildContext context) {
     final s = widget.client.snakesState;
     if (s == null) {
-      return const Center(child: CircularProgressIndicator());
+      // The table has not spoken yet, but the socket is live — leaving here
+      // is still a walk-out that must be said out loud, not a silent pop.
+      return OnlineLeavePop(
+        active: true,
+        onLeave: _leave,
+        child: const Center(child: CircularProgressIndicator()),
+      );
     }
     final myTurn = _isMyTurn(s);
     final canRoll = myTurn && s.phase == SnakesPhase.awaitingRoll;
@@ -276,128 +339,231 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         myTurn ? 'Moving...' : '${s.currentPlayer.name} is moving...',
     };
 
-    return Scaffold(
-      appBar: PageAppBar(
-        title: const Text('Snakes & Ladders'),
-        actions: [
-          const SoundToggleButton(),
-          // The red dot is the unread count; it clears when the sheet opens.
-          IconButton(
-            icon: Badge(
-              isLabelVisible: widget.client.unreadChats > 0,
-              backgroundColor: Colors.redAccent,
-              smallSize: 9,
-              child: const Icon(Icons.forum_outlined),
-            ),
-            tooltip: widget.client.unreadChats > 0
-                ? 'Table chat (${widget.client.unreadChats} new)'
-                : 'Table chat',
-            onPressed: () => GameChatSheet.show(context, widget.client),
-          ),
-          IconButton(
-            icon: Icon(
-              widget.client.iAmAuto
-                  ? Icons.auto_mode
-                  : Icons.auto_mode_outlined,
-            ),
-            color: widget.client.iAmAuto ? AppColors.gold : null,
-            tooltip: widget.client.isSpectator
-                ? 'Spectators watch; they do not hand seats over'
-                : widget.client.iAmAuto
-                ? 'Autoplay on — tap to take over'
-                : 'Autoplay — the table plays your turns',
-            onPressed: widget.client.isSpectator
-                ? null
-                : () => widget.client.sendAutoplay(!widget.client.iAmAuto),
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Leave game',
-            onPressed: _leave,
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            SeatStatusStrip(
-              seats: widget.client.lobbySeats,
-              mySeatId: widget.client.seatId,
-            ),
-            Expanded(
-              child: Center(
-                child: LayoutBuilder(
-                  builder: (context, cons) {
-                    // The board keeps its square shape and the home area sits
-                    // directly under it, inside the same Stack — the layout
-                    // the offline view already uses. Online had no home area
-                    // at all: the board numbers 1..100, so square 0 has no
-                    // cell, and squareCenter(0) fell through the
-                    // boustrophedon maths onto square 10's cell. Every pawn
-                    // still waiting to enter was drawn on top of a numbered
-                    // square, which is why the home area looked missing.
-                    final homeH = _homeStripH;
-                    final boardSize = math.min(
-                      cons.biggest.width,
-                      math.max(cons.biggest.height - homeH, 0.0),
-                    );
-                    return SizedBox(
-                      width: boardSize,
-                      height: boardSize + homeH,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          CustomPaint(
-                            size: Size.square(boardSize),
-                            painter: SnakesBoardPainter(
-                              highlightSquare:
-                                  s.phase == SnakesPhase.awaitingMove
-                                  ? pendingMove(s).to
-                                  : null,
-                            ),
-                          ),
-                          ..._pawnWidgets(s, boardSize),
-                          _homeArea(boardSize, s),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+    return OnlineLeavePop(
+      active: true,
+      onLeave: _leave,
+      child: Scaffold(
+        appBar: PageAppBar(
+          title: const Text('Snakes & Ladders'),
+          actions: [
+            const SoundToggleButton(),
+            // The red dot is the unread count; it clears when the sheet opens.
+            IconButton(
+              icon: Badge(
+                isLabelVisible: widget.client.unreadChats > 0,
+                backgroundColor: Colors.redAccent,
+                smallSize: 9,
+                child: const Icon(Icons.forum_outlined),
               ),
+              tooltip: widget.client.unreadChats > 0
+                  ? 'Table chat (${widget.client.unreadChats} new)'
+                  : 'Table chat',
+              onPressed: () => GameChatSheet.show(context, widget.client),
             ),
-            Text(
-              status,
-              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            // Voice is seated-only; a spectator has no seat for the mesh.
+            if (!widget.client.isSpectator) ...[
+              VoiceButton(client: widget.client),
+              MicButton(client: widget.client),
+            ],
+            IconButton(
+              icon: Icon(
+                widget.client.iAmAuto
+                    ? Icons.auto_mode
+                    : Icons.auto_mode_outlined,
+              ),
+              color: widget.client.iAmAuto ? AppColors.gold : null,
+              tooltip: widget.client.isSpectator
+                  ? 'Spectators watch; they do not hand seats over'
+                  : widget.client.iAmAuto
+                  ? 'Autoplay on — tap to take over'
+                  : 'Autoplay — the table plays your turns',
+              onPressed: widget.client.isSpectator
+                  ? null
+                  : () => widget.client.sendAutoplay(!widget.client.iAmAuto),
             ),
-            const SizedBox(height: 6),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Takes the corner colour of whoever is on turn, and
-                  // breathes while it is your turn, so the die says whose move
-                  // it is. It was gold for every seat and never pulsed.
-                  Pulse(
-                    active: _isMyTurn(s),
-                    child: DiceWidget(
-                      value: s.lastRoll,
-                      rolling: _rolling,
-                      enabled: canRoll,
-                      onTap: widget.client.sendRoll,
-                      accent: AppColors
-                          .snakesColors[s.currentPlayer.tokenIndex.clamp(0, 9)],
-                    ),
-                  ),
-                  const SizedBox(width: 20),
-                  FilledButton(
-                    onPressed: canRoll ? widget.client.sendRoll : null,
-                    child: Text(canRoll ? 'ROLL' : '...'),
-                  ),
-                ],
+            IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: 'Leave game',
+              onPressed: _leave,
+            ),
+            IconButton(
+              icon: const Icon(Icons.bug_report_outlined),
+              tooltip: 'Report an issue',
+              onPressed: () => BugReportSheet.show(
+                context,
+                serverUrl: widget.client.serverUrl,
               ),
             ),
           ],
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Transport banners: the ludo table shows them; snakes went
+              // without — a dropped socket sat on a frozen board the
+              // playtest round read as "the other player is still there in
+              // the game". Same two states, same two outs.
+              if (widget.client.status == OnlineStatus.reconnecting)
+                Material(
+                  color: AppColors.danger,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 12,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Connection lost — reconnecting…',
+                          style: TextStyle(
+                            color: Colors.white.withAlpha(230),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else if (widget.client.status == OnlineStatus.error)
+                Material(
+                  color: AppColors.danger,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 12,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.client.errorText ??
+                                'Connection lost — could not reach the '
+                                    'server.',
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withAlpha(230),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: widget.client.retry,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Retry'),
+                        ),
+                        TextButton(
+                          onPressed: _leave,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Leave'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              SeatStatusStrip(
+                seats: widget.client.lobbySeats,
+                mySeatId: widget.client.seatId,
+              ),
+              // Voice's speaking state lives on the mic button itself (see the
+              // ludo board) — nothing wedged between the seats and the board,
+              // so talk never moves the board underneath the players.
+              Expanded(
+                child: Center(
+                  child: LayoutBuilder(
+                    builder: (context, cons) {
+                      // The board keeps its square shape and the home area sits
+                      // directly under it, inside the same Stack — the layout
+                      // the offline view already uses. Online had no home area
+                      // at all: the board numbers 1..100, so square 0 has no
+                      // cell, and squareCenter(0) fell through the
+                      // boustrophedon maths onto square 10's cell. Every pawn
+                      // still waiting to enter was drawn on top of a numbered
+                      // square, which is why the home area looked missing.
+                      final homeH = _homeStripH;
+                      final boardSize = math.min(
+                        cons.biggest.width,
+                        math.max(cons.biggest.height - homeH, 0.0),
+                      );
+                      return SizedBox(
+                        width: boardSize,
+                        height: boardSize + homeH,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            CustomPaint(
+                              size: Size.square(boardSize),
+                              painter: SnakesBoardPainter(
+                                highlightSquare:
+                                    s.phase == SnakesPhase.awaitingMove
+                                    ? pendingMove(s).to
+                                    : null,
+                              ),
+                            ),
+                            ..._pawnWidgets(s, boardSize),
+                            _homeArea(boardSize, s),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              Text(
+                status,
+                style: const TextStyle(fontSize: 14, color: Colors.white70),
+              ),
+              // The on-turn clock — snakes seats get the same standing
+              // instructions ludo does: roll within it, or the turn burns
+              // with you.
+              TurnCountdown(client: widget.client),
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Takes the corner colour of whoever is on turn, and
+                    // breathes while it is your turn, so the die says whose move
+                    // it is. It was gold for every seat and never pulsed.
+                    Pulse(
+                      active: _isMyTurn(s),
+                      child: DiceWidget(
+                        value: s.lastRoll,
+                        rolling: _rolling,
+                        enabled: canRoll,
+                        onTap: widget.client.sendRoll,
+                        accent:
+                            AppColors.snakesColors[s.currentPlayer.tokenIndex
+                                .clamp(0, 9)],
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    FilledButton(
+                      onPressed: canRoll ? widget.client.sendRoll : null,
+                      child: Text(canRoll ? 'ROLL' : '...'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

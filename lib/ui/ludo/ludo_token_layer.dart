@@ -10,6 +10,12 @@ import 'ludo_board_painter.dart';
 
 /// Renders all Ludo tokens as an animated layer over the board, plus the
 /// in-flight "ghost" token while a move animation is running.
+///
+/// Performance shape: this layer is rebuilt on *state* changes (a roll, a hop
+/// step), never per frame. The per-frame work — the spinning rings under the
+/// movable pawns and the ghost's hop bounce — lives inside tiny scoped
+/// [AnimatedBuilder]s driven by the view's effects clock ([fx]), so the whole
+/// board layout is not recomputed 60 times a second just to rotate a ring.
 class LudoTokenLayer extends StatelessWidget {
   const LudoTokenLayer({
     super.key,
@@ -20,8 +26,8 @@ class LudoTokenLayer extends StatelessWidget {
     required this.anim,
     required this.animStep,
     required this.currentPlayerIndex,
-    this.spinAngle = 0,
-    this.bounce = 0,
+    this.fx,
+    this.stepStart,
     this.hintTokenIndex,
   });
 
@@ -33,19 +39,36 @@ class LudoTokenLayer extends StatelessWidget {
   final int animStep;
   final int currentPlayerIndex;
 
-  /// Rotation (radians) of the spinning ring under the current player's pawns.
-  final double spinAngle;
+  /// The view's effects clock (a 1.5s repeating 0..1 controller). Powers the
+  /// ring spin and the ghost hop bounce at paint time; null keeps everything
+  /// static (tests).
+  final Animation<double>? fx;
 
-  /// 0..1 progress within the current animation step; drives the hop bounce.
-  final double bounce;
+  /// When the current hop step started — with [fx] it derives the bounce
+  /// curve inside the ghost, which is the only piece that needs the value.
+  final DateTime? stepStart;
 
   /// Token index highlighted by the hint button (the AI's suggested move).
   final int? hintTokenIndex;
 
+  /// Minimum pawn tappable area: the pawn artwork is well under the 44px
+  /// touch-target bar on a phone (a cell is ~26px, the pawn ~16x23), and the
+  /// "I poked the pawn three times before it moved" report is exactly that.
+  /// The tappable box is the pawn's own generous square instead, centered on
+  /// the pawn so finger aim and visual aim agree.
+  static double hitTargetFor(double cell) =>
+      math.max(48.0, cell * 1.4);
+
   @override
   Widget build(BuildContext context) {
     final cell = boardSize / 15;
-    final widgets = <Widget>[];
+    // Two layers: everything that cannot be tapped first, tappable pawns
+    // last. Stack hit-testing answers the topmost child, so a movable pawn
+    // sharing a cell with idle pieces — or standing next to one with
+    // overlapping 48px targets — can never be covered by a piece that
+    // answers nothing. This plus the generous target is what one tap buys.
+    final idleWidgets = <Widget>[];
+    final movableWidgets = <Widget>[];
 
     // Group tokens by board cell (skipping the animating one). Yard tokens
     // use their own token index as the yard slot so the 4 pawns spread out
@@ -81,20 +104,37 @@ class LudoTokenLayer extends StatelessWidget {
             !state.currentPlayer.isAI &&
             t.color == state.currentPlayer.color &&
             movableTokenIndices.contains(t.index);
-        widgets.add(
-          AnimatedPositioned(
-            key: ValueKey('tok-${t.gid}'),
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOut,
-            left: center.dx - cell * 0.30 + off.dx,
-            top: center.dy - cell * 0.44 + off.dy,
-            child: GestureDetector(
-              onTap: canMove ? () => onTapToken(t.index) : null,
-              child: _tokenStack(t, cell, canMove,
-                  isHint: t.index == hintTokenIndex),
+        // The generous tap box must ship CENTERED on the pawn's anchor: the
+        // top-left is half the box away from the cell center, exactly like
+        // the pawn art (the dot) is centered inside the box. Halves of the
+        // DOT size go here and the dot drags toward every cell's bottom
+        // right — on a small phone the pawn leaves its cell outright.
+        final hit = hitTargetFor(cell);
+        final positioned = AnimatedPositioned(
+          key: ValueKey('tok-${t.gid}'),
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          left: center.dx - hit / 2 + off.dx,
+          top: center.dy - hit / 2 + off.dy,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: canMove ? () => onTapToken(t.index) : null,
+            child: SizedBox(
+              width: hit,
+              height: hit,
+              child: Stack(clipBehavior: Clip.none, alignment: Alignment.center,
+                  children: [
+                    _tokenStack(t, cell, canMove,
+                        isHint: t.index == hintTokenIndex),
+                  ]),
             ),
           ),
         );
+        if (canMove) {
+          movableWidgets.add(positioned);
+        } else {
+          idleWidgets.add(positioned);
+        }
       }
     });
 
@@ -111,43 +151,23 @@ class LudoTokenLayer extends StatelessWidget {
       if (yardAnchor) center -= Offset(cell * 0.5, cell * 0.5);
       final t = state.tokenByGid(anim!.tokenGid);
       final color = AppColors.ludo(t.color);
-      // One-size-pulse per step: grows then shrinks across each hop.
-      final scale = 1 + 0.30 * math.sin(math.pi * bounce.clamp(0.0, 1.0));
-      widgets.add(Positioned(
+      idleWidgets.add(Positioned(
         left: center.dx - cell * 0.62,
         top: center.dy - cell * 0.62,
-        child: Transform.scale(
-          scale: scale,
-          child: SizedBox(
-            width: cell * 1.24,
-            height: cell * 1.24,
-            child: Stack(
-              alignment: Alignment.center,
-              clipBehavior: Clip.none,
-              children: [
-                _SpinRing(
-                    size: cell * 1.08,
-                    angle: spinAngle,
-                    color: AppColors.gold),
-                SizedBox(
-                  width: cell * 0.62,
-                  height: cell * 0.90,
-                  child: CustomPaint(
-                    painter: _PawnPainter(
-                      color: color,
-                      outline: Colors.white,
-                      strokeWidth: 2,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        child: _GhostToken(
+          fx: fx,
+          stepStart: stepStart ?? DateTime.now(),
+          stepMs: anim!.stepMs,
+          cell: cell,
+          color: color,
         ),
       ));
     }
 
-    return Stack(clipBehavior: Clip.none, children: widgets);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [...idleWidgets, ...movableWidgets],
+    );
   }
 
   Offset _stackOffset(int i, int total, double cell) {
@@ -198,7 +218,7 @@ class LudoTokenLayer extends StatelessWidget {
               top: cell * ph - ringSize * 0.62,
               child: _SpinRing(
                 size: ringSize,
-                angle: spinAngle,
+                fx: fx,
                 color: AppColors.gold,
               ),
             ),
@@ -217,6 +237,70 @@ class LudoTokenLayer extends StatelessWidget {
         outline: canMove ? AppColors.gold : Colors.black54,
         strokeWidth: canMove ? 2.2 : 1.2,
       ),
+    );
+  }
+}
+
+/// The animated ghost the moving token rides: a gold ring + the pawn art,
+/// pulsing once per hop. Its per-frame values (spin ring, hop scale) live
+/// inside one scoped [AnimatedBuilder] so the ghost alone rebuilds while it
+/// flies — the layer around it holds still off a rebuild budget of steps.
+class _GhostToken extends StatelessWidget {
+  const _GhostToken({
+    required this.fx,
+    required this.stepStart,
+    required this.stepMs,
+    required this.cell,
+    required this.color,
+  });
+
+  final Animation<double>? fx;
+  final DateTime stepStart;
+  final int stepMs;
+  final double cell;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final body = SizedBox(
+      width: cell * 1.24,
+      height: cell * 1.24,
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none,
+        children: [
+          _SpinRing(size: cell * 1.08, fx: fx, color: AppColors.gold),
+          SizedBox(
+            width: cell * 0.62,
+            height: cell * 0.90,
+            child: CustomPaint(
+              painter: _PawnPainter(
+                color: color,
+                outline: Colors.white,
+                strokeWidth: 2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    // The ghost's one-size-pulse per hop is re-derived per clock frame
+    // inside this scoped builder. Without a clock (tests, battery saver)
+    // it rides at rest scale — the cell-to-cell steps still repaint it.
+    final clock = fx;
+    if (clock == null) return Transform.scale(scale: 1.0, child: body);
+    return AnimatedBuilder(
+      animation: clock,
+      builder: (_, _) {
+        // 0..1 progress within the current animation step.
+        final withinStep =
+            (DateTime.now().difference(stepStart).inMilliseconds / stepMs)
+                .clamp(0.0, 1.0);
+        return Transform.scale(
+          scale: 1 + 0.30 * math.sin(math.pi * withinStep),
+          child: body,
+        );
+      },
     );
   }
 }
@@ -287,21 +371,40 @@ class _PawnPainter extends CustomPainter {
       old.color != color || old.outline != outline;
 }
 
-/// A dashed ring of three arcs that visually spins via [angle].
+/// A dashed ring of three arcs that visually spins once per clock period.
+/// The rotation is its own concern: with [fx] attached it keeps turning in
+/// its own tiny rebuild; without one it renders static (tests, animations-off).
 class _SpinRing extends StatelessWidget {
-  const _SpinRing({required this.size, required this.angle, required this.color});
+  const _SpinRing({
+    required this.size,
+    this.fx,
+    required this.color,
+  });
 
   final double size;
-  final double angle;
+  final Animation<double>? fx;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: angle,
-      child: CustomPaint(
-        size: Size.square(size),
-        painter: _RingPainter(color: color),
+    final clock = fx;
+    if (clock == null) {
+      return Transform.rotate(
+        angle: 0,
+        child: CustomPaint(
+          size: Size.square(size),
+          painter: _RingPainter(color: color),
+        ),
+      );
+    }
+    return AnimatedBuilder(
+      animation: clock,
+      builder: (_, _) => Transform.rotate(
+        angle: clock.value * 2 * math.pi,
+        child: CustomPaint(
+          size: Size.square(size),
+          painter: _RingPainter(color: color),
+        ),
       ),
     );
   }

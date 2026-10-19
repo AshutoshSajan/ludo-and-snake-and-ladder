@@ -15,10 +15,112 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../engine/snakes/snakes_engine.dart';
+import 'voice_room.dart';
+import 'voice_rtc.dart';
 
 /// How a seat is being held: the person is at their device, the table is
 /// playing for them, or they have walked out.
 enum SeatStatus { connected, auto, left }
+
+/// The turn timer's eviction budget, as the server's default builds it.
+/// The copy that counts against it ("missed 2 · 3 left", "count of 5")
+/// reaches the client beside the misses themselves; if a room ever gets a
+/// different budget, the constant travels with that broadcast instead of
+/// staying a hard-coded five.
+const int maxTurnMisses = 5;
+
+/// The WS server URL's http(s) origin, where the voice-note store (and
+/// any other REST surface) lives. Kept public for the tests and for
+/// callers that frame player-facing links.
+Uri _httpOriginOf(String serverUrl, String path) {
+  final ws = Uri.parse(serverUrl);
+  return ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http', path: path);
+}
+
+/// One recorded voice note in chat: the playback URL (absolute — the
+/// chat broadcast carries a relative server path; the client joins it to
+/// the game server's origin here, once, at parse time) and its duration
+/// as the server recorded it.
+class VoiceNote {
+  const VoiceNote({required this.url, required this.durMs});
+
+  factory VoiceNote.fromJson(Map<String, dynamic> j, String serverUrl) =>
+      VoiceNote(
+        url: _httpOriginOf(serverUrl, j['url'] as String? ?? '').toString(),
+        durMs: (j['dur'] as num?)?.toInt() ?? 0,
+      );
+
+  final String url;
+  final int durMs;
+
+  /// '0:07' / '1:03' — the way a voice pill is read at a glance.
+  String get clock {
+    final s = (durMs / 1000).round();
+    final m = s ~/ 60;
+    return '$m:${(s % 60).toString().padLeft(2, '0')}';
+  }
+}
+
+/// One table-chat line: a sentence, an inline GIF and/or a voice note.
+/// The `gif` is the full-resolution https URL and `note` an uploaded
+/// recording — the room's server builds both (see `_chatGif` and
+/// `_chatNote`), so they are exactly what the store vouched for.
+/// `color` paints the bubble with the sender's seat; `at` is the epoch
+/// ms the line was said.
+class ChatLine {
+  const ChatLine({
+    required this.from,
+    this.text = '',
+    this.gif,
+    this.note,
+    this.color,
+    this.at,
+    this.seatId = '',
+  });
+
+  factory ChatLine.fromJson(Map<String, dynamic> j, {String? serverUrl}) =>
+      ChatLine(
+        from: j['from'] as String,
+        text: j['text'] as String? ?? '',
+        gif: j['gif'] as String?,
+        note: j['note'] == null
+            ? null
+            : (serverUrl == null
+                  ? null
+                  : VoiceNote.fromJson(
+                      (j['note'] as Map).cast<String, dynamic>(),
+                      serverUrl,
+                    )),
+        color: LudoColor.tryParse(j['color'] as String? ?? ''),
+        at: (j['at'] as num?)?.toInt(),
+        // The author's seat id, from the server's chat broadcast. It keys
+        // friendship (add / block / report address the id, not the name —
+        // names collide and get ambiguity tags). Older lines relaid by
+        // server versions lack it; the send/block affordances simply stay
+        // quiet for them.
+        seatId: j['seatId'] as String? ?? '',
+      );
+
+  final String from;
+  final String text;
+  final String? gif;
+  final VoiceNote? note;
+  final LudoColor? color;
+  final int? at;
+
+  /// The author's seat id when the server broadcasts it ('' on lines from
+  /// older server versions). Friends actions address this, never the name.
+  final String seatId;
+
+  /// '14:32' — fresh enough to matter in a tablet session, and cheap: no
+  /// date math, just the wall clock at arrival.
+  String get clock {
+    final t = DateTime.fromMillisecondsSinceEpoch(at ?? 0);
+    final h = t.hour.toString().padLeft(2, '0');
+    final m = t.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+}
 
 /// One lobby seat as reported by the server.
 class LobbySeat {
@@ -28,6 +130,7 @@ class LobbySeat {
     this.seatId = '',
     this.status = SeatStatus.connected,
     this.live = true,
+    this.misses = 0,
   });
 
   /// Builds from the server's `seats` entry, and from the lighter `lobby`
@@ -43,6 +146,7 @@ class LobbySeat {
       seatId: j['seatId'] as String? ?? '',
       status: status,
       live: j['connected'] as bool? ?? true,
+      misses: (j['misses'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -60,6 +164,11 @@ class LobbySeat {
   /// otherwise. Defaults to true so a roster that omits the field never
   /// accuses an innocent player of being away.
   final bool live;
+
+  /// Consecutive turn-timer misses the seat has let lapse while everyone
+  /// watched. Zero for seats that answer their clock; five means the server
+  /// dropped them. Zero on any roster a pre-timer server sends.
+  final int misses;
 
   /// Still in the game (playing themselves, or having handed the seat to the
   /// table) as opposed to having left, whose pieces sit untouched.
@@ -157,7 +266,10 @@ class DefaultNames {
     final base = generate(salt: hash);
     // Four base-32 characters from the hash: short enough to read aloud, wide
     // enough that collisions are vanishingly rare.
-    final tag = (hash % 0x10000).toRadixString(32).toUpperCase().padLeft(4, '0');
+    final tag = (hash % 0x10000)
+        .toRadixString(32)
+        .toUpperCase()
+        .padLeft(4, '0');
     return '$base $tag';
   }
 }
@@ -259,7 +371,9 @@ class OnlineClient extends ChangeNotifier {
     required this.name,
     this.gameType = 'ludo',
     this.quickMatch = false,
+    this.capacity = 4,
     WebSocketChannel Function(Uri uri)? channelFactory,
+    this._voiceBackend,
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
   /// e.g. 'ws://localhost:8080/ws'
@@ -391,6 +505,12 @@ class OnlineClient extends ChangeNotifier {
   bool started = false;
   final lobbySeats = <LobbySeat>[];
 
+  /// Table size of the room: requested by the host at creation (this client
+  /// when creating, absent joiners default), then replaced by the room's
+  /// real value on every lobby feed — so a joiner who asked for nothing
+  /// still displays the host's chosen "(n/size)".
+  int capacity = 4;
+
   /// Latest authoritative snapshot, decoded. Null until the game starts.
   LudoState? state;
 
@@ -399,13 +519,14 @@ class OnlineClient extends ChangeNotifier {
   int _seenRollSeq = 0;
 
   /// Fire-and-forget chat lines: (from, text).
-  final chat = <({String from, String text})>[];
+  final chat = <ChatLine>[];
 
-  /// Set when the server announces a walk-out, cleared by [clearLeftNotice]
-  /// once the screen has shown it. Kept on the client rather than folded into
-  /// the seat list because a toast is a one-time event while the seat list is
-  /// a standing fact — both are needed: the toast explains the moment, the
-  /// list keeps the corner greyed out afterwards.
+  /// Set when the server announces a seat event worth a toast — a walk-out,
+  /// a timed-out turn — and cleared by [clearLeftNotice] once the screen has
+  /// shown it. Kept on the client rather than folded into the seat list
+  /// because a toast is a one-time event while the seat list is a standing
+  /// fact — both are needed: the toast explains the moment, the list keeps
+  /// the corner greyed out afterwards.
   String? leftNotice;
 
   void clearLeftNotice() {
@@ -413,6 +534,25 @@ class OnlineClient extends ChangeNotifier {
     leftNotice = null;
     notifyListeners();
   }
+
+  /// The evicted seat's end card has been shown: consume the flag so later
+  /// notifications (transport chatter, other notices) cannot show it twice.
+  /// A fresh `joined` resets it, like [leftNotice]'s cache-cycle here.
+  void clearMySeatEviction() => _mySeatEvicted = false;
+
+  /// Milliseconds the on-turn seat has left to act, measured when the latest
+  /// state broadcast was built. Null on any snapshot without a running
+  /// timer (pre-timer servers, no game, nobody at the table). The screens
+  /// count down from this locally instead of parsing server wall-clock.
+  int? turnMs;
+
+  /// Consecutive turn-timer misses per seat id, from the state broadcast.
+  /// Empty when nothing has been missed — a table where everyone answers
+  /// their clock carries no extra chatter.
+  final seatMisses = <String, int>{};
+
+  /// Miss count for [seatId] — zero until the server says otherwise.
+  int missesOf(String seatId) => seatMisses[seatId] ?? 0;
 
   /// Our own seat's autoplay state, as the table sees it. Drives the toggle
   /// so it can never disagree with the server, and survives a reconnect
@@ -543,6 +683,10 @@ class OnlineClient extends ChangeNotifier {
         'game': gameType,
         if (quickMatch && (_joinCode == null || _joinCode!.isEmpty))
           'match': true,
+        // Room creators (and quick match, which creates too) name the table
+        // size they want the room to close at. Join-with-code omits it: the
+        // room already exists and joiners inherit its size.
+        if (_joinCode == null || _joinCode!.isEmpty) 'players': capacity,
         if (_joinCode != null && _joinCode!.isNotEmpty) 'code': _joinCode,
         if (preferredColor != null) 'color': preferredColor.name,
         if (_spectating) 'spectate': true,
@@ -615,8 +759,30 @@ class OnlineClient extends ChangeNotifier {
   /// tests can shrink it rather than spend 22 seconds proving it gives up.
   static Duration coldStartBaseDelay = const Duration(milliseconds: 400);
 
-  void _onClosed() {
-    if (_userClosed) {
+  /// Re-opens the socket from an [OnlineStatus.error] surface, after the
+  /// reconnect budget ran out. A live or connecting client has its own
+  /// flow; a spent one sat ("Connection lost — could not reach the
+  /// server") without a way back in. The room code rides along exactly
+  /// like the reconnect path does, so the rejoin lands on the table again
+  /// — finished mid-victory or not, the end screen greets what it finds.
+  void retry() {
+    assert(
+      status == OnlineStatus.error || status == OnlineStatus.idle,
+      'retry is for a spent connection, not for interrupting a live one',
+    );
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempts = 0;
+    _coldStartTimer?.cancel();
+    _coldStartAttempts = 0;
+    waitingForColdStart = false;
+    status = OnlineStatus.connecting;
+    errorText = null;
+    notifyListeners();
+    _openAndHello();
+  }
+
+  void _onClosed() {    if (_userClosed) {
       status = OnlineStatus.idle;
       notifyListeners();
       return;
@@ -699,10 +865,16 @@ class OnlineClient extends ChangeNotifier {
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
         myColor = colorName == null ? null : LudoColor.values.byName(colorName);
+        // A (re)join is a clean slate: whatever eviction this client saw
+        // last belongs to the room we just left.
+        _mySeatEvicted = false;
         status = OnlineStatus.inLobby;
         _reconnectAttempts = 0; // we're back on the wire
       case 'lobby':
         started = msg['started'] as bool? ?? false;
+        // The room's table size, broadcast since creation. The host's
+        // "waiting (n/size)" and the guest's agree — one value, one room.
+        capacity = msg['capacity'] as int? ?? capacity;
         lobbySeats
           ..clear()
           ..addAll([
@@ -714,6 +886,27 @@ class OnlineClient extends ChangeNotifier {
           ..addAll([
             for (final n in (msg['spectators'] as List? ?? [])) n as String,
           ]);
+        // Where the voice mesh follows the roster — but only for a join in
+        // progress: pre-arming peers without a mic grants nothing and would
+        // burn an RTCPeerConnection per seat for players who never speak.
+        final v = _voice;
+        if (v != null && v.enabled) {
+          v.updateSeats(lobbySeats.map((s) => s.seatId).toSet(), seatId);
+        }
+      case 'voice':
+        // Signalling for a session I joined; a client that never enabled
+        // voice drops these (its mic is off, an unanswered offer is
+        // exactly what the sender's ICE lifecycle already tolerates).
+        final v = _voice;
+        if (v != null) {
+          unawaited(
+            v.onSignal((
+              k: msg['k'] as String,
+              from: msg['from'] as String,
+              s: msg['s'] as String,
+            )),
+          );
+        }
       case 'seats':
         // The per-seat status feed: autoplay badges, disconnected links, and
         // the corners that are now empty because someone walked out. It
@@ -725,11 +918,52 @@ class OnlineClient extends ChangeNotifier {
             for (final s in (msg['seats'] as List? ?? []))
               LobbySeat.fromJson((s as Map).cast<String, dynamic>()),
           ]);
+        // The corner dots read their strikes from here as well. The last
+        // seats frame before an eviction carries the fifth strike, and no
+        // state frame ever follows it for the removed seat — without this
+        // the dots show one strike fewer than the strip's miss chip.
+        seatMisses
+          ..clear()
+          ..addAll({
+            for (final s in (msg['seats'] as List? ?? []))
+              if ((s as Map)['misses'] is num)
+                (s['seatId'] as String): (s['misses'] as num).toInt(),
+          });
         onSeats?.call();
       case 'left':
         // Worth a line of its own: without it a departing player's pieces
-        // just stop moving and the reason stays invisible.
-        leftNotice = '${msg['name'] as String? ?? 'A player'} left the game';
+        // just stop moving and the reason stays invisible. A 'timeout'
+        // reason is the turn timer's five-missed-turns eviction, and its
+        // wording tells the table what actually happened to the seat. The
+        // seat id rides along (older servers omit it) so a client can know
+        // when the removal happened to ITS OWN seat — the one case where
+        // staying on the board is staring at a game that dropped you.
+        final reason = msg['reason'] as String?;
+        final gone = msg['name'] as String? ?? 'A player';
+        final goneSeat = msg['seatId'] as String? ?? '';
+        final mine = goneSeat.isNotEmpty && goneSeat == seatId;
+        _mySeatEvicted = mine && reason == 'timeout';
+        leftNotice = reason == 'timeout'
+            ? (mine
+                  ? 'You were removed — five turns missed'
+                  : '$gone was removed — five turns missed')
+            : (mine ? 'You left the game' : '$gone left the game');
+        onLeft?.call(leftNotice!);
+      case 'turnMissed':
+        // One turn just burned because the seat on turn did not answer the
+        // clock. The toast is for the seat that burned it — "you missed a
+        // turn (2 of 5)" is the nudge that makes a slow phone open the
+        // board by the next beat — everyone else watches the strikes
+        // accumulate on that seat's corner dots instead of a broadcast
+        // interrupting their turn (a toast every silent turn of another
+        // player is an alarm that belongs to them, not the table).
+        final seat = msg['seatId'] as String? ?? '';
+        final name = msg['name'] as String? ?? 'A player';
+        final count = (msg['count'] as num?)?.toInt() ?? 0;
+        if (seat.isNotEmpty && seat != seatId) return;
+        leftNotice = seat.isEmpty
+            ? '$name missed a turn ($count of $maxTurnMisses)'
+            : 'You missed a turn ($count of $maxTurnMisses)';
         onLeft?.call(leftNotice!);
       case 'state':
         if ((msg['game'] as String?) == 'snakes') {
@@ -755,10 +989,28 @@ class OnlineClient extends ChangeNotifier {
           onState?.call(state, incoming);
           state = incoming;
         }
+        // Turn-clock teardown: remaining milliseconds for the countdown
+        // chip, and the standing per-seat miss counts the strip displays.
+        turnMs = (msg['turnMs'] as num?)?.toInt();
+        seatMisses.clear();
+        final misses = msg['misses'];
+        if (misses is Map) {
+          for (final e in misses.entries) {
+            if (e.value is num) {
+              seatMisses[e.key as String] = (e.value as num).toInt();
+            }
+          }
+        }
         started = true;
         status = OnlineStatus.playing;
+      case 'turnTimer':
+        // The freshly armed countdown for the seat on turn (arming happens
+        // after a state change, so its own state snapshot cannot carry it).
+        // Re-baselining the client chip here is the point — the deadline is
+        // the seat's full window from right now.
+        turnMs = (msg['turnMs'] as num?)?.toInt();
       case 'chat':
-        final line = (from: msg['from'] as String, text: msg['text'] as String);
+        final line = ChatLine.fromJson(msg, serverUrl: serverUrl);
         chat.add(line);
         // Unread only accumulates while the chat surface is closed. A message
         // that arrives while the reader is looking at it is read by
@@ -777,6 +1029,7 @@ class OnlineClient extends ChangeNotifier {
         errorText = 'The room has closed.';
         status = OnlineStatus.error;
         _userClosed = true;
+        _teardownVoice();
         _channel?.sink.close();
         _channel = null;
       case 'error':
@@ -800,10 +1053,19 @@ class OnlineClient extends ChangeNotifier {
         // A definitive rejection (bad code, gone room) — stop retrying.
         _reconnectTimer?.cancel();
         _userClosed = true;
+        _teardownVoice();
         _channel?.sink.close();
         _channel = null;
     }
     notifyListeners();
+  }
+
+  /// The room is gone — there is no seat to hand a hangup to, so peers
+  /// are closed without farewell and the mic is released. The joined
+  /// state clears outright; the voice button flips to off.
+  void _teardownVoice() {
+    final v = _voice;
+    if (v != null) unawaited(v.abandoned());
   }
 
   /// Hooks used by the session adapter (sounds, animation replay).
@@ -813,7 +1075,7 @@ class OnlineClient extends ChangeNotifier {
 
   /// Fired for each incoming chat line, with its sender and text, so the
   /// screen can raise a notification and repaint the unread dot.
-  void Function(({String from, String text}) message)? onChat;
+  void Function(ChatLine message)? onChat;
 
   /// Whether the chat surface is on screen. The sheet sets this while it is
   /// open; the client only needs it to decide whether an arriving line is
@@ -827,7 +1089,75 @@ class OnlineClient extends ChangeNotifier {
   /// Called for each line that arrives while the chat is closed, so the view
   /// can play the notification. Separate from [onChat] on purpose: [onChat]
   /// fires for every line, and only the unread ones should make a noise.
-  void Function(({String from, String text}) message)? onMessageArrived;
+  void Function(ChatLine message)? onMessageArrived;
+
+  // ------------------------------------------------------- voice chat
+  //
+  // One VoiceRoom per client, created on first use. It outlives reconnects
+  // (the P2P mesh carries on while the socket re-attaches) and dies with
+  // the room session, not the widget tree — a board screen swap must not
+  // end a call someone is still talking in.
+
+  final VoiceBackend? _voiceBackend;
+  VoiceRoom? _voice;
+
+  VoiceBackend get _effectiveVoiceBackend =>
+      _voiceBackend ?? FlutterVoiceBackend();
+
+  bool get voiceJoined => _voice?.enabled ?? false;
+  bool get voiceMuted => _voice?.muted ?? false;
+
+  /// Seat ids believed to be speaking right now (self included when this
+  /// voice is unmuted and the mic hears speech). Backs the speaking
+  /// indicator; repaints ride the [VoiceRoom]'s change hook.
+  Set<String> get voiceSpeaking => _voice?.speaking ?? const {};
+
+  /// The speaking seats as display names for the indicator: this seat is
+  /// "You", the rest resolve through the lobby roster, falling back to
+  /// the raw seat id when the roster has never heard of them.
+  List<String> get voiceSpeakingNames {
+    final names = {for (final s in lobbySeats) s.seatId: s.name};
+    return [
+      for (final seat in voiceSpeaking)
+        seat == seatId ? 'You' : (names[seat] ?? seat),
+    ];
+  }
+
+  /// Seat ids whose audio peers are mounted right now.
+  List<String> get voicePeers => _voice?.peers ?? const [];
+
+  /// Whether the local mic is captured. Permission lives behind this:
+  /// nothing (no audio element, no peer) is created before the user asks
+  /// for voice, so the browser prompt only ever appears deliberately.
+  VoiceRoom get voice => _voice ??= VoiceRoom(
+    backend: _effectiveVoiceBackend,
+    sendSignal: _sendVoiceSignal,
+    onChanged: notifyListeners,
+  );
+
+  /// Joins the table voice. False when the mic was refused — the caller
+  /// surfaces that rather than flipping the button into a silent state.
+  Future<bool> joinVoice() async {
+    if (_spectating) return false;
+    // The seat roster must be known before offers are elected; feeding it
+    // here ensures a join during a lagging lobby feed still meshes.
+    voice.updateSeats(
+      lobbySeats.map((s) => s.seatId).where((id) => id.isNotEmpty).toSet(),
+      seatId,
+    );
+    return voice.enable();
+  }
+
+  /// Leaves the table voice and tells every peer so their side drops fast.
+  Future<void> leaveVoice() => voice.disable();
+
+  /// Local mute — toggles the track, sends nothing.
+  void setVoiceMuted(bool muted) => voice.setMuted(muted);
+
+  void _sendVoiceSignal(String k, String to, String s) {
+    if (_spectating) return;
+    _send({'type': 'voice', 'k': k, 'to': to, 's': s});
+  }
 
   /// Show the chat. Reading and opening are the same act, so opening clears
   /// the unread count immediately rather than waiting for the sheet to close.
@@ -843,6 +1173,18 @@ class OnlineClient extends ChangeNotifier {
   void Function()? onSeats;
   void Function(String notice)? onLeft;
 
+  /// True the moment the server walked *this* seat out of the table — five
+  /// consecutive turns missed on the turn timer. The server says so with the
+  /// seat id riding the `left` broadcast, because "Ashutosh was removed"
+  /// toward a table of two leaves one player knowing it is about them and
+  /// the other arguing: the game screens read this to finish the exit the
+  /// server started (a toast, then back to the lobby) instead of leaving
+  /// the removed seat staring at a table it is no longer part of — which is
+  /// exactly what looked like a frozen game when the other player already
+  /// held their win.
+  bool get mySeatEvicted => _mySeatEvicted;
+  bool _mySeatEvicted = false;
+
   // ------------------------------------------------------------ intents
 
   void sendStart() => _spectating ? _noop() : _send({'type': 'start'});
@@ -855,6 +1197,98 @@ class OnlineClient extends ChangeNotifier {
   void sendSnakesMove() => _spectating ? _noop() : _send({'type': 'move'});
   void sendChat(String text) =>
       _spectating ? _noop() : _send({'type': 'chat', 'text': text});
+
+  /// Sends a GIF chat line: the GIF's https URL, optionally with a caption
+  /// (both go over the same 'chat' intent).
+  void sendGif(String url, {String caption = ''}) => _spectating
+      ? _noop()
+      : _send({'type': 'chat', 'text': caption.trim(), 'gif': url});
+
+  /// Uploads a recorded voice note to the server and announces it as a
+  /// chat line. Two steps on purpose: the recording's bytes travel by
+  /// HTTP (the socket only carries small JSON), and the announcement is a
+  /// regular chat broadcast so unread counts, chimes and history all
+  /// treat it like any other line. False when there is no room, the
+  /// upload was refused, or the network had other plans — the caller
+  /// says so instead of the composer silently swallowing a recording.
+  Future<bool> sendVoiceNote({
+    required List<int> bytes,
+    required String mime,
+    required int durMs,
+    http.Client? httpClient,
+  }) async {
+    final code = roomCode;
+    if (code == null || _spectating) return false;
+    // An id the store's policy will accept: [a-z0-9-], unique enough that
+    // two notes recorded in the same millisecond stay distinct.
+    final id =
+        '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+        '${Random().nextInt(1 << 24).toRadixString(36)}';
+    final client = httpClient ?? http.Client();
+    try {
+      final res = await client.post(
+        _httpOriginOf(
+          serverUrl,
+          '/media/voice',
+        ).replace(queryParameters: {'room': code, 'id': id}),
+        headers: {'content-type': mime, 'x-voice-duration': '$durMs'},
+        body: bytes,
+      );
+      if (res.statusCode != 200) return false;
+      _send({'type': 'chat', 'text': '', 'note': id});
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (httpClient == null) client.close();
+    }
+  }
+
+  /// Uploads a keyboard-inserted GIF (Gboard, Samsung Keyboard — the
+  /// IME's `commitContent` bytes) and announces it as a normal GIF chat
+  /// line. Same two-step shape as [sendVoiceNote]: the bytes travel by
+  /// HTTP because the socket only carries small JSON, and the
+  /// announcement is an ordinary `'gif'` line so every client renders it
+  /// through the same bubble it already knows. False when there is no
+  /// room, the upload was refused, or the network had other plans — the
+  /// composer owes the player a spoken failure, not silence.
+  Future<bool> sendKeyboardGif({
+    required List<int> bytes,
+    required String mime,
+    String caption = '',
+    http.Client? httpClient,
+  }) async {
+    final code = roomCode;
+    if (code == null || _spectating) return false;
+    // An id the store's policy will accept: [a-z0-9-], unique enough that
+    // two pastes in the same millisecond stay distinct.
+    final id =
+        '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+        '${Random().nextInt(1 << 24).toRadixString(36)}';
+    final client = httpClient ?? http.Client();
+    try {
+      final res = await client.post(
+        _httpOriginOf(
+          serverUrl,
+          '/media/image',
+        ).replace(queryParameters: {'room': code, 'id': id}),
+        headers: {'content-type': mime},
+        body: bytes,
+      );
+      if (res.statusCode != 200) return false;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final urlPath = body['url'] as String?;
+      if (urlPath == null) return false;
+      // The broadcast gate requires an absolute https URL, and the
+      // relative serve path composes to one same-origin as this client.
+      sendGif(_httpOriginOf(serverUrl, urlPath).toString(), caption: caption);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (httpClient == null) client.close();
+    }
+  }
 
   /// Hand the seat to the table. The decision lives on the server, so the
   /// table keeps playing our turn when this tab is closed, the phone is
@@ -883,11 +1317,17 @@ class OnlineClient extends ChangeNotifier {
     _coldStartTimer?.cancel();
     waitingForColdStart = false;
     _reconnectTimer = null;
+    // A deliberate leave: tell the peers we are going, then drop them —
+    // the receivers stop playing instead of draining silence for a while.
+    _teardownVoice();
     // Reflect the leave immediately so the UI doesn't flash a spinner
     // while the socket cleanup below settles.
     status = OnlineStatus.idle;
     notifyListeners();
-    await _sub?.cancel();
+    // Cancel rides detached: detaching the reader is synchronous-local
+    // hygiene, and its future's completion is event-loop luggage the screen
+    // (and anything awaiting a deliberate leave) should never hang on.
+    unawaited(_sub?.cancel());
     _sub = null;
     await _channel?.sink.close();
     _channel = null;
@@ -899,6 +1339,7 @@ class OnlineClient extends ChangeNotifier {
     _reconnectTimer?.cancel();
     _coldStartTimer?.cancel();
     _reconnectTimer = null;
+    _teardownVoice();
     _sub?.cancel();
     _channel?.sink.close();
     super.dispose();

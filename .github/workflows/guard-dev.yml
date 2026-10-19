@@ -1,0 +1,68 @@
+name: Guard dev
+
+# ci.yml deliberately runs its full workflow only on `main` (both workflows'
+# comments tell the metered-runner-minutes story), so a push to `dev` would go
+# unguarded by it. This is the minimal complement: per CONVENTIONS.md, the head
+# of `dev` must a) be a merge commit — it arrived through a pull request — and
+# b) never be force-pushed or deleted.
+#
+# The first version counted `head_commit.parents` straight from the push event
+# payload and never started a runner. In practice every single merge push this
+# repo has produced arrived with `head_commit` absent (runs 39044836773
+# through 39064557560 all failed on a legitimate PR merge), so the
+# payload-only parent count is proven unreliable here. Parents are now counted
+# from git itself: the shallow 2-commit checkout costs a few seconds of
+# runner, and the check is worth it.
+on:
+  push:
+    branches: [dev]
+
+permissions: {}
+
+jobs:
+  guard-dev:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # one commit is enough to see its parents
+          persist-credentials: false
+
+      - name: Reject non-PR, forced and deleting pushes
+        run: |
+          set -euo pipefail
+
+          # A deletion carries no tree to check out (the job may or may not
+          # even start for one); if it does, refuse before anything else.
+          if [ "$(jq -r '.deleted // false' "$GITHUB_EVENT_PATH")" = "true" ]; then
+            echo "::error::Deleting dev is forbidden."
+            exit 1
+          fi
+
+          forced=$(jq -r '.forced // false' "$GITHUB_EVENT_PATH")
+          if [ "$forced" = "true" ]; then
+            echo "::error::Force-push to dev is forbidden (rewrite of shared history)."
+            exit 1
+          fi
+
+          # `git rev-list --parents -n 1` prints "<sha> <parent> [<parent>]":
+          # the parent count is the word count minus the sha itself. A merge
+          # commit has 2 or more; a direct push or a squash merge has none
+          # — exactly like the old payload check wanted.
+          words=$(git rev-list --parents -n 1 "$GITHUB_SHA" | awk '{print NF}')
+          parents=$((words - 1))
+          if [ "$parents" -lt 2 ]; then
+            echo "::error::Direct push to dev is forbidden."
+            echo "::error::Push your task branch (from dev) and open a pull request into dev."
+            echo "::error::(parents of $GITHUB_SHA = $parents; a PR merge has 2 or more)"
+            exit 1
+          fi
+
+          echo "dev head is a merge commit and not a force-push — OK"
+
+# Several PR merges into dev in a minute produce several pushes; only the
+# newest one is worth a runner. Without this each check queues behind the
+# last instead of replacing it.
+concurrency:
+  group: guard-dev-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true

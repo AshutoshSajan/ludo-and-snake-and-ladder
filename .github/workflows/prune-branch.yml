@@ -1,0 +1,70 @@
+name: Prune merged branches
+
+# Merged task branches delete themselves; per CONVENTIONS.md a pile-up of
+# merged `origin/feat/*` refs is noise, not an archive.
+#
+# Runs on the "closed" PR event. GitHub reads the workflow file from the
+# *base* branch — so this goes live for PRs into `dev` as soon as the file
+# lands on `dev`, and for PRs into `main` at the next release promotion that
+# brings it forward. (It moved here from ci.yml, whose pull_request trigger is
+# deliberately scoped to `main` for metered-runner reasons — a job there could
+# never prune dev PRs without widening that trigger and billing every
+# integration PR for a full suite.)
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [closed]
+
+permissions:
+  contents: write # delete the merged branch
+
+concurrency:
+  group: prune-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  prune-branch:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # every branch tip is needed to prove the merge landed
+
+      - name: Delete the merged head branch
+        run: |
+          set -euo pipefail
+          branch="${{ github.event.pull_request.head.ref }}"
+          base="${{ github.base_ref }}"
+
+          # A trunk is never deleted, no matter how a PR involving it closes.
+          case "$branch" in
+            main | dev)
+              echo "head branch '$branch' is a trunk — keeping it"
+              exit 0
+              ;;
+          esac
+
+          # Only this repo's task-branch prefixes are touched; anything else
+          # (release-prep bot oddities, shared refs) is somebody else's call.
+          case "$branch" in
+            feat/* | fix/* | chore/* | ci/* | docs/* | perf/* | refactor/* | test/* | release/*) ;;
+            dependabot/*) ;; # bot bumps are task work too — Dependabot PRs merge into dev
+            *)
+              echo "'$branch' does not match a known prefix — leaving it alone"
+              exit 0
+              ;;
+          esac
+
+          # Prove the merge actually landed before deleting: a branch holding
+          # commits that did not reach the base is kept (this also catches a
+          # force-push after review — the review would be reviewing air).
+          if ! git merge-base --is-ancestor "origin/$branch" "origin/$base"; then
+            echo "::warning::origin/$branch has commits that are not in origin/$base — not deleting"
+            exit 0
+          fi
+
+          git push origin --delete "$branch"
+          echo "deleted $branch (merged into $base)" | tee -a "$GITHUB_STEP_SUMMARY"

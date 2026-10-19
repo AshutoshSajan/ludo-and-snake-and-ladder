@@ -14,8 +14,10 @@
 # only real backstop.
 #
 # Usage:
-#   tool/ci.sh            analyze + test          (~30s)
-#   tool/ci.sh --web      also build web release  (~90s)
+#   tool/ci.sh            analyze + test + release web build   (~2 min)
+#   tool/ci.sh --web      the same — the flag predates the web step
+#                         moving into the default run, kept so old
+#                         invocations and muscle memory keep working
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -29,11 +31,13 @@ flutter analyze --fatal-infos
 step "flutter test"
 flutter test
 
-if [ "${1:-}" = "--web" ]; then
-  step "flutter build web --release"
-  # Netlify runs this on every main deploy, so it is the one check that would
-  # otherwise have no local coverage at all.
-  flutter build web --release
-fi
+step "flutter build web --release"
+# The web-only half of the app that analyze + test cannot see: under a
+# conditional export the analyzer resolves only the native branch, so a web
+# file can hold a missing symbol that no test ever loads (this shipped once —
+# voice_speaking_web reached dev with an unimported probe and only failed
+# under `flutter run -d chrome`). The release build is the check that catches
+# it on every push, locally, for free.
+flutter build web --release
 
 printf '\n\033[32mAll local checks passed.\033[0m\n'

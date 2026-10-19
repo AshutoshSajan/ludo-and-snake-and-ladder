@@ -1,12 +1,23 @@
 #!/bin/sh
-# Refresh CHANGELOG.md locally after every merge.
+# CHECK CHANGELOG.md after every merge: report, never write.
 #
 # CI owns the file: the release-prep job regenerates it on a push to main and
-# opens the bump PR, and `tool/changelog.sh --check` guards it from a tag. That
-# leaves the inner branches (dev/staging) with a changelog that only catches up
-# when main moves — this hook is the local catch-up. It does NOT commit: the
-# diff is left in the working tree to review and fold into your next commit, so
-# there is still exactly one writer of record (CI) and no bot/human race.
+# opens the bump PR, and `tool/changelog.sh --check` guards it from a tag. The
+# committed copy on inner branches (dev/staging) only catches up when main
+# moves — which is why the auto-regeneration this hook once did had to go: the
+# rewrite never agreed with the committed file on dev, so EVERY `git pull`
+# landed a modified CHANGELOG.md in the working tree (the user-visible bug:
+# a "new" changelog on every pull, tree never clean). `--check` rewrites
+# nothing — the hook says whether the local file is behind, and regeneration
+# stays a deliberate action. One writer of record (CI), no bot/human race, no
+# dirty tree.
+
+# Branch hygiene: merged task branches are deleted on the remote by the
+# prune-branch workflow (CONVENTIONS.md documents it); pruning our own
+# remote-tracking refs keeps the local `origin/feat/*` view from ghosting.
+# Local branches are never deleted by this hook — `git branch -d` stays a
+# human's call.
+git fetch --prune origin >/dev/null 2>&1 || true
 
 if ! command -v git-cliff >/dev/null 2>&1; then
   echo "⚠️  git-cliff not installed — skipping local CHANGELOG update." >&2
@@ -14,17 +25,16 @@ if ! command -v git-cliff >/dev/null 2>&1; then
   exit 0
 fi
 
-# tool/changelog.sh, not `git cliff -o` directly: it is the one generator
-# (cliff.toml holds the rules) and it refuses to emit a file that would drop a
-# released section, which is what a stale local branch would otherwise do.
-if tool/changelog.sh >/dev/null 2>&1; then
-  if ! git diff --quiet -- CHANGELOG.md; then
-    echo "📝 CHANGELOG.md regenerated locally — review it, commit it with your change."
-  fi
+# tool/changelog.sh --check rewrites nothing (its whole run happens in mktemp
+# files); a failure here means the committed CHANGELOG.md is behind this
+# history — which is normal on dev, where CI catches the file up only when
+# main moves. Tell the developer the deliberate command instead of dirtying
+# the tree they just pulled.
+if tool/changelog.sh --check >/dev/null 2>&1; then
+  : # CHANGELOG.md matches this history — nothing to report.
 else
-  echo "⚠️  changelog not regenerated (git-cliff missing, no tags, or the guard" >&2
-  echo "     refused because this branch lacks commits its base has)." >&2
-  echo "     run tool/changelog.sh by hand to see why." >&2
+  echo "ℹ️  CHANGELOG.md on this branch is behind its history (CI regenerates the"
+  echo "   file when main moves). To refresh it locally:  tool/changelog.sh"
 fi
 
 exit 0

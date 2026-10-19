@@ -85,11 +85,12 @@ void main() {
 
     test('onChat carries the sender and text for the notification', () {
       final c = client();
-      ({String from, String text})? seen;
+      ChatLine? seen;
       c.onChat = (m) => seen = m;
       deliver(c, 'Ana', 'roll a six');
       expect(seen?.from, 'Ana');
       expect(seen?.text, 'roll a six');
+      expect(seen?.gif, isNull, reason: 'a plain message carries no GIF');
     });
   });
 }

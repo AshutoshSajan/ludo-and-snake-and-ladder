@@ -1,12 +1,24 @@
-import '../ui/page_app_bar.dart';
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+
+import '../ui/page_app_bar.dart';
+import '../ui/shared/chat_line_view.dart';
+import '../ui/shared/gif_picker_sheet.dart';
+import '../ui/shared/keyboard_content.dart';
+import '../ui/shared/note_composer.dart';
+import '../ui/shared/player_actions_sheet.dart';
+import '../ui/shared/voice_button.dart';
 
 import '../engine/ludo/ludo_models.dart';
+import '../services/friend_client.dart';
 import '../services/online_client.dart';
 import '../services/storage_service.dart';
 import '../ui/ludo/ludo_view.dart';
 import '../ui/snakes/online_snakes_view.dart';
+import 'friends_screen.dart';
 import '../ui/theme.dart';
 
 /// Online lobby: connect to an authoritative Ludo server, create or join a
@@ -15,7 +27,14 @@ import '../ui/theme.dart';
 /// The server owns the rules and the dice; this screen only renders what the
 /// server reports (`OnlineClient`) and forwards the player's intents.
 class OnlineLobbyScreen extends StatefulWidget {
-  const OnlineLobbyScreen({super.key});
+  const OnlineLobbyScreen({super.key, this.startup});
+
+  /// Optional entry handoff from the friends feature: the inviter walks
+  /// in with a live [OnlineStartup.adoptedClient] (their room already
+  /// exists, the invite carries its code), the invitee walks in with a
+  /// [OnlineStartup.joinCode] and auto-joins. Null stays the plain
+  /// connect form.
+  final OnlineStartup? startup;
 
   /// The server the online screens target by default. Precedence:
   /// 1. `--dart-define=GAME_SERVER_URL=wss://host/ws` (build-time override,
@@ -69,17 +88,65 @@ class OnlineLobbyScreen extends StatefulWidget {
   State<OnlineLobbyScreen> createState() => _OnlineLobbyScreenState();
 }
 
+/// Startstate the friends feature hands the lobby: either a client that
+/// already opened a room (the inviter, whose invite referenced that
+/// room's code) or a room code to join (the invitee).
+class OnlineStartup {
+  const OnlineStartup({this.joinCode, this.adoptedClient});
+
+  /// The invitee path: join this room the moment identity is restored.
+  final String? joinCode;
+
+  /// The inviter path: this client is already connected (or connecting)
+  /// to a room; the lobby adopts it instead of showing the connect form.
+  final OnlineClient? adoptedClient;
+}
+
 class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   final _serverCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   final _chatCtrl = TextEditingController();
 
+  /// Whether the voice-note control currently owns the composer row —
+  /// the field, GIF and send step aside while the mic is live.
+  bool _chatRecording = false;
+
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
 
+  /// Pending friend requests, polled so the app bar's friends doorway can
+  /// wear a badge while the table sits waiting. One client per screen;
+  /// the poll is cadence, the badge repainted only when the count moves.
+  FriendClient? _friendClient;
+
+  /// The latest friends-tray snapshot from the lobby's 8s poll — the same
+  /// read that drives the badge also decides what each seat row offers
+  /// (add / sent / friends / accept).
+  FriendState? _friendState;
+
+  /// The seat id a friend action is in flight for, so one slow link
+  /// cannot fire a request twice.
+  String? _workingSeat;
+
+  /// The last rendered relationship picture — polled state only re-renders
+  /// the seats when it changes.
+  Set<String>? _stateSignature;
+
+  /// The server URL [_friendClient] was built for — the lobby can move
+  /// (a custom server typed in, a route-carried deep link), and a tray
+  /// polled on the wrong origin would badge requests that live elsewhere.
+  String _friendUrl = '';
+  Timer? _friendsPoll;
+  int _incomingRequests = 0;
+
   /// Game the host picks when creating a room; joiners inherit the room's.
   String _gameType = 'ludo';
+
+  /// Table size the host asks a created room to close at. Join-with-code
+  /// ignores it — joiners inherit the room's size — and the default keeps
+  /// today's open four-seat table.
+  int _players = 4;
 
   /// The persisted online identity: a stable player id plus a display name.
   ///
@@ -95,7 +162,59 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   void initState() {
     super.initState();
     _serverCtrl.text = OnlineLobbyScreen.defaultServerUrl();
+    // The inviter's handoff: an already-live client is adopted before
+    // the first build, so the lobby panel draws with it from frame one.
+    final adopted = widget.startup?.adoptedClient;
+    if (adopted != null) {
+      adopted.addListener(() => setState(() {}));
+      _client = adopted;
+    }
     _restoreIdentity();
+    // The friends badge lives as long as the lobby does: 8s polls from
+    // the moment a client exists, immediate on return from Friends.
+    _friendsPoll = Timer.periodic(
+      const Duration(seconds: 8),
+      (_) => _pollTrays(),
+    );
+  }
+
+  Future<void> _pollTrays() async {
+    final client = _client;
+    if (client == null) return;
+    // Follow the room's own origin: the friend trays live on the same
+    // server the WS connects to, whatever the connect form holds now.
+    if (_friendClient == null || _friendUrl != client.serverUrl) {
+      _friendClient?.close();
+      _friendClient = FriendClient(serverUrl: client.serverUrl);
+      _friendUrl = client.serverUrl;
+    }
+    try {
+      final state = await _friendClient!.state(
+        seatId: client.seatId,
+        name: client.name,
+      );
+      if (!mounted) return;
+      if (state.incoming.length != _incomingRequests) {
+        setState(() => _incomingRequests = state.incoming.length);
+      }
+      // Rows re-render only when the relationship picture actually moved:
+      // friend ids, pending requests both ways — the badge count is a part
+      // of that but not the whole of it.
+      final signature = {
+        for (final f in state.friends) f.profile.seatId,
+        for (final r in state.incoming) '${r.id}:${r.seatId}',
+        for (final r in state.outgoing) '${r.id}:${r.seatId}',
+      };
+      if (_stateSignature == null || !setEquals(_stateSignature, signature)) {
+        setState(() {
+          _stateSignature = signature;
+          _friendState = state;
+        });
+      }
+    } on FriendException {
+      // A silent badge is a smaller failure than a lobby that nags; the
+      // friends screen reports its own errors once opened.
+    }
   }
 
   Future<void> _restoreIdentity() async {
@@ -117,6 +236,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       // Persist it now, so it is the same name next time even before they play.
       await StorageService().saveOnlineName(resolved);
     }
+    // The invitee's handoff: with identity in hand, join the invited room
+    // straight away — the code came from the accepted invite.
+    final joinCode = widget.startup?.joinCode;
+    if (!mounted || joinCode == null) return;
+    _codeCtrl.text = joinCode;
+    _connect(createRoom: false, codeOverride: joinCode);
   }
 
   /// A stable default name for [id], mixed from the id itself so it is
@@ -130,6 +255,90 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     return DefaultNames.unique(playerId: id);
   }
 
+  /// The player menu off a roster row: the sheet everything about that
+  /// seatmate routes through, addressed by seat id (names collide).
+  /// The one-tap room add. Direct request, outcome named in the snack:
+  /// when the reverse request is already pending the server accepts on
+  /// the spot and the row flips to Friends on the refresh that follows.
+  Future<void> _addFriend(LobbySeat seat) async {
+    final client = _client;
+    final friendClient = _friendClient;
+    if (client == null || friendClient == null || _workingSeat != null) {
+      return;
+    }
+    setState(() => _workingSeat = seat.seatId);
+    try {
+      final status = await friendClient.request(
+        seatId: client.seatId,
+        name: client.name,
+        target: seat.seatId,
+        targetName: seat.name,
+      );
+      _showSnack(
+        status == 'accepted'
+            ? 'You and ${seat.name} are now friends'
+            : 'Friend request sent to ${seat.name}',
+      );
+    } on FriendException catch (e) {
+      _showSnack(e.text);
+    } finally {
+      if (mounted) setState(() => _workingSeat = null);
+    }
+    // The row's chip follows the server, not a guess: one immediate poll
+    // repaints Sent/Friends without waiting for the 8s beat.
+    await _pollTrays();
+  }
+
+  /// Accepting a friend request straight from the row: the request id
+  /// rides the polled tray state the row was rendered from.
+  Future<void> _acceptFriendFromRow(LobbySeat seat) async {
+    final client = _client;
+    final friendClient = _friendClient;
+    final pending = [
+      for (final r in _friendState?.incoming ?? const <FriendRequestView>[])
+        if (r.seatId == seat.seatId) r,
+    ];
+    if (client == null ||
+        friendClient == null ||
+        pending.isEmpty ||
+        _workingSeat != null) {
+      return;
+    }
+    setState(() => _workingSeat = seat.seatId);
+    try {
+      final ok = await friendClient.respond(
+        seatId: client.seatId,
+        id: pending.first.id,
+        accept: true,
+      );
+      _showSnack(
+        ok
+            ? 'You and ${seat.name} are now friends'
+            : 'Could not accept — try again',
+      );
+    } on FriendException catch (e) {
+      _showSnack(e.text);
+    } finally {
+      if (mounted) setState(() => _workingSeat = null);
+    }
+    await _pollTrays();
+  }
+
+  void _playerMenu(LobbySeat seat) {
+    final client = _client;
+    if (client == null || seat.seatId == client.seatId) return;
+    unawaited(
+      PlayerActionsSheet.show(
+        context,
+        serverUrl: client.serverUrl,
+        mySeatId: client.seatId,
+        myName: client.name,
+        peerSeatId: seat.seatId,
+        peerName: seat.name,
+      ),
+    );
+  }
+
   /// Remembers the name so it is offered next time. The id is never changed
   /// here: changing it would orphan the career already recorded under it.
   Future<void> _rememberName(String name) async {
@@ -139,6 +348,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   @override
   void dispose() {
+    _friendsPoll?.cancel();
+    _friendClient?.close();
     _client?.dispose();
     _serverCtrl.dispose();
     _nameCtrl.dispose();
@@ -147,13 +358,13 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     super.dispose();
   }
 
-  void _connect({bool createRoom = true}) {
+  void _connect({bool createRoom = true, String? codeOverride}) {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
       _showSnack('Pick a display name first');
       return;
     }
-    final code = _codeCtrl.text.trim();
+    final code = codeOverride ?? _codeCtrl.text.trim();
     if (!createRoom && code.length != 4) {
       _showSnack(
         _spectate ? 'Enter a room code to watch' : 'Room codes are 4 letters',
@@ -168,6 +379,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       seatId: _seatId,
       name: name,
       gameType: _gameType,
+      // The table size rides only when this hello creates (or matches
+      // into) a room; a join submits a code and inherits the room's size
+      // on the first lobby feed.
+      capacity: createRoom ? _players : 4,
     )..addListener(() => setState(() {}));
     setState(() => _client = client);
     client.connect(
@@ -177,9 +392,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   }
 
   void _showSnack(String text) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+    // Same column discipline as the body: lobby toasts never stretch a
+    // full window edge, the way the room card and header already don't.
+    showSnackInColumn(context, text);
   }
 
   Future<void> _disconnect() async {
@@ -209,6 +424,39 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           : PageAppBar(
               title: 'Play Online',
               actions: [
+                // The friends doorway: a badge when a friend request is
+                // waiting answers "did anyone want to be my friend?"
+                // without leaving the table, and the friends screen it
+                // opens owns the full accept/decline tray.
+                if (client != null)
+                  IconButton(
+                    icon: Badge(
+                      isLabelVisible: _incomingRequests > 0,
+                      backgroundColor: AppColors.gold,
+                      label: Text(
+                        '$_incomingRequests',
+                        style: const TextStyle(
+                          color: AppColors.ink,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      child: const Icon(Icons.group_outlined),
+                    ),
+                    tooltip: _incomingRequests > 0
+                        ? 'Friends ($_incomingRequests request${_incomingRequests == 1 ? '' : 's'} waiting)'
+                        : 'Friends',
+                    onPressed: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const FriendsScreen(),
+                        ),
+                      );
+                      // The tray may have changed inside; refresh now
+                      // rather than waiting out the next tick.
+                      if (mounted) await _pollTrays();
+                    },
+                  ),
                 // No message icon here. Chat lives on the game board's app bar,
                 // next to sound and autoplay, which is where a player is once
                 // a room exists. A second chat icon in the lobby put the same
@@ -238,26 +486,42 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           ),
         ),
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
+          child: switch (client) {
+            // Rule 11: the lobby and the join form are reading-width
+            // screens — they use the same column the header above does,
+            // so on a desktop window the room code card can no longer
+            // read wider than anything around it. The board branches
+            // stay full-bleed: a game board wants every pixel.
+            null => ContentColumn(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: switch (client) {
-                  null => _connectForm(),
-                  OnlineClient c
-                      when c.gameType == 'snakes' && c.snakesState != null =>
-                    OnlineSnakesView(client: c, onLeave: _disconnectAndClose),
-                  OnlineClient c when c.state != null => LudoGameView(
-                    onlineClient: c,
-                    onlineSeatId: c.seatId,
-                    onOnlineLeave: _disconnectAndClose,
-                  ),
-                  OnlineClient _ => _lobby(client),
-                },
+                child: _connectForm(),
               ),
             ),
-          ),
+            OnlineClient c
+                when c.gameType == 'snakes' && c.snakesState != null =>
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: OnlineSnakesView(
+                  client: c,
+                  onLeave: _disconnectAndClose,
+                ),
+              ),
+            OnlineClient c when c.state != null => Padding(
+              padding: const EdgeInsets.all(16),
+              child: LudoGameView(
+                onlineClient: c,
+                onlineSeatId: c.seatId,
+                onOnlineLeave: _disconnectAndClose,
+              ),
+            ),
+            OnlineClient _ => ContentColumn(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _lobby(client),
+              ),
+            ),
+          },
         ),
       ),
     );
@@ -316,6 +580,28 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           ],
           selected: {_gameType},
           onSelectionChanged: (sel) => setState(() => _gameType = sel.first),
+        ),
+        const SizedBox(height: 16),
+        // The table size the room closes at — the same "chip row" the
+        // offline setup screen uses, for one shared visual language. It
+        // applies to the Create path: a join submits a code and inherits
+        // the room's size, so a two-seat room stays a two-seat room no
+        // matter who fills the second chair.
+        const Text(
+          'Players at the table',
+          style: TextStyle(color: AppColors.ivory, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (var n = 2; n <= 4; n++)
+              ChoiceChip(
+                label: Text('$n'),
+                selected: _players == n,
+                onSelected: (_) => setState(() => _players = n),
+              ),
+          ],
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
@@ -504,38 +790,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               ),
             ),
           ),
-        Card(
-          color: AppColors.feltLight,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                const Text(
-                  'Room code',
-                  style: TextStyle(color: AppColors.ivory, fontSize: 13),
-                ),
-                const SizedBox(height: 4),
-                SelectableText(
-                  client.roomCode ?? '····',
-                  style: const TextStyle(
-                    color: AppColors.gold,
-                    fontSize: 34,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 8,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Share it so friends can join',
-                  style: TextStyle(
-                    color: AppColors.ivory.withAlpha(150),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        RoomCodeCard(code: client.roomCode),
         const SizedBox(height: 12),
         if (client.errorText != null)
           Padding(
@@ -573,12 +828,34 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               ),
               _ => null,
             },
-            trailing: seat.color == client.myColor
+            trailing: seat.seatId == client.seatId
                 ? const Chip(
                     label: Text('You'),
                     visualDensity: VisualDensity.compact,
                   )
-                : null,
+                : seat.seatId.isEmpty
+                // A bare name-and-color row (the light lobby feed) cannot
+                // be addressed by id — no menu rather than a menu that
+                // fails at tap time.
+                ? null
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SeatFriendControl(
+                        state: _friendState,
+                        peerSeatId: seat.seatId,
+                        peerName: seat.name,
+                        busy: _workingSeat == seat.seatId,
+                        onAdd: () => _addFriend(seat),
+                        onAccept: () => _acceptFriendFromRow(seat),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.more_vert),
+                        tooltip: 'Friend, block or report',
+                        onPressed: () => _playerMenu(seat),
+                      ),
+                    ],
+                  ),
           ),
         for (final seat in gone)
           ListTile(
@@ -588,14 +865,24 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
               child: const Icon(Icons.person_off, size: 18),
             ),
             title: Text('${seat.name} left the room', style: muted),
+            trailing: seat.seatId != client.seatId
+                ? IconButton(
+                    icon: const Icon(Icons.more_vert, size: 20),
+                    tooltip: 'Friend, block or report',
+                    onPressed: () => _playerMenu(seat),
+                  )
+                : null,
           ),
-        if (seats.length < 4 && !spectating)
+        // Seating stops at the room's table size, so the wait line tracks
+        // the host's chosen size — (1/3) for a three-seat room, and gone
+        // entirely once the room is full.
+        if (seats.length < client.capacity && !spectating)
           ListTile(
             leading: const CircleAvatar(
               child: Icon(Icons.person_add_alt, size: 18),
             ),
             title: Text(
-              'Waiting for players… (${seats.length}/4)',
+              'Waiting for players… (${seats.length}/${client.capacity})',
               style: TextStyle(color: AppColors.ivory.withAlpha(150)),
             ),
           ),
@@ -629,37 +916,112 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         // screen is replaced by the board, which has its own chat control in
         // the app bar; the two are separate surfaces, not two views of one
         // panel, so the lobby keeps its inline list and never opens the sheet.
-        for (final line in client.chat.reversed.take(6))
+        // The last lines in replay order — the newest lands at the
+        // BOTTOM like every transcript does. (This used to feed
+        // reversed.take, which printed the newest line at the TOP and
+        // made the lobby read upside-down: older messages pushed newer
+        // ones down the screen.)
+        for (final line in recentChatLines(client.chat))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(
-              '${line.from}: ${line.text}',
-              style: TextStyle(
-                color: AppColors.ivory.withAlpha(200),
-                fontSize: 13,
-              ),
-            ),
+            child: ChatLineView(line: line, compact: true, myName: client.name),
           ),
+        const SizedBox(height: 16),
+        // Table voice: peer-to-peer audio through the room's WebSocket
+        // signalling. Spectators have no seat, so no mic.
         if (!spectating)
           Row(
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _chatCtrl,
-                  style: const TextStyle(color: AppColors.ivory),
-                  onSubmitted: (_) => _sendChat(client),
-                  decoration: InputDecoration(
-                    labelText: 'Say something…',
-                    labelStyle: const TextStyle(color: AppColors.ivory),
-                    enabledBorder: _border(AppColors.ivory.withAlpha(90)),
-                    focusedBorder: _border(AppColors.gold),
-                  ),
+              // The label leads: the row reads "Voice" before anything,
+              // instead of making the player decode two mic-adjacent
+              // icons first, and it carries the live state once joined
+              // ("Table voice on" / "— muted"). The mute mic appears
+              // only after joining ([MicButton] hides itself till then),
+              // so the room screen shows a single voice affordance.
+              Text(
+                client.voiceJoined
+                    ? (client.voiceMuted ? 'Voice — muted' : 'Table voice on')
+                    : 'Voice',
+                style: TextStyle(
+                  color: AppColors.ivory.withAlpha(150),
+                  fontSize: 12,
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.send, color: AppColors.gold),
-                tooltip: 'Send chat',
-                onPressed: () => _sendChat(client),
+              const SizedBox(width: 4),
+              VoiceButton(client: client),
+              MicButton(client: client),
+            ],
+          ),
+        // Talk state plays on the mic button (the gold beam), exactly like
+        // on the game views: a second indicator here — a chip row that grew
+        // whenever anyone spoke — kept shoving the controls around while
+        // callers talked, which read like the screen was breaking.
+        if (!spectating)
+          Row(
+            children: [
+              if (!_chatRecording) ...[
+                IconButton(
+                  icon: const Icon(Icons.gif_box, color: AppColors.gold),
+                  tooltip: 'Send a GIF',
+                  onPressed: () => GifPickerSheet.show(
+                    context,
+                    serverUrl: client.serverUrl,
+                    onPick: (url) => client.sendGif(url),
+                  ),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _chatCtrl,
+                    style: const TextStyle(color: AppColors.ivory),
+                    onSubmitted: (_) => _sendChat(client),
+                    // Same keyboard-GIF story the table chat sheet has:
+                    // one insertion behavior across every chat surface.
+                    contentInsertionConfiguration: keyboardGifInsertion(
+                      send: ({required bytes, required mime}) =>
+                          client.sendKeyboardGif(bytes: bytes, mime: mime),
+                      sendLink: client.sendGif,
+                      onError: (message) =>
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(SnackBar(content: Text(message))),
+                    ),
+                    decoration: InputDecoration(
+                      labelText: 'Say something…',
+                      labelStyle: const TextStyle(color: AppColors.ivory),
+                      enabledBorder: _border(AppColors.ivory.withAlpha(90)),
+                      focusedBorder: _border(AppColors.gold),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send, color: AppColors.gold),
+                  tooltip: 'Send chat',
+                  onPressed: () => _sendChat(client),
+                ),
+              ],
+              // The voice control must not be rebuilt while it holds a mic
+              // session — see [NoteComposer]; the row's other members make
+              // way while it records.
+              // Flex follows the state: idle, the composer is one mic
+              // chip and takes only its intrinsic width (a flex slot on
+              // an idle composer split the row in half and left the text
+              // field — and the row's right edge — short of the panel);
+              // while recording the bar takes the row. The Flexible type
+              // never changes, so the mic session survives the rebuild.
+              Flexible(
+                flex: _chatRecording ? 1 : 0,
+                child: NoteComposer(
+                  send: (recording) => client.sendVoiceNote(
+                    bytes: recording.bytes,
+                    mime: recording.mime,
+                    durMs: recording.durMs,
+                  ),
+                  onError: (message) =>
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(SnackBar(content: Text(message))),
+                  onRecordingChanged: (recording) => setState(() {
+                    _chatRecording = recording;
+                  }),
+                ),
               ),
             ],
           ),
@@ -680,4 +1042,174 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     LudoColor.yellow => AppColors.ludoYellow,
     LudoColor.green => AppColors.ludoGreen,
   };
+}
+
+/// One friend action per seated row, reflection included.
+///
+/// The playtest asked for the players **in the current room** — username
+/// and a button to send a friend request directly — because stepping
+/// through a menu, or hunting down an id nobody prints, is how adding a
+/// friend became work. The lobby already polls the friends tray every few
+/// seconds, so the same state that lights the badge also decides what the
+/// row shows: friends read as a chip, own pending requests as "Sent", an
+/// incoming request turns into an Accept, and anyone else gets the
+/// one-tap add. Rows without a server-wide view of themselves (the state
+/// has not arrived yet) still show the add — the endpoint is idempotent
+/// and the tap reports its own outcome.
+class SeatFriendControl extends StatelessWidget {
+  const SeatFriendControl({
+    required this.state,
+    required this.peerSeatId,
+    required this.peerName,
+    required this.busy,
+    required this.onAdd,
+    required this.onAccept,
+    super.key,
+  });
+
+  /// The lobby's latest friends-tray state, or null before the first poll.
+  final FriendState? state;
+
+  /// The row's profile id and display name.
+  final String peerSeatId;
+  final String peerName;
+
+  /// While a request for this row is in flight the buttons sleep — a slow
+  /// link must not double-fire a friend request.
+  final bool busy;
+  final VoidCallback onAdd;
+  final VoidCallback onAccept;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    if (s != null) {
+      final isFriend = s.friends.any((f) => f.profile.seatId == peerSeatId);
+      if (isFriend) {
+        return Chip(
+          label: const Text('Friends'),
+          visualDensity: VisualDensity.compact,
+        );
+      }
+      final mine = s.outgoing.any((r) => r.seatId == peerSeatId);
+      if (mine) {
+        return Chip(
+          label: const Text('Sent'),
+          visualDensity: VisualDensity.compact,
+        );
+      }
+      final incoming = [
+        for (final r in s.incoming)
+          if (r.seatId == peerSeatId) r,
+      ];
+      if (incoming.isNotEmpty) {
+        return FilledButton.tonal(
+          onPressed: busy ? null : onAccept,
+          style: FilledButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: const Text('Accept'),
+        );
+      }
+    }
+    return FilledButton.tonal(
+      onPressed: busy ? null : onAdd,
+      style: FilledButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: const Text('+ Add'),
+    );
+  }
+}
+
+/// The lobby's inline table talk shows the tail of the transcript — the
+/// lines a player is most likely replying to — in replay order, so the
+/// newest sits at the bottom the way every transcript does. Pure so the
+/// order itself can be pinned by a test without staging a room.
+List<ChatLine> recentChatLines(List<ChatLine> chat, {int keep = 6}) =>
+    chat.length > keep ? chat.sublist(chat.length - keep) : List.of(chat);
+
+/// The lobby's room-code card. Copying is a first-class button, not a hope:
+/// the code used to be the only thing in the card, with copying left to the
+/// platform's text selection — and a long-press selection on big,
+/// letter-spaced text is unreliable on phone browsers, so mobile players
+/// could not share the code at all. The button copies through the clipboard
+/// channel, which browsers honour for a user tap.
+class RoomCodeCard extends StatelessWidget {
+  const RoomCodeCard({super.key, required this.code});
+
+  /// The room's code, or null while the server has not confirmed a room yet.
+  final String? code;
+
+  Future<void> _copy(BuildContext context) async {
+    final value = code;
+    if (value == null) return;
+    try {
+      await Clipboard.setData(ClipboardData(text: value));
+    } catch (_) {
+      // Clipboard write can be denied (insecure origin, old browser). The
+      // code is still selectable by hand — say so instead of failing silent.
+      if (context.mounted) {
+        showSnackInColumn(
+          context,
+          'Could not copy — please select the code by hand',
+        );
+      }
+      return;
+    }
+    if (context.mounted) {
+      showSnackInColumn(context, '$value copied — send it to your friends');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: AppColors.feltLight,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            const Text(
+              'Room code',
+              style: TextStyle(color: AppColors.ivory, fontSize: 13),
+            ),
+            const SizedBox(height: 4),
+            Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SelectableText(
+                    code ?? '····',
+                    style: const TextStyle(
+                      color: AppColors.gold,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 8,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.copy, color: AppColors.gold),
+                    tooltip: 'Copy room code',
+                    onPressed: code == null ? null : () => _copy(context),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Share it so friends can join',
+              style: TextStyle(
+                color: AppColors.ivory.withAlpha(150),
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

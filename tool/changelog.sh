@@ -3,11 +3,11 @@
 #
 # CHANGELOG.md is generated, never hand-edited — the rules live in cliff.toml.
 #
-# The CI "changelog" job is the only thing that runs this on push, and it is the
-# only place the file is written: pushes to staging/dev regenerate and commit
-# it, while pushes to main and to release tags run it in --check mode. The
-# pre-push hook used to do this too, and having two writers meant whichever ran
-# second produced a commit the other had not verified.
+# The CI release-prep job is the only writer of record: it regenerates the
+# file and commits it through a pull request, while pushes to main and to
+# release tags run it in --check mode. The pre-push hook used to do this too,
+# and having two writers meant whichever ran second produced a commit the
+# other had not verified.
 #
 # Usage:
 #   tool/changelog.sh           rewrite CHANGELOG.md
