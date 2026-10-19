@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../engine/ludo/ludo_ai.dart';
+import '../engine/core/dice.dart';
 import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
 import '../engine/ludo/ludo_rules.dart';
@@ -290,7 +291,7 @@ class LudoSession extends ChangeNotifier {
     // Snapshot for undo: restores the pre-roll state (roll + move both go).
     _undoStack.add(state.copy());
     if (_undoStack.length > 10) _undoStack.removeAt(0);
-    rollDice(state, _rng.nextInt(6) + 1);
+    rollDice(state, dieRoll(_rng));
     sound.dice();
     Haptics.light();
     notifyListeners();

@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'dart:io' show stderr;
 import 'dart:math';
 
+import '../engine/core/dice.dart';
 import '../engine/ludo/ludo_ai.dart';
 import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
@@ -745,14 +746,14 @@ class GameAuthority {
             return;
           }
           if (snakesState.currentPlayer.id != member.seatId) return;
-          snakes.rollDice(snakesState, rng.nextInt(6) + 1);
+          snakes.rollDice(snakesState, dieRoll(rng));
           room.broadcastState();
           _recordResultsIfFinished(room, snakesState);
           return;
         }
         if (state == null || state.phase != LudoPhase.awaitingRoll) return;
         if (state.currentPlayer.id != member.seatId) return;
-        rollDice(state, rng.nextInt(6) + 1);
+        rollDice(state, dieRoll(rng));
         room.broadcastState();
         _recordResultsIfFinished(room, state);
 
@@ -904,7 +905,7 @@ class GameAuthority {
     switch (room.game) {
       case LudoState s:
         if (s.phase == LudoPhase.awaitingRoll) {
-          rollDice(s, rng.nextInt(6) + 1);
+          rollDice(s, dieRoll(rng));
         } else if (s.phase == LudoPhase.awaitingMove) {
           final move = chooseLudoMove(s, s.currentPlayer.difficulty, rng);
           if (move == null) return; // nothing legal: stop, don't spin
@@ -916,7 +917,7 @@ class GameAuthority {
         _recordResultsIfFinished(room, s);
       case snakes.SnakesState s:
         if (s.phase == snakes.SnakesPhase.awaitingRoll) {
-          snakes.rollDice(s, rng.nextInt(6) + 1);
+          snakes.rollDice(s, dieRoll(rng));
         } else if (s.phase == snakes.SnakesPhase.awaitingMove) {
           snakes.applyMove(s);
         } else {

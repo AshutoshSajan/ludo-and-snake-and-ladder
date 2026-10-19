@@ -3,6 +3,8 @@ library;
 
 import 'dart:math';
 
+import '../core/dice.dart';
+
 /// Classic Chutes & Ladders style jump map: square -> destination.
 const Map<int, int> kSnakesLaddersJumps = {
   // Ladders
@@ -243,5 +245,7 @@ extension on SnakesState {
 }
 
 /// Snakes & Ladders has no move choices — the "AI" is simply an auto-roll.
-/// Kept for symmetry with the Ludo bot API and future rule variants.
-int rollForAI(Random rng) => rng.nextInt(6) + 1;
+/// Kept for symmetry with the Ludo bot API and future rule variants. Uses
+/// [dieRoll] (engine/core/dice.dart) so the whole game rolls from one
+/// documented algorithm.
+int rollForAI(Random rng) => dieRoll(rng);

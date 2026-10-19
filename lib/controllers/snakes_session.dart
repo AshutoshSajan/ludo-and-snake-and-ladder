@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../engine/core/dice.dart';
 import '../engine/snakes/snakes_engine.dart';
 import '../providers/app_providers.dart';
 import '../services/sound_service.dart';
@@ -112,7 +113,7 @@ class SnakesSession extends ChangeNotifier {
   }
 
   void _roll() {
-    rollDice(state, _rng.nextInt(6) + 1);
+    rollDice(state, dieRoll(_rng));
     sound.dice();
     Haptics.light();
     notifyListeners();
