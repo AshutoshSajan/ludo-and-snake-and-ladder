@@ -7,14 +7,65 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(friends): the players seated at your table list themselves
+- Feat(lobby): one-tap friend requests on each room seat row
+- Feat(friends): a players directory with one-tap friend requests
+- Feat(voice): the speaking beam carries the animation — a brighter trio of rings
+- Feat(online): legible turn state, mic-borne speaking beam, evicted-seat exit
+- Feat(friends): add, block, and report players from the table
+- Feat(game): enforce a 30-second online turn timer with five-miss ejection
+- Feat(voice): show who is talking as gold chips on lobby and boards
+- Feat(chat): share GIFs straight from mobile keyboards
+- Feat(chat): GIF search over a provider-neutral proxy — Klipy by default
+- Feat(friends): friends tray and 1:1 chat with like, reply and invite handoff
+- Feat(friends): friend codes, requests, DMs, play invites and blocks on the server
+- Feat(feedback): player reports, contact page, admin triage + table CRUD
+- Feat(chat): voice notes in table chat, and a chat worth looking at
+- Feat(voice): table voice chat over WebRTC with seat-addressed signalling
+- Feat(chat): GIF support in table chat
+- Feat(online): host-picked table size and one-tap room code copy
+- Feat(admin): restrict admin UI to the hosted web app
 - Feat(admin): custom dashboard with DB-backed rooms, auth and stats
 - Add CodeQL analysis workflow configuration
 ### Documentation
+- Docs(roadmap): graduate shipped in-flight items
+- Docs(ux): make the player experience part of every feature
 - Docs: redesign banner and restructure README
 - Docs: add Play Online, room, leaderboard & settings screenshots
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(lobby): the room code card, its toast and the chat order match the header
+- Fix(ui): the in-game chat and GIF sheets read in the header column
+- Fix(online): the evicted seat hears its own removal; corner strikes read the seats feed
+- Fix(ui): the friends tray and the DM screen read in the same column as their headers
+- Fix(online,board): a table that already ended ends the screen too; strikes and the turn clock move outside the board
+- Fix(ui): compact friend rows; create-room talk rides the mic button
+- Fix(online): miss toasts talk to their seat; the removal ends the board
+- Fix(board): center the pawn tap box on its cell at every board size
+- Fix(chat): keep the chat sheet under the board, not on it
+- Fix(online): back press walks out through the confirm dialog
+- Fix(voice): let the web probe reach the never-speaking fallback
+- Fix(ui): say why a roll spent the turn without moving a piece
+- Fix(dice): cap identical-face streaks at three on every roll stream
+- Fix(notes): keep echo cancel and noise suppression on for voice notes
+- Fix(dice): one documented, uniform roll shared by every seat
+- Fix(voice): rebuild pre-mic peers and reinvite so staggered joins converge
+- Fix(voice): the far end of the table call is actually audible
+- Fix(chat): the idle voice-note composer stops halving the chat row
+- Fix(chat): the waiting GIF reserves its full card, not a bar
+- Fix(voice): web recording never needed a filesystem path
+- Fix(chat): the pre-first-chunk GIF phase shows the placeholder, not emptiness
+- Fix(chat): the pre-first-chunk GIF phase shows the placeholder, not emptiness
+- Fix(ludo): mute mic appears only once table voice is joined
+- Fix(chat): GIF bubbles hold a fixed frame from loading to loaded
+- Fix(hooks): pull no longer leaves CHANGELOG.md dirty in the tree
+- Fix(chat): GIF bubbles stop hiding the loaded image behind a spinner
+- Fix(chat): voice notes record on Chromium — probe the browser codec
+- Fix(hooks): unset git plumbing in pre-push so children's own git describes their repos
+- Fix(online): hint and undo are local-table conveniences only
+- Fix(admin): unify badge styling and align app bar to content column
+- Fix(admin): keep setup fail-closed, guarantee Paste menu, align tests/docs
 - Fix(ci): codeql only scans actions and c-cpp with pinned runner
 - Fix: add fetch-depth and sparse-checkout to all checkout actions in release.yaml
 - Fix: remove ext-v* tag trigger from CI workflow to avoid duplicate runs
@@ -24,11 +75,16 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(online): spend the cold-start budget on refused first connections
 - Fix(extension): grant wss:// so online play can reach the game server
 ### Other
+- Refactor(friends): the room's own rows replace the all-users directory
+- Ci(web): build web on every push, not only before main
+- Ci(guard-dev): count merge parents from git instead of the push payload
 - Potential fix for pull request finding
 - Ci: add automated screenshot capture + local script
 - Ci: add automated screenshot capture workflow
 - Stop running the full suite on PRs into dev
 - Ci: make release prep open a PR and run before the changelog check
+### Performance
+- Perf(board): smooth mobile web play and reachable pawn taps
 ## [v1.2.1] - 2026-10-02
 ### Fixed
 - Fix three things that each blocked the Firefox release on their own

@@ -42,7 +42,10 @@ class PlayerActionsSheet extends StatefulWidget {
   /// builds its own — and owns it, closing it on dispose.
   final FriendClient? friendClientForTest;
 
-  /// Opens the sheet. Returns when it is dismissed.
+  /// Opens the sheet. Returns when it is dismissed. [friendClientForTest]
+  /// is a test seam only: screens that were injected a friendly mock pass
+  /// it down so the sheet's one-shot tray fetch answers from the same
+  /// mock instead of hitting the wire; production passes nothing.
   static Future<void> show(
     BuildContext context, {
     required String serverUrl,
@@ -50,6 +53,7 @@ class PlayerActionsSheet extends StatefulWidget {
     required String myName,
     required String peerSeatId,
     required String peerName,
+    FriendClient? friendClientForTest,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -63,6 +67,7 @@ class PlayerActionsSheet extends StatefulWidget {
         myName: myName,
         peerSeatId: peerSeatId,
         peerName: peerName,
+        friendClientForTest: friendClientForTest,
       ),
     );
   }
