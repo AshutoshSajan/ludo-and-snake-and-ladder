@@ -896,10 +896,26 @@ void main() {
       final hostBase = host.length, guestBase = guest.length;
       auth.handleIntent(room: room, connectionId: 'red', msg: {'type': 'roll'});
       expect(room.state.rollSeq, 1);
-      expect(host.length, hostBase + 1);
-      expect(guest.length, guestBase + 1);
+      final rolled = [
+        for (var i = hostBase; i < host.length; i++)
+          (jsonDecode(host[i]) as Map<String, dynamic>)['type'] as String,
+      ];
       // A non-six with everyone in base is a skip: the engine clears
-      // lastRoll. Either a dice value or a skip is authoritative.
+      // lastRoll, the turn moves on, and the fresh seat gets its countdown
+      // announced ('turnTimer'). Either way the table sees a state.
+      expect(rolled, contains('state'));
+      expect(
+        guest.length - guestBase,
+        host.length - hostBase,
+        reason: 'the wall is shared — both seats see the same announcements',
+      );
+      if (room.state.currentPlayer.id == 'red') {
+        // A six or an owned extra: no clock to hand over.
+        expect(rolled, isNot(contains('turnTimer')));
+      } else {
+        expect(rolled.last, 'turnTimer');
+      }
+      // Either a dice value or a skip is authoritative.
       expect(room.state.lastRoll, anyOf(isNull, inInclusiveRange(1, 6)));
     });
 

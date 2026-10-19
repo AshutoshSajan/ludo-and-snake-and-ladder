@@ -143,6 +143,11 @@ class _DiceWidgetState extends State<DiceWidget>
   @override
   Widget build(BuildContext context) {
     final vp = widget.size * 2.6;
+    // The tappable box stands at least 48 logical px even when the die
+    // itself is drawn smaller on a tiny board corner — a 34px-wide die is
+    // below the touch-target bar and reads as "I tapped it and nothing
+    // happened". The cube keeps its visual size; only the hit area grows.
+    final tap = math.max(widget.size, 48.0);
     return Semantics(
       button: true,
       label: 'Roll dice',
@@ -153,15 +158,15 @@ class _DiceWidgetState extends State<DiceWidget>
           scale: widget.enabled && !widget.rolling ? 1.0 : 0.94,
           duration: const Duration(milliseconds: 150),
           child: SizedBox(
-            width: widget.size,
-            height: widget.size,
+            width: tap,
+            height: tap,
             child: Stack(
               clipBehavior: Clip.none,
               alignment: Alignment.center,
               children: [
                 Positioned(
-                  left: (widget.size - vp) / 2,
-                  top: (widget.size - vp) / 2,
+                  left: (tap - vp) / 2,
+                  top: (tap - vp) / 2,
                   width: vp,
                   height: vp,
                   child: AnimatedBuilder(

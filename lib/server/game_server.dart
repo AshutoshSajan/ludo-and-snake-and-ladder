@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'dart:io' show stderr;
 import 'dart:math';
 
+import '../engine/core/dice.dart';
 import '../engine/ludo/ludo_ai.dart';
 import '../engine/ludo/ludo_board.dart';
 import '../engine/ludo/ludo_models.dart';
@@ -155,6 +156,30 @@ class Room {
   /// intent, so a human acting never races the driver.
   Timer? autoTimer;
 
+  /// The running turn timer for the seat on turn: armed by the authority
+  /// every time the table moves, cancelled the same way. When it fires
+  /// (see [GameAuthority._onTurnTimeout]) the seat's turn is skipped and a
+  /// miss is recorded in [missedTurns]; five consecutive misses drop the
+  /// seat from the game. Null whenever the table is not live or nobody is
+  /// sitting at it — an empty room holds still, per the autoplay rule.
+  Timer? turnTimer;
+
+  /// Wall-clock the live turn deadline stands at, so [broadcastState] can
+  /// attach the remaining milliseconds instead of asking clients to agree
+  /// on clocks (web clients would drift server time).
+  DateTime? turnDeadline;
+
+  /// The seat the running turn clock was armed for — how [GameAuthority
+  /// ._armTurnTimer] can tell "same seat, clock still running" (the
+  /// rejected-intent case, where the countdown must stand) from "a new
+  /// turn began" (cancel, re-arm, re-announce).
+  String? turnOwner;
+
+  /// Consecutive turn-timer misses per seat id. Reset the moment the seat
+  /// rolls or moves on their own turn — five in a row without acting means
+ /// the seat is out (forfeit, same as a walk-out).
+  final Map<String, int> missedTurns = {};
+
   /// Read-only watchers by connection id. They receive every broadcast but
   /// can never act, claim a seat, or count toward [full].
   final Map<String, ServerMember> spectators = {};
@@ -221,6 +246,11 @@ class Room {
             'color': entry.value.name,
             'connected': seatIsConnected(entry.key),
             'auto': autoSeats.contains(entry.key),
+            // Consecutive turn-timer misses — shown while the seat is
+            // drifting toward the five-and-out rule, absent at zero so
+            // quiet tables carry no extra chatter.
+            if ((missedTurns[entry.key] ?? 0) > 0)
+              'misses': missedTurns[entry.key],
           },
       for (final left in leftSeats)
         {
@@ -286,7 +316,24 @@ class Room {
   }
 
   void broadcastState() =>
-      broadcast({'type': 'state', 'game': gameType, 'state': stateJson()});
+      broadcast({
+        'type': 'state',
+        'game': gameType,
+        'state': stateJson(),
+        // The live turn timer, as milliseconds remaining measured when this
+        // message was built. Clients count down locally from it — clock
+        // skew between a browser tab and the server stays out of the
+        // picture. Absent when the timer is not running (no game, no seat,
+        // an emptied room).
+        if (turnDeadline != null && started && !removed)
+          'turnMs': turnDeadline!
+              .difference(DateTime.now())
+              .inMilliseconds
+              .clamp(0, 1 << 30),
+        // Consecutive turn-timer misses, so every table can see who is
+        // drifting toward removal.
+        if (missedTurns.isNotEmpty) 'misses': {...missedTurns},
+      });
 
   /// The serialized game state for the wire (see [broadcastState]).
   Map<String, dynamic> stateJson() => switch (game) {
@@ -354,11 +401,18 @@ class GameAuthority {
     this.onRoomStarted,
     this.onGameFinished,
     this.autoStepDelay = const Duration(milliseconds: 800),
+    this.turnTimer = const Duration(seconds: 30),
+    this.maxTurnMisses = 5,
     MediaNoteStore? mediaNotes,
   }) : rng = rng ?? Random.secure(),
        mediaNotes = mediaNotes ?? MediaNoteStore();
 
   final Random rng;
+
+  /// The roll stream with the duplicate guard (see DieStreak): shared by
+  /// every room this authority deals, so no table ever meets four
+  /// identical faces in a row on the wall.
+  final DieStreak die = DieStreak();
 
   /// Chat media store: voice-note uploads land here and wait to be
   /// announced through a chat line; keyboard-image uploads share the
@@ -374,6 +428,19 @@ class GameAuthority {
   /// absent player's turns still read as a game and not a race; tests pass
   /// [Duration.zero] to watch a whole table play out.
   final Duration autoStepDelay;
+
+  /// How long the seat on turn has to act — roll, or move with the roll they
+  /// hold — before the authority skips their turn for them. Thirty seconds
+  /// reads as "get a dragger moving" without snatching the dice out of a
+  /// slow-but-present player's hand; an autoplay seat never meets it (the
+  /// driver acts within [autoStepDelay]). Tests shrink it.
+  final Duration turnTimer;
+
+  /// Consecutive turn-timer misses a seat may rack up before it is dropped
+  /// from the game for good — five timed-out turns and the table plays on
+  /// without them, exactly like a walk-out (the player is told why, through
+  /// the same left-channel the others already see).
+  final int maxTurnMisses;
 
   /// Optional persistence for finished games. Null = leaderboard disabled.
   final LeaderboardStore? leaderboard;
@@ -560,6 +627,7 @@ class GameAuthority {
     // Coming back wakes the driver up again: a room that went quiet froze its
     // autoplay mid-turn, and this is where the paused turn is picked back up.
     _armAutoTimer(room);
+    _armTurnTimer(room);
     return room;
   }
 
@@ -582,6 +650,7 @@ class GameAuthority {
     // Somebody is watching again, so a game the table was handed may resume:
     // the same rule that stopped it when the room went quiet (see _armAutoTimer).
     _armAutoTimer(room);
+    _armTurnTimer(room);
     return room;
   }
 
@@ -637,6 +706,7 @@ class GameAuthority {
     // playing its handed-over turns, and one that still has people in it
     // (or a watcher) keeps going — including the seats that are on autoplay.
     _armAutoTimer(room);
+    _armTurnTimer(room);
     return true;
   }
 
@@ -722,6 +792,7 @@ class GameAuthority {
     _applyGameIntent(room: room, member: member, msg: msg);
     // Whoever's turn it is now may be a seat the table is playing for.
     _armAutoTimer(room);
+    _armTurnTimer(room);
   }
 
   /// The dice-and-board intents, which only make sense once a game exists.
@@ -751,14 +822,18 @@ class GameAuthority {
             return;
           }
           if (snakesState.currentPlayer.id != member.seatId) return;
-          snakes.rollDice(snakesState, rng.nextInt(6) + 1);
+          // The seat acted on their own turn: their miss streak ends here.
+          // The bar is five *consecutive* timed-out turns, not five ever.
+          room.missedTurns.remove(member.seatId);
+          snakes.rollDice(snakesState, die.next(rng));
           room.broadcastState();
           _recordResultsIfFinished(room, snakesState);
           return;
         }
         if (state == null || state.phase != LudoPhase.awaitingRoll) return;
         if (state.currentPlayer.id != member.seatId) return;
-        rollDice(state, rng.nextInt(6) + 1);
+        room.missedTurns.remove(member.seatId);
+        rollDice(state, die.next(rng));
         room.broadcastState();
         _recordResultsIfFinished(room, state);
 
@@ -771,6 +846,7 @@ class GameAuthority {
             return;
           }
           if (snakesState.currentPlayer.id != member.seatId) return;
+          room.missedTurns.remove(member.seatId);
           snakes.applyMove(snakesState);
           room.broadcastState();
           _recordResultsIfFinished(room, snakesState);
@@ -778,6 +854,7 @@ class GameAuthority {
         }
         if (state == null || state.phase != LudoPhase.awaitingMove) return;
         if (state.currentPlayer.id != member.seatId) return;
+        room.missedTurns.remove(member.seatId);
         final idx = msg['token'] as int?;
         if (idx == null || idx < 0 || idx > 3) return;
         final legal = legalMoves(state).any((m) => m.tokenIndex == idx);
@@ -800,6 +877,7 @@ class GameAuthority {
     }
     room.broadcast(room.seatsJson());
     _armAutoTimer(room);
+    _armTurnTimer(room);
   }
 
   /// A deliberate walk-out, as opposed to a dropped link: the seat's dice and
@@ -808,21 +886,40 @@ class GameAuthority {
   /// game ends by forfeit rather than hanging on a turn that will never
   /// arrive. A finished game keeps its final board for the results screen.
   void _applyLeave(Room room, ServerMember member) {
-    final seatId = member.seatId;
-    if (room.forfeited.contains(seatId)) return;
-    room.forfeited.add(seatId);
-    room.leftSeats.add((
-      seatId: seatId,
+    _forfeitSeat(
+      room,
+      seatId: member.seatId,
       name: member.name,
       color: member.color,
-    ));
+    );
+  }
+
+  /// The shared forfeit path behind both ways a seat stops playing: sending
+  /// `leave` by hand, and the turn timer's five-missed-turns eviction. In one
+  /// shot the seat is marked forfeited, registered in [Room.leftSeats] so the
+  /// remaining players still see *who* went, its pieces come off the board,
+  /// everyone gets the announcement (with [reason] so a client can say
+  /// "removed — five turns missed" rather than "left the game"), and the
+  /// empty-room grace rules apply exactly as for a human-initiated walk-out.
+  void _forfeitSeat(
+    Room room, {
+    required String seatId,
+    required String name,
+    required LudoColor color,
+    String reason = 'left',
+  }) {
+    if (room.forfeited.contains(seatId)) return;
+    room.forfeited.add(seatId);
+    room.leftSeats.add((seatId: seatId, name: name, color: color));
     room.autoSeats.remove(seatId);
+    room.missedTurns.remove(seatId);
     room.members.removeWhere((_, m) => m.seatId == seatId);
     room.spectators.removeWhere((_, m) => m.seatId == seatId);
     room.broadcast({
       'type': 'left',
-      'name': member.name,
-      'color': member.color.name,
+      'name': name,
+      'color': color.name,
+      'reason': reason,
     });
     room.broadcast(room.seatsJson());
 
@@ -842,6 +939,7 @@ class GameAuthority {
       rooms.remove(room.code);
       room.removed = true;
       room.autoTimer?.cancel();
+      room.turnTimer?.cancel();
       onRoomClosed?.call(room.code, room.registryToken);
     } else if (room.members.isEmpty && room.started) {
       // Everyone's gone: leave the started game to [emptyRoomGrace] so the
@@ -863,6 +961,7 @@ class GameAuthority {
     // an absent player's did not): hand the turn to the driver rather than
     // letting it sit there until somebody happens to send another intent.
     _armAutoTimer(room);
+    _armTurnTimer(room);
   }
 
   /// The seat whose turn it is right now, or null when nobody's (a lobby, or
@@ -896,6 +995,120 @@ class GameAuthority {
     room.autoTimer = Timer(autoStepDelay, () => _autoStep(room, seatId));
   }
 
+  /// (Re)arms the turn timer for the seat on turn, cancelling any pending
+  /// one, so the countdown always measures the phase the table is actually
+  /// in. Armed after every state change — a roll, a move, a walk-out, a
+  /// timeout skip — the same places the driver is re-armed from.
+  ///
+  /// Deliberately skipped for a seat the table plays (autoplay): the driver
+  /// acts within [autoStepDelay], so a 30-second badge on an auto seat would
+  /// be pure decoration — and an auto seat can never stall, which is the
+  /// thing the timer exists to punish. Same half as the driver's rule: an
+  /// emptied room holds still rather than racking up misses against nobody.
+  ///
+  /// A clock already running for the same seat stands: the window is one
+  /// per turn, and a rejected intent (an idle tap on the dice while it is
+  /// still your turn) must not silently reset the countdown the table can
+  /// see. The clock resets when the turn moves to another seat — or comes
+  /// back to one after going through the rest of the table.
+  void _armTurnTimer(Room room) {
+    // A table that is gone (removed, never started, or nobody connected any
+    // more) holds no clock at all — the emptiness beats any stand-down.
+    final tableGone = room.removed ||
+        !room.started ||
+        (room.members.isEmpty && room.spectators.isEmpty);
+    final seatId = tableGone ? null : _seatOnTurn(room);
+    final driven = seatId != null && room.autoSeats.contains(seatId);
+    // A clock already running for the same answerable seat stands: the
+    // window is one per turn, and a rejected intent (an idle tap on the
+    // dice while it is still your turn) must not silently reset the
+    // countdown the table can see. The clock is torn down and re-armed
+    // whenever the turn moves to another seat — or comes back to one after
+    // going through the rest of the table.
+    if (!tableGone &&
+        !driven &&
+        room.turnTimer != null &&
+        room.turnDeadline != null &&
+        room.turnOwner == seatId) {
+      return;
+    }
+    room.turnTimer?.cancel();
+    room.turnTimer = null;
+    room.turnDeadline = null;
+    room.turnOwner = null;
+    if (tableGone || driven || seatId == null) return;
+    // The state snapshot a roll or move just shipped was still built before
+    // this arming happened, so the fresh countdown travels as its own small
+    // message — this is what actually starts the visible clock at the table
+    // (and it re-baselines a late rejoinder's chip to the full seat window).
+    room.turnOwner = seatId;
+    room.turnDeadline = DateTime.now().add(turnTimer);
+    room.turnTimer = Timer(turnTimer, () => _onTurnTimeout(room, seatId));
+    room.broadcast({
+      'type': 'turnTimer',
+      'seatId': seatId,
+      'turnMs': turnTimer.inMilliseconds,
+    });
+  }
+
+  /// The turn timer expired on [seatId]'s turn. Count one miss, skip the
+  /// seat's turn for them — the engine's `passTurn`: the pending roll is
+  /// dropped, sixes streaks reset — and drop the seat from the game entirely
+  /// once they have missed [maxTurnMisses] in a row. Acting on their own
+  /// turn (a roll or a move intent, see `_applyGameIntent`) resets the
+  /// count, so the bar is "five consecutive silent turns", not five over a
+  /// whole evening of slow-rolling.
+  void _onTurnTimeout(Room room, String seatId) {
+    room.turnTimer = null;
+    room.turnDeadline = null;
+    // A lot can happen while the clock runs: the room closed, or another
+    // seat's turn already advanced (a re-arm always follows a state change,
+    // so a mismatch means a stale fire — nothing to punish). And nobody is
+    // ever punished against an absent table.
+    if (room.removed || !identical(rooms[room.code], room)) return;
+    if (room.members.isEmpty && room.spectators.isEmpty) return;
+    if (_seatOnTurn(room) != seatId) return;
+
+    final misses = (room.missedTurns[seatId] ?? 0) + 1;
+    room.missedTurns[seatId] = misses;
+    room.broadcast(room.seatsJson());
+    room.broadcast({
+      'type': 'turnMissed',
+      'seatId': seatId,
+      'name': room._displayNameFor(seatId),
+      'count': misses,
+    });
+
+    if (misses >= maxTurnMisses) {
+      // Five in a row: out. Reuse the walk-out machinery — pieces off the
+      // board, turns skip the corner, the two-player table ends by forfeit
+      // — with a reason the remaining players can see and understand.
+      final color = room.seatRegistry[seatId];
+      if (color != null) {
+        _forfeitSeat(
+          room,
+          seatId: seatId,
+          name: room._displayNameFor(seatId),
+          color: color,
+          reason: 'timeout',
+        );
+        return;
+      }
+    }
+
+    switch (room.game) {
+      case LudoState s:
+        passTurn(s);
+        room.broadcastState();
+        _recordResultsIfFinished(room, s);
+      case snakes.SnakesState s:
+        snakes.passTurn(s);
+        room.broadcastState();
+        _recordResultsIfFinished(room, s);
+    }
+    _armTurnTimer(room);
+  }
+
   /// One autoplay action: roll when the seat owes a roll, move when it owes
   /// a move. Ludo chooses with the same heuristic bot the offline game plays
   /// with; snakes has no choices to make, only a dice to roll.
@@ -910,11 +1123,18 @@ class GameAuthority {
     switch (room.game) {
       case LudoState s:
         if (s.phase == LudoPhase.awaitingRoll) {
-          rollDice(s, rng.nextInt(6) + 1);
+          rollDice(s, die.next(rng));
         } else if (s.phase == LudoPhase.awaitingMove) {
           final move = chooseLudoMove(s, s.currentPlayer.difficulty, rng);
-          if (move == null) return; // nothing legal: stop, don't spin
-          applyMove(s, move.tokenIndex);
+          if (move == null) {
+            // Nothing legal for the driver to do (a mid-game removal can
+            // leave the seat's row blocked at the exact wrong moment): let
+            // the engine skip the turn the same way a roll with no legal
+            // move does, instead of parking the table on a dead phase.
+            passTurn(s, event: 'skip');
+          } else {
+            applyMove(s, move.tokenIndex);
+          }
         } else {
           return;
         }
@@ -922,7 +1142,7 @@ class GameAuthority {
         _recordResultsIfFinished(room, s);
       case snakes.SnakesState s:
         if (s.phase == snakes.SnakesPhase.awaitingRoll) {
-          snakes.rollDice(s, rng.nextInt(6) + 1);
+          snakes.rollDice(s, die.next(rng));
         } else if (s.phase == snakes.SnakesPhase.awaitingMove) {
           snakes.applyMove(s);
         } else {

@@ -13,9 +13,11 @@ import '../shared/voice_button.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
+import '../shared/table_notice.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
+import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
 import '../shared/speaking_chips.dart';
@@ -61,6 +63,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   /// awaitingRoll -> awaitingMove is exactly when the server has accepted a
   /// roll and published its value.
   SnakesPhase? _lastPhase;
+  String? _lastEvent;
 
   /// How long the die tumbles. Matches the online Ludo view, and fits inside
   /// the 700ms beat before the forced move is sent, so the roll is seen before
@@ -157,6 +160,14 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       if (_rolling) setState(() => _rolling = false);
     }
     _lastPhase = s.phase;
+
+    // A spent roll rides the same broadcast everyone else sees: without
+    // the explanation, "their turn advanced and nothing moved" reads as
+    // the server swallowing a dice tap.
+    if (s.lastEvent == 'skip' && _lastEvent != 'skip' && mounted) {
+      _showNotice(snakesSkipNotice(s));
+    }
+    _lastEvent = s.lastEvent;
 
     if (s.phase == SnakesPhase.gameOver) {
       if (!_gameOverShown) {
@@ -389,6 +400,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
               status,
               style: const TextStyle(fontSize: 14, color: Colors.white70),
             ),
+            // The on-turn clock — snakes seats get the same standing
+            // instructions ludo does: roll within it, or the turn burns
+            // with you.
+            TurnCountdown(client: widget.client),
             const SizedBox(height: 6),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),

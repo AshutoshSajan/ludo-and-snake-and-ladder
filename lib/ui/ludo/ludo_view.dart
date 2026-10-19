@@ -18,12 +18,14 @@ import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
+import '../shared/table_notice.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'ludo_board_painter.dart';
 import 'ludo_overlays.dart';
 import 'ludo_token_layer.dart';
 import '../shared/sound_toggle_button.dart';
+import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
 import '../shared/speaking_chips.dart';
@@ -116,13 +118,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     _lastSeenSeq = session.state.rollSeq;
   }
 
+  // ---------------------------------------------------------------- online
+  // SAVE & RESUME — PARKED. Autosave is held out of the build while the
+  // gameplay smoothness pass ships; LudoSession.resume and SavedGameStore
+  // keep their tests, and uncommenting everything marked "SAVE & RESUME"
+  // below restores the feature end to end.
+  /*
   /// Autosave debounce. The session notifies on every animation tick, so the
   /// save is trailing-debounced instead of written per frame — and flushed on
   /// dispose, which is the case that actually matters: leaving is the moment a
   /// player expects their position to be kept.
-  static const _saveDebounce = Duration(milliseconds: 800);
-  Timer? _saveTimer;
-
+  */
+  // static const _saveDebounce = Duration(milliseconds: 800);
+  // Timer? _saveTimer;
+  /*
   void _scheduleSave() {
     if (widget.onlineClient != null) return; // the server owns online state
     _saveTimer?.cancel();
@@ -145,12 +154,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       ),
     );
   }
+  */
 
   @override
   void dispose() {
     // Flush rather than debounce: this is the "player left" moment.
-    _saveTimer?.cancel();
-    unawaited(_saveNow());
+    // _saveTimer?.cancel(); // SAVE & RESUME — parked.
+    // unawaited(_saveNow()); // SAVE & RESUME — parked.
     _animTimer?.cancel();
     _diceTimer?.cancel();
     _fx.dispose();
@@ -175,15 +185,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _showNotice(String text) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(text),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+    showTableNotice(context, text);
   }
 
   /// Spectators watch; they don't hand a seat to anyone, including themselves.
@@ -225,7 +227,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   void _onSessionChanged() {
-    _scheduleSave();
+    // _scheduleSave(); // SAVE & RESUME — parked; see the note on _saveTimer.
     // Kick off the 3D dice tumble whenever a fresh roll appears — tracked by
     // roll sequence, so it tumbles even when the same number comes up again.
     // Every roll animates, including the ones the engine resolves before this
@@ -242,6 +244,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         _diceTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted) setState(() => _diceRolling = false);
         });
+        // A spent roll must not read as a swallowed tap: when the roll had
+        // no legal move the engine passed the turn right there, and the
+        // only evidence left is a corner die holding the face. Say why.
+        if (session.state.lastEvent == 'skip') {
+          _showNotice(ludoSkipNotice(session.state));
+        }
       }
       // A rewound sequence (undo, or a resync snapshot) only re-tracks the
       // sequence above — no tumble for a die that was never thrown.
@@ -512,50 +520,43 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                             final playerNames = {
                               for (final p in s.players) p.color: p.name,
                             };
-                            // Rebuild every _fx tick: corner breathing glow, spinning
-                            // rings and the per-step hop bounce all live off this.
-                            return AnimatedBuilder(
-                              animation: _fx,
-                              builder: (context, _) {
-                                final pulse =
-                                    0.5 +
-                                    0.5 * math.sin(_fx.value * 2 * math.pi);
-                                final spin = _fx.value * 2 * math.pi;
-                                final anim = session.activeAnim;
-                                final bounce = anim == null
-                                    ? 0.0
-                                    : (DateTime.now()
-                                                  .difference(_stepStart)
-                                                  .inMilliseconds /
-                                              anim.stepMs)
-                                          .clamp(0.0, 1.0);
-                                return Stack(
-                                  children: [
-                                    CustomPaint(
-                                      size: Size.square(boardSize),
-                                      painter: LudoBoardPainter(
-                                        highlightCells: highlights,
-                                        playerNames: playerNames,
-                                        activeColor: s.currentPlayer.color,
-                                        pulse: pulse,
-                                        repaint: _fx,
-                                      ),
-                                    ),
-                                    LudoTokenLayer(
-                                      state: s,
-                                      boardSize: boardSize,
-                                      movableTokenIndices: movable,
-                                      onTapToken: session.tapToken,
-                                      anim: anim,
-                                      animStep: _animStep,
-                                      currentPlayerIndex: s.currentPlayerIndex,
-                                      hintTokenIndex: _hintToken,
-                                      spinAngle: spin,
-                                      bounce: bounce,
-                                    ),
-                                  ],
-                                );
-                              },
+                            // There is no AnimatedBuilder around this
+                            // subtree any more, and that was the single
+                            // biggest mobile-web lag source: the effects
+                            // clock breathes every frame, and it used to
+                            // rebuild the board, the token layer and the
+                            // four corner dice 60 times a second even when
+                            // nothing was happening. The per-frame pieces
+                            // are scoped instead: the board repaints via
+                            // the painter's `repaint` listenable (reading
+                            // pulseAnim at paint time), and the token
+                            // layer drives only its rings and its ghost
+                            // from [fx] — the layout above holds still.
+                            return Stack(
+                              children: [
+                                CustomPaint(
+                                  size: Size.square(boardSize),
+                                  painter: LudoBoardPainter(
+                                    highlightCells: highlights,
+                                    playerNames: playerNames,
+                                    activeColor: s.currentPlayer.color,
+                                    pulseAnim: _fx,
+                                    repaint: _fx,
+                                  ),
+                                ),
+                                LudoTokenLayer(
+                                  state: s,
+                                  boardSize: boardSize,
+                                  movableTokenIndices: movable,
+                                  onTapToken: session.tapToken,
+                                  anim: session.activeAnim,
+                                  animStep: _animStep,
+                                  currentPlayerIndex: s.currentPlayerIndex,
+                                  fx: _fx,
+                                  stepStart: _stepStart,
+                                  hintTokenIndex: _hintToken,
+                                ),
+                              ],
                             );
                           },
                         ),
@@ -649,7 +650,24 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             value: isCurrent || tumbling ? face : null,
             rolling: tumbling,
             enabled: canRoll,
-            onTap: session.roll,
+            onTap: () {
+              session.roll();
+              // Online, the authoritative state takes a round trip; without
+              // an answer at the tap the die reads as frozen, and the lagged
+              // player taps again and again. The die tumbles at once, and
+              // settles after three seconds if the server never answers — a
+              // live echo re-runs this same settle with its own shorter
+              // 600ms window (see _onSessionChanged), which cancels this
+              // one first. Offline play animates through the engine itself
+              // and needs no optimism.
+              if (widget.onlineClient != null && canRoll) {
+                _diceTimer?.cancel();
+                _diceRolling = true;
+                _diceTimer = Timer(const Duration(seconds: 3), () {
+                  if (mounted) setState(() => _diceRolling = false);
+                });
+              }
+            },
             // Sized against the board, not the window. Off the window's
             // shortestSide this clamped to its 92px maximum on any wide
             // screen, so the dice stayed large while the board they ringed
@@ -676,9 +694,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     };
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Text(
-        subtitle,
-        style: const TextStyle(fontSize: 14, color: Colors.white70),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              subtitle,
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
+          ),
+          // The on-turn clock, live only on online tables. It sits with the
+          // subtitle because "whose turn and how long" is one question —
+          // and everyone at the table reads it the same way.
+          if (widget.onlineClient != null)
+            TurnCountdown(client: widget.onlineClient!),
+        ],
       ),
     );
   }
