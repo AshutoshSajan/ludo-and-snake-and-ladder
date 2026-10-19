@@ -56,6 +56,30 @@ void rollDice(LudoState s, int value) {
   s.phase = LudoPhase.awaitingMove;
 }
 
+/// The authoritative turn-timer path: nobody answered the seat's turn in
+/// time, so whatever rolled value was pending is dropped and the turn moves
+/// on exactly as any other no-extra end-of-turn (lastRoll cleared, sixes
+/// streak reset, next unfinished player). The seat itself is untouched —
+/// dropping a stalled player off the board is the server's
+/// `removeSeatFromGame`, one level above.
+///
+/// [event] names the reason for the pass in [LudoState.lastEvent]:
+/// 'timeout' (the seat missed the turn timer — the default), or 'skip'
+/// when the *table* itself moves a stalled autoplay seat that has no legal
+/// move at all.
+void passTurn(LudoState s, {String event = 'timeout'}) {
+  assert(
+    event == 'timeout' || event == 'skip',
+    "passTurn's event must name a pass kind",
+  );
+  assert(
+    s.phase == LudoPhase.awaitingRoll || s.phase == LudoPhase.awaitingMove,
+    'passTurn answers a live turn, not a finished game',
+  );
+  s.lastEvent = event;
+  _endTurn(s, extra: false);
+}
+
 /// All legal moves for the current player given the pending roll.
 List<LudoMove> legalMoves(LudoState s) {
   final roll = s.lastRoll;

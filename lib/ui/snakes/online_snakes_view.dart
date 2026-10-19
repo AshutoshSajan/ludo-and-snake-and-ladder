@@ -16,6 +16,7 @@ import '../shared/seat_status_strip.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
+import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
 import '../shared/speaking_chips.dart';
@@ -389,6 +390,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
               status,
               style: const TextStyle(fontSize: 14, color: Colors.white70),
             ),
+            // The on-turn clock — snakes seats get the same standing
+            // instructions ludo does: roll within it, or the turn burns
+            // with you.
+            TurnCountdown(client: widget.client),
             const SizedBox(height: 6),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),

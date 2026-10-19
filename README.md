@@ -41,7 +41,7 @@
 | Start | roll a **6** to leave the base | roll a **1** to enter |
 | Win | exact entry into the home triangle | exact landing on 100 (overshoot bounces back) |
 | Bots | easy / medium / hard | auto-play |
-| Online | ✅ rooms, chat, voice, reconnect, spectate, autoplay | ✅ rooms, chat, voice, reconnect, spectate, autoplay |
+| Online | ✅ rooms, chat, voice, reconnect, spectate, autoplay, per-turn timer | ✅ rooms, chat, voice, reconnect, spectate, autoplay, per-turn timer |
 
 ### 🎲 Ludo (classic)
 
@@ -58,6 +58,13 @@
 - **Exact landing on 100** — overshoot bounces back.
 - First player to 100 wins; everyone else is ranked by square.
 - Hot-seat, bots, profiles and difficulty for up to 10 players.
+
+### ⏱ Online turn timer (both games)
+
+- The seat on turn has **30 seconds** to roll — and to move with the roll in hand. A live countdown shows beside the turn subtitle.
+- A turn that expires is **skipped for the seat** and counted; acting resets the count, so it is a streak, not a lifetime total.
+- **Five missed turns in a row** take the seat off the table exactly like a walk-out: pieces come off the board, the survivors are told why ("removed — five turns missed"), and a two-player table ends by forfeit.
+- The timer never runs against a table nobody is connected to; seats on **autoplay** are driven by the table and never meet the clock.
 
 ---
 

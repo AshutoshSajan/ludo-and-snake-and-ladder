@@ -24,6 +24,7 @@ import 'ludo_board_painter.dart';
 import 'ludo_overlays.dart';
 import 'ludo_token_layer.dart';
 import '../shared/sound_toggle_button.dart';
+import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
 import '../shared/speaking_chips.dart';
@@ -650,7 +651,24 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             value: isCurrent || tumbling ? face : null,
             rolling: tumbling,
             enabled: canRoll,
-            onTap: session.roll,
+            onTap: () {
+              session.roll();
+              // Online, the authoritative state takes a round trip; without
+              // an answer at the tap the die reads as frozen, and the lagged
+              // player taps again and again. The die tumbles at once, and
+              // settles after three seconds if the server never answers — a
+              // live echo re-runs this same settle with its own shorter
+              // 600ms window (see _onSessionChanged), which cancels this
+              // one first. Offline play animates through the engine itself
+              // and needs no optimism.
+              if (widget.onlineClient != null && canRoll) {
+                _diceTimer?.cancel();
+                _diceRolling = true;
+                _diceTimer = Timer(const Duration(seconds: 3), () {
+                  if (mounted) setState(() => _diceRolling = false);
+                });
+              }
+            },
             // Sized against the board, not the window. Off the window's
             // shortestSide this clamped to its 92px maximum on any wide
             // screen, so the dice stayed large while the board they ringed
@@ -677,9 +695,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     };
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Text(
-        subtitle,
-        style: const TextStyle(fontSize: 14, color: Colors.white70),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              subtitle,
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
+          ),
+          // The on-turn clock, live only on online tables. It sits with the
+          // subtitle because "whose turn and how long" is one question —
+          // and everyone at the table reads it the same way.
+          if (widget.onlineClient != null)
+            TurnCountdown(client: widget.onlineClient!),
+        ],
       ),
     );
   }

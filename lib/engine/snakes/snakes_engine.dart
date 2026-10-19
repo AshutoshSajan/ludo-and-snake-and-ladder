@@ -238,6 +238,26 @@ void _endTurn(SnakesState s) {
   s.phase = SnakesPhase.awaitingRoll;
 }
 
+/// The authoritative turn-timer path (same shape as Ludo's `passTurn`): the
+/// seat did not answer the table's timer in time, so the pending move —
+/// or the roll they never made — is dropped and the turn moves on.
+///
+/// [event] names the reason in [SnakesState.lastEvent]: 'timeout' when the
+/// seat missed the turn timer (the default), or 'skip' when the table moves
+/// past a stalled autoplay seat.
+void passTurn(SnakesState s, {String event = 'timeout'}) {
+  assert(
+    event == 'timeout' || event == 'skip',
+    "passTurn's event must name a pass kind",
+  );
+  assert(
+    s.phase == SnakesPhase.awaitingRoll || s.phase == SnakesPhase.awaitingMove,
+    'passTurn answers a live turn, not a finished game',
+  );
+  s.lastEvent = event;
+  _endTurn(s);
+}
+
 extension on SnakesState {
   void turnPasses() {
     currentPlayerIndex = (currentPlayerIndex + 1) % players.length;

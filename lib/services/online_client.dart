@@ -112,6 +112,7 @@ class LobbySeat {
     this.seatId = '',
     this.status = SeatStatus.connected,
     this.live = true,
+    this.misses = 0,
   });
 
   /// Builds from the server's `seats` entry, and from the lighter `lobby`
@@ -127,6 +128,7 @@ class LobbySeat {
       seatId: j['seatId'] as String? ?? '',
       status: status,
       live: j['connected'] as bool? ?? true,
+      misses: (j['misses'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -144,6 +146,11 @@ class LobbySeat {
   /// otherwise. Defaults to true so a roster that omits the field never
   /// accuses an innocent player of being away.
   final bool live;
+
+  /// Consecutive turn-timer misses the seat has let lapse while everyone
+  /// watched. Zero for seats that answer their clock; five means the server
+  /// dropped them. Zero on any roster a pre-timer server sends.
+  final int misses;
 
   /// Still in the game (playing themselves, or having handed the seat to the
   /// table) as opposed to having left, whose pieces sit untouched.
@@ -496,11 +503,12 @@ class OnlineClient extends ChangeNotifier {
   /// Fire-and-forget chat lines: (from, text).
   final chat = <ChatLine>[];
 
-  /// Set when the server announces a walk-out, cleared by [clearLeftNotice]
-  /// once the screen has shown it. Kept on the client rather than folded into
-  /// the seat list because a toast is a one-time event while the seat list is
-  /// a standing fact — both are needed: the toast explains the moment, the
-  /// list keeps the corner greyed out afterwards.
+  /// Set when the server announces a seat event worth a toast — a walk-out,
+  /// a timed-out turn — and cleared by [clearLeftNotice] once the screen has
+  /// shown it. Kept on the client rather than folded into the seat list
+  /// because a toast is a one-time event while the seat list is a standing
+  /// fact — both are needed: the toast explains the moment, the list keeps
+  /// the corner greyed out afterwards.
   String? leftNotice;
 
   void clearLeftNotice() {
@@ -508,6 +516,20 @@ class OnlineClient extends ChangeNotifier {
     leftNotice = null;
     notifyListeners();
   }
+
+  /// Milliseconds the on-turn seat has left to act, measured when the latest
+  /// state broadcast was built. Null on any snapshot without a running
+  /// timer (pre-timer servers, no game, nobody at the table). The screens
+  /// count down from this locally instead of parsing server wall-clock.
+  int? turnMs;
+
+  /// Consecutive turn-timer misses per seat id, from the state broadcast.
+  /// Empty when nothing has been missed — a table where everyone answers
+  /// their clock carries no extra chatter.
+  final seatMisses = <String, int>{};
+
+  /// Miss count for [seatId] — zero until the server says otherwise.
+  int missesOf(String seatId) => seatMisses[seatId] ?? 0;
 
   /// Our own seat's autoplay state, as the table sees it. Drives the toggle
   /// so it can never disagree with the server, and survives a reconnect
@@ -851,8 +873,22 @@ class OnlineClient extends ChangeNotifier {
         onSeats?.call();
       case 'left':
         // Worth a line of its own: without it a departing player's pieces
-        // just stop moving and the reason stays invisible.
-        leftNotice = '${msg['name'] as String? ?? 'A player'} left the game';
+        // just stop moving and the reason stays invisible. A 'timeout'
+        // reason is the turn timer's five-missed-turns eviction, and its
+        // wording tells the table what actually happened to the seat.
+        final reason = msg['reason'] as String?;
+        final gone = msg['name'] as String? ?? 'A player';
+        leftNotice = reason == 'timeout'
+            ? '$gone was removed — five turns missed'
+            : '$gone left the game';
+        onLeft?.call(leftNotice!);
+      case 'turnMissed':
+        // One turn just burned because the seat on turn did not answer the
+        // clock. A one-time toast (the standing miss count lives on the seat
+        // list), with the remaining strikes so the player knows the stakes.
+        final name = msg['name'] as String? ?? 'A player';
+        final count = (msg['count'] as num?)?.toInt() ?? 0;
+        leftNotice = '$name missed a turn ($count of 5)';
         onLeft?.call(leftNotice!);
       case 'state':
         if ((msg['game'] as String?) == 'snakes') {
@@ -878,8 +914,26 @@ class OnlineClient extends ChangeNotifier {
           onState?.call(state, incoming);
           state = incoming;
         }
+        // Turn-clock teardown: remaining milliseconds for the countdown
+        // chip, and the standing per-seat miss counts the strip displays.
+        turnMs = (msg['turnMs'] as num?)?.toInt();
+        seatMisses.clear();
+        final misses = msg['misses'];
+        if (misses is Map) {
+          for (final e in misses.entries) {
+            if (e.value is num) {
+              seatMisses[e.key as String] = (e.value as num).toInt();
+            }
+          }
+        }
         started = true;
         status = OnlineStatus.playing;
+      case 'turnTimer':
+        // The freshly armed countdown for the seat on turn (arming happens
+        // after a state change, so its own state snapshot cannot carry it).
+        // Re-baselining the client chip here is the point — the deadline is
+        // the seat's full window from right now.
+        turnMs = (msg['turnMs'] as num?)?.toInt();
       case 'chat':
         final line = ChatLine.fromJson(msg, serverUrl: serverUrl);
         chat.add(line);
