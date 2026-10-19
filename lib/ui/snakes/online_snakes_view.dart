@@ -20,7 +20,6 @@ import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
-import '../shared/speaking_chips.dart';
 import '../shared/bug_report_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
@@ -141,6 +140,15 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       // A seat can be announced mid-frame; a toast has to wait for the frame.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _showNotice(notice);
+      });
+    }
+    if (widget.client.mySeatEvicted) {
+      // The server walked this seat out (five missed turns): finish the
+      // exit it started, exactly like the game-over dialog's "Back to
+      // lobby" — the table has carried on without this seat, and a screen
+      // still wearing the board would be a frozen game with live furniture.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onLeave();
       });
     }
     final s = widget.client.snakesState;
@@ -352,9 +360,9 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
               seats: widget.client.lobbySeats,
               mySeatId: widget.client.seatId,
             ),
-            // The live talk state, straight under the seat strip: one gold
-            // chip per speaking seat; nothing at all while it is quiet.
-            SpeakingChips(names: widget.client.voiceSpeakingNames),
+            // Voice's speaking state lives on the mic button itself (see the
+            // ludo board) — nothing wedged between the seats and the board,
+            // so talk never moves the board underneath the players.
             Expanded(
               child: Center(
                 child: LayoutBuilder(

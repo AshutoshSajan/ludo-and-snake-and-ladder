@@ -104,9 +104,13 @@ class SeatStatusStrip extends StatelessWidget {
             ),
     };
     // Turn-timer drift rides the same chip: a seat can be connected and
-    // still be burning through the five misses. From three up the note
-    // turns warning red — two more quiet turns and the server drops them.
-    final missNote = s.misses > 0 ? 'missed ${s.misses} in a row' : '';
+    // still be burning through the five misses. The copy answers BOTH
+    // halves of the only question that matters ("how many did I skip, and
+    // how many chalked-up turn finish me?") — from three up the note turns
+    // warning red, two quiet turns from the drop.
+    final missNote = s.misses > 0
+        ? 'missed ${s.misses} · ${maxTurnMisses - s.misses} left'
+        : '';
     final statusText = [
       if (theirs.isNotEmpty) theirs,
       if (missNote.isNotEmpty) missNote,
@@ -120,8 +124,9 @@ class SeatStatusStrip extends StatelessWidget {
                 'Your own link to the table has dropped — the others are waiting it out.',
               _ => missNote.isEmpty
                   ? 'You'
-                  : 'You have missed $missNote — '
-                      'make a move in time or the table continues without you.',
+                  : 'You have missed ${s.misses} turns in a row — '
+                      '${maxTurnMisses - s.misses} quiet turns left before '
+                      'the table removes you.',
             }
           : statusText.isEmpty
           ? '${s.name} — $theirs'

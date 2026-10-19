@@ -28,7 +28,6 @@ import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
-import '../shared/speaking_chips.dart';
 import '../shared/bug_report_sheet.dart';
 import '../../services/server_url.dart';
 
@@ -171,7 +170,11 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   /// The online client notifies for transport events too (reconnecting,
-  /// errors) — the banner reads its status on every rebuild.
+  /// errors) — the banner reads its status on every rebuild. A walk-out of
+  /// *our own seat* (the turn-timer eviction) is the one notification that
+  /// must also end the screen: the server has already taken the seat, and a
+  /// game view that keeps showing a table the player is no longer part of
+  /// is a frozen game wearing the UI of a live one.
   void _onClientChanged() {
     final notice = widget.onlineClient?.leftNotice;
     if (notice != null) {
@@ -179,6 +182,20 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       // A seat can be announced mid-frame; a toast has to wait for the frame.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _showNotice(notice);
+      });
+    }
+    if (widget.onlineClient?.mySeatEvicted ?? false) {
+      // Frame-first so the toast above is already laid in when the route
+      // pops — the snackbar outlives the screen, on home where it explains
+      // the return.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final onLeave = widget.onOnlineLeave;
+        if (onLeave != null) {
+          onLeave();
+        } else {
+          Navigator.of(context).popUntil((r) => r.isFirst);
+        }
       });
     }
     if (mounted) setState(() {});
@@ -488,10 +505,9 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 seats: widget.onlineClient!.lobbySeats,
                 mySeatId: widget.onlineSeatId,
               ),
-            // The live talk state, straight under the seat strip: one gold
-            // chip per speaking seat; nothing at all while it is quiet.
-            if (widget.onlineClient != null)
-              SpeakingChips(names: widget.onlineClient!.voiceSpeakingNames),
+            // Voice's speaking state lives on the mic button itself (a beam
+            // while the mic hears speech) — a chip row here used to slide
+            // the board downwards every time anyone said a word.
             Expanded(
               child: Semantics(
                 label: _boardSemanticLabel(s, movable.isNotEmpty),

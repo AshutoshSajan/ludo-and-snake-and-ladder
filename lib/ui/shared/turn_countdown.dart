@@ -5,19 +5,24 @@ import 'package:flutter/material.dart';
 import '../../services/online_client.dart';
 import '../theme.dart';
 
-/// The on-turn seat's remaining seconds, as a chip beside the game's
-/// subtitle — a caption like `12 s` — tinted toward warning red under ten.
+/// The on-turn seat's remaining seconds, as a plate beside the game's
+/// subtitle — `12 s` in gold under its own timer glyph, red under ten.
+///
+/// A **plate**, not bare text: the old caption used to sit in white70 at
+/// the row's end, and at a table the question "how long do I have?" was
+/// the one thing people looked for and missed. The plate is the standing
+/// answer — visible from the first armed turn on every seat's screen.
 ///
 /// Live only on online tables: the authoritative server arms a turn timer —
 /// thirty seconds to roll, or to move with the roll in hand — and skips the
 /// seat on expiry, counting a miss. Five consecutive misses drop the seat
-/// from the table, so this chip is standing instructions, not decoration.
+/// from the table, so this plate is standing instructions, not decoration.
 ///
 /// Mechanics: the server attaches the remaining milliseconds to every state
 /// broadcast (so a browser's clock never has to agree with the server's),
 /// and this widget counts it down locally with a 1-second ticker that only
 /// lives while a deadline does. No deadline — offline games, finished games,
-/// a table gone quiet — means the chip is absent entirely.
+/// a table gone quiet — means the plate is absent entirely.
 class TurnCountdown extends StatefulWidget {
   const TurnCountdown({super.key, required this.client});
 
@@ -89,30 +94,37 @@ class _TurnCountdownState extends State<TurnCountdown> {
     final left = (ms - _burnedMs) / 1000;
     final seconds = left.ceil().clamp(0, 999);
     final danger = seconds <= 10;
-    final color = danger ? AppColors.danger : Colors.white70;
+    final tint = danger ? AppColors.danger : AppColors.gold;
     return Semantics(
       // Spoken in full by screen readers, not a bare "<n>s".
       label: '$seconds seconds left on this turn',
       excludeSemantics: true,
       child: Padding(
         padding: const EdgeInsets.only(left: 10),
-        child: IconTheme.merge(
-          data: IconThemeData(color: color),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.31),
+            border: Border.all(
+              color: tint.withAlpha(danger ? 200 : 120),
+            ),
+            borderRadius: BorderRadius.circular(14),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 danger ? Icons.timer_sharp : Icons.timer_outlined,
-                size: 15,
-                color: color,
+                size: 16,
+                color: tint,
               ),
-              const SizedBox(width: 3),
+              const SizedBox(width: 5),
               Text(
                 '$seconds s',
                 style: TextStyle(
                   fontSize: 14,
-                  fontWeight: danger ? FontWeight.w800 : FontWeight.w600,
-                  color: color,
+                  fontWeight: danger ? FontWeight.w800 : FontWeight.w700,
+                  color: tint,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
