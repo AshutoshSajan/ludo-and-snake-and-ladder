@@ -122,6 +122,10 @@ class LudoSession extends ChangeNotifier {
   final void Function(LudoState) onGameOver;
 
   final Random _rng;
+
+  /// The roll stream with the game-feel duplicate guard: shared by every
+  /// seat here, humans and bots and autoplays alike (see DieStreak).
+  final DieStreak _die = DieStreak();
   Timer? _timer;
   final _stepTimers = <Timer>[];
   MoveAnim? activeAnim;
@@ -291,7 +295,7 @@ class LudoSession extends ChangeNotifier {
     // Snapshot for undo: restores the pre-roll state (roll + move both go).
     _undoStack.add(state.copy());
     if (_undoStack.length > 10) _undoStack.removeAt(0);
-    rollDice(state, dieRoll(_rng));
+    rollDice(state, _die.next(_rng));
     sound.dice();
     Haptics.light();
     notifyListeners();

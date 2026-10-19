@@ -90,6 +90,10 @@ class SnakesSession extends ChangeNotifier {
   final void Function(SnakesState) onGameOver;
 
   final Random _rng;
+
+  /// The roll stream with the duplicate guard, shared by all seats (see
+  /// DieStreak).
+  final DieStreak _die = DieStreak();
   Timer? _timer;
   SnakesAnim? activeAnim;
   bool _busy = false;
@@ -113,7 +117,7 @@ class SnakesSession extends ChangeNotifier {
   }
 
   void _roll() {
-    rollDice(state, dieRoll(_rng));
+    rollDice(state, _die.next(_rng));
     sound.dice();
     Haptics.light();
     notifyListeners();

@@ -409,6 +409,11 @@ class GameAuthority {
 
   final Random rng;
 
+  /// The roll stream with the duplicate guard (see DieStreak): shared by
+  /// every room this authority deals, so no table ever meets four
+  /// identical faces in a row on the wall.
+  final DieStreak die = DieStreak();
+
   /// Chat media store: voice-note uploads land here and wait to be
   /// announced through a chat line; keyboard-image uploads share the
   /// same budget. One authority per process owns one shared store,
@@ -820,7 +825,7 @@ class GameAuthority {
           // The seat acted on their own turn: their miss streak ends here.
           // The bar is five *consecutive* timed-out turns, not five ever.
           room.missedTurns.remove(member.seatId);
-          snakes.rollDice(snakesState, dieRoll(rng));
+          snakes.rollDice(snakesState, die.next(rng));
           room.broadcastState();
           _recordResultsIfFinished(room, snakesState);
           return;
@@ -828,7 +833,7 @@ class GameAuthority {
         if (state == null || state.phase != LudoPhase.awaitingRoll) return;
         if (state.currentPlayer.id != member.seatId) return;
         room.missedTurns.remove(member.seatId);
-        rollDice(state, dieRoll(rng));
+        rollDice(state, die.next(rng));
         room.broadcastState();
         _recordResultsIfFinished(room, state);
 
@@ -1118,7 +1123,7 @@ class GameAuthority {
     switch (room.game) {
       case LudoState s:
         if (s.phase == LudoPhase.awaitingRoll) {
-          rollDice(s, dieRoll(rng));
+          rollDice(s, die.next(rng));
         } else if (s.phase == LudoPhase.awaitingMove) {
           final move = chooseLudoMove(s, s.currentPlayer.difficulty, rng);
           if (move == null) {
@@ -1137,7 +1142,7 @@ class GameAuthority {
         _recordResultsIfFinished(room, s);
       case snakes.SnakesState s:
         if (s.phase == snakes.SnakesPhase.awaitingRoll) {
-          snakes.rollDice(s, dieRoll(rng));
+          snakes.rollDice(s, die.next(rng));
         } else if (s.phase == snakes.SnakesPhase.awaitingMove) {
           snakes.applyMove(s);
         } else {
