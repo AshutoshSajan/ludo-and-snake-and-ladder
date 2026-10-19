@@ -1277,7 +1277,10 @@ class OnlineClient extends ChangeNotifier {
     // while the socket cleanup below settles.
     status = OnlineStatus.idle;
     notifyListeners();
-    await _sub?.cancel();
+    // Cancel rides detached: detaching the reader is synchronous-local
+    // hygiene, and its future's completion is event-loop luggage the screen
+    // (and anything awaiting a deliberate leave) should never hang on.
+    unawaited(_sub?.cancel());
     _sub = null;
     await _channel?.sink.close();
     _channel = null;
