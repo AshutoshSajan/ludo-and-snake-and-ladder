@@ -281,6 +281,29 @@ void main() {
       // load with no engine. Absent is the correct behaviour.
       expect(toml, isNot(contains('force = true')));
     });
+
+    test('only main may build: the gate decides at the branch, not the UI', () {
+      // Netlify's GitHub app proposes a run for every push to every branch
+      // and every PR head. This repo promotes dev into main, so a dev merge
+      // deploying the whole site was both a surprise rebuild and Netlify's
+      // build minutes on a step that is not a release. The `ignore` command
+      // is the gate, and it is PINNED by running it: exiting 0 tells
+      // Netlify to skip the run, so main must be the only branch that
+      // keeps it alive.
+      final m = RegExp(r'ignore = "((?:[^"\\]|\\.)+)"').firstMatch(toml);
+      expect(m, isNotNull, reason: 'the deploy gate must be an ignore command');
+      // TOML unescapes \" to " before the shell sees it; the regex above
+      // matched the escaped source, so undo that by hand.
+      final command = m!.group(1)!.replaceAll(r'\"', '"');
+      int verdict(String branch) => Process.runSync(
+        'bash',
+        ['-c', command],
+        environment: {'BRANCH': branch, 'PATH': '/usr/bin:/bin'},
+        workingDirectory: Directory.current.path,
+      ).exitCode;
+      expect(verdict('dev'), 0, reason: 'a dev merge must not build the site');
+      expect(verdict('main'), isNot(0), reason: 'main is the only deploy lane');
+    }, skip: Platform.isWindows);
   });
 
   group('local checks (the free stand-in for runner minutes)', () {
@@ -707,6 +730,51 @@ void main() {
             reason: 'the refusal must name the rule, not just fail: $out');
       }
     }, skip: !File('.githooks/pre-push').existsSync());
+
+    test('a merged main PR does not re-bill its own suite', () {
+      // A merge into main fires push, and it closes the PR — which
+      // `pull_request.closed` would ALSO trigger. Two full suites for one
+      // commit, in parallel, on one shared runner pool: exactly the queue
+      // pile the metered-runner policy exists to prevent, with the closed
+      // event adding nothing the push run does not deliver.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final triggers = workflow.substring(0, workflow.indexOf('\njobs:'));
+      final prBlock = triggers.substring(triggers.indexOf('pull_request:'));
+      expect(
+        prBlock.split('\n').take(6).join('\n'),
+        isNot(contains("'closed'")),
+        reason: 'the PR trigger must not fire on merge closure',
+      );
+      expect(
+        workflow,
+        contains("github.event.action != 'closed'"),
+        reason: 'the test job refuses a closed event even if the type '
+            'returns to the list',
+      );
+    });
+
+    test('every workflow cancels its own superseded runs, so nothing queues '
+        'into a pile', () {
+      // Each file owns its cadence (cheap guards, weekly scans, tag-gated
+      // releases), but every one of them can be superseded by the next
+      // event: another push in a burst, a re-tagged version, a re-triggered
+      // scan. A queue of already-replaced runs is exactly what "Actions
+      // queued forever" reads like; the concurrency block collapses it.
+      for (final f in [
+        'ci.yml',
+        'codeql.yml',
+        'deps-audit.yml',
+        'release.yaml',
+        'guard-dev.yml',
+        'prune-branch.yml',
+      ]) {
+        final text = File('.github/workflows/$f').readAsStringSync();
+        expect(text, contains('concurrency:'),
+            reason: '$f stacks superseded runs into a queue');
+        expect(text, contains('cancel-in-progress'),
+            reason: '$f keeps superseded runs alive to the end');
+      }
+    });
 
     test('dev pushes are guarded in CI by a workflow of their own', () {
       // ci.yml deliberately bills the full suite only on main (see its own

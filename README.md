@@ -300,6 +300,15 @@ HTTP origin is derived from that same URL, so it follows automatically. CORS is
 already handled server-side (`corsMiddleware` echoes the request origin), and
 browsers do not apply CORS to WebSockets at all.
 
+**When it deploys.** Merging into `dev` does not deploy. The `ignore` command
+in `netlify.toml` skips every run whose branch is not `main`, so the site
+rebuilds exactly when a change is promoted — dev→main — and dev merges are
+tested the way work is tested: `./tool/ci.sh` locally, or a run on the GitHub
+Actions tab after promoting. Keep **Site settings → Build & deploy →
+Continuous deployment → Production branch** pointed at `main`, so a main push
+lands on the production URL rather than a branch alias; branch deploys and PR
+previews are skipped by the gate regardless.
+
 **Cold starts.** Render's free plan sleeps after ~15 idle minutes, and the
 proxy refuses connections until the process is listening again. That is a wait,
 not a failure, so the client re-probes for up to ~22s and shows *"Starting the

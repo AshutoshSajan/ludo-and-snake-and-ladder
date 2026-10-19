@@ -26,6 +26,12 @@ on:
 
 permissions: {}
 
+# The scan is seconds long, but it must not stack with its own retriggers
+# (a pushed dependency fix supersedes the run it invalidated).
+concurrency:
+  group: deps-audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deps-audit:
     runs-on: ubuntu-24.04

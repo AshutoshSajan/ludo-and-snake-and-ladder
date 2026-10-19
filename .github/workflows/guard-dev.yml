@@ -59,3 +59,10 @@ jobs:
           fi
 
           echo "dev head is a merge commit and not a force-push — OK"
+
+# Several PR merges into dev in a minute produce several pushes; only the
+# newest one is worth a runner. Without this each check queues behind the
+# last instead of replacing it.
+concurrency:
+  group: guard-dev-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
