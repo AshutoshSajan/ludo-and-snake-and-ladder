@@ -50,8 +50,8 @@ every edit, every commit, every push.
 
 | Do this | |
 |---|---|
-| `tool/ci.sh` | analyze + full suite (the PR gate) |
-| `flutter test` / `flutter analyze --fatal-infos` | the two halves of it |
+| `tool/ci.sh` | analyze + full suite + release web build (the PR gate) |
+| `flutter test` / `flutter analyze --fatal-infos` | the checking halves of it |
 | `gh pr create --base dev` | open the PR — then stop; the owner merges |
 | `tool/deps.sh` | OSV vulnerability scan + outdated report over `pubspec.lock` |
 | `tool/changelog.sh --check` | assert CHANGELOG matches history |
