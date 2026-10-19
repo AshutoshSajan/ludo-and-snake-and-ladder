@@ -189,8 +189,7 @@ flutter run                 # pick a device (Chrome or Linux desktop)
 ```bash
 flutter test                # engine rules, online server, UI, deploy config
 flutter analyze --fatal-infos
-./tool/ci.sh                # the full local gate: analyze + test
-./tool/ci.sh --web          # + web release build
+./tool/ci.sh                # the full local gate: analyze + test + web build
 ```
 
 `tool/ci.sh` runs the same checks as CI — no runner queue wait. (The git

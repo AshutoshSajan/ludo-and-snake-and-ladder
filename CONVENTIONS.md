@@ -107,17 +107,23 @@ git config core.hooksPath .githooks
 | Hook | Does | Why |
 |---|---|---|
 | `commit-msg` | Enforces [Conventional Commits](https://www.conventionalcommits.org/) (`feat`, `fix`, `docs`, `chore`, …) so git-cliff can group the changelog | history is the generator's input format |
-| `pre-push` | **Rejects any push to `main`/`dev`** (direct push, force-push, branch deletion — all forms), then runs `tool/ci.sh` (analyze + full suite) | the trunks only ever advance via PRs; get the cheap failures locally |
+| `pre-push` | **Rejects any push to `main`/`dev`** (direct push, force-push, branch deletion — all forms), then runs `tool/ci.sh` (analyze + full suite + release web build) | the trunks only ever advance via PRs; get the cheap failures locally |
 | `post-merge` | Checks whether `CHANGELOG.md` is behind this history and says so — `--check` rewrites nothing; regeneration (`tool/changelog.sh`) stays a deliberate action — and `git fetch --prune` | clean pulls + branch hygiene |
 
-`tool/ci.sh` runs the same checks as CI, in seconds, free:
+`tool/ci.sh` runs the same checks as CI's test job, on the spot, free:
 
 ```bash
 flutter test                    # engine rules, online server, UI, deploy config
 flutter analyze --fatal-infos
-./tool/ci.sh                    # both, same as CI's test job
-./tool/ci.sh --web              # + release web build
+./tool/ci.sh                    # analyze + test + release web build
 ```
+
+The release web build is part of the default run because the app ships to
+web: under a conditional export the analyzer resolves only the native
+branch, so a web-only missing symbol passes analyze and test and first
+fails inside `flutter run -d chrome`. A web build on every push is the
+only check that catches that (this shipped once and was found the hard
+way).
 
 ---
 
