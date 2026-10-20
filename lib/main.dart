@@ -36,22 +36,64 @@ class GameClubApp extends ConsumerWidget {
     ref.watch(profilesProvider);
     ref.watch(soundEnabledProvider);
 
-    return MaterialApp(
-      title: 'Game Club',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark(),
-      navigatorKey: InviteWatcher.navigatorKey,
-      // The admin UI lives only in the hosted web app ([isAdminUiAvailable]):
-      // native builds never compile the screens and packaged add-ons run
-      // under an extension origin, so /admin is registered nowhere else.
-      // Anything else falls back to home — a mistyped deep link is a
-      // home screen, never a blank page.
-      routes: {
-        '/': (_) => const HomeScreen(),
-        if (isAdminUiAvailable) '/admin': (_) => const AdminLoginScreen(),
-      },
-      onUnknownRoute: (_) =>
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
+    return _AppFocusPulse(
+      child: MaterialApp(
+        title: 'Game Club',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.dark(),
+        navigatorKey: InviteWatcher.navigatorKey,
+        // The admin UI lives only in the hosted web app
+        // ([isAdminUiAvailable]): native builds never compile the screens
+        // and packaged add-ons run under an extension origin, so /admin is
+        // registered nowhere else. Anything else falls back to home — a
+        // mistyped deep link is a home screen, never a blank page.
+        routes: {
+          '/': (_) => const HomeScreen(),
+          if (isAdminUiAvailable) '/admin': (_) => const AdminLoginScreen(),
+        },
+        onUnknownRoute: (_) =>
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+      ),
     );
   }
+}
+
+/// The tab-focus pulse for the play-invite knock: browsers throttle timers
+/// in background tabs, so a player who switches back to their game after
+/// sitting in another tab may have a pending invite that the coarse poller
+/// (also throttled) did not raise while they were away. Every time the app
+/// reports visible-and-resumed again, the watcher polls right now — and
+/// its dedupe set keeps a repeated refocus from re-showing the same knock.
+class _AppFocusPulse extends StatefulWidget {
+  const _AppFocusPulse({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_AppFocusPulse> createState() => _AppFocusPulseState();
+}
+
+class _AppFocusPulseState extends State<_AppFocusPulse>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      inviteWatcher.poke();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

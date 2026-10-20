@@ -30,6 +30,7 @@ import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
 import '../../services/server_url.dart';
 
@@ -235,6 +236,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
+        // The win/loss family share one card shape: the podium caps at
+        // 460 so the removal card, with its own flexing content, used to
+        // read wider than the trophy card above it on the same window
+        // (playtest: "length, width, height is different"). One cap, one
+        // family.
+        constraints: const BoxConstraints(maxWidth: 460),
         title: const Text('You were removed'),
         content: const Text(
           'Five turns in a row were missed, so the table carried on without '
@@ -468,6 +475,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                     : 'Table chat',
                 onPressed: () =>
                     GameChatSheet.show(context, widget.onlineClient!),
+              ),
+            if (widget.onlineClient != null)
+              IconButton(
+                icon: const Icon(Icons.group_add_outlined),
+                tooltip: 'Players at this table',
+                onPressed: () => TablematesSheet.show(
+                  context,
+                  client: widget.onlineClient!,
+                ),
               ),
             if (widget.onlineClient != null &&
                 !(widget.onlineClient!.isSpectator)) ...[
@@ -789,7 +805,6 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                   ),
                 ),
               ),
-              _controls(s),
             ],
           ),
         ),
@@ -800,11 +815,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   // ------------------------------------------------------- corner panels
 
   /// The corner-sided status lamps above and below the board: every
-  /// seated player's color spot and strike dots, with the turn clock
-  /// beside the dots on the seat that currently owns the turn. The name
-  /// lives in the yard pill painted inside the corner on the board, so
-  /// the lamp carries only state ("whose turn, how long, how badly
-  /// hurt") — the question answered on that seat's own corner.
+  /// seated player's color spot and strike dots, with the turn clock and
+  /// the phase prompt beside the dots on the seat that currently owns
+  /// the turn. The name lives in the yard pill painted inside the corner
+  /// on the board, so the lamp carries only state ("whose turn, how
+  /// long, what next, how badly hurt") — the question answered on that
+  /// seat's own corner, never as a left-edge status line.
   List<Widget> _cornerPanels(LudoState s, {required bool top}) {
     return cornerPanels(
       top: top,
@@ -814,6 +830,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             color: p.color,
             misses: widget.onlineClient?.seatMisses[p.id] ?? 0,
             onTurn: p.id == s.currentPlayer.id,
+            prompt: _seatPrompt(s, p),
             clock: widget.onlineClient == null
                 ? null
                 : (p.id == s.currentPlayer.id
@@ -822,6 +839,23 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
           ),
       ],
     );
+  }
+
+  /// The phase prompt for one seat's lamp. Only the seat owning the turn
+  /// gets words ("Your roll, {name}!" — if the seat is ours, "Your roll"
+  /// is exactly the phrase the old left-edge subtitle used; AI seats
+  /// think instead) — everyone else's lamp stays a lamp: dots and clock
+  /// only.
+  String? _seatPrompt(LudoState s, LudoPlayer p) {
+    if (s.phase == LudoPhase.gameOver) return null;
+    if (p.id != s.currentPlayer.id) return null;
+    return switch (s.phase) {
+      LudoPhase.awaitingRoll when session.currentIsAI =>
+        '${p.name} is thinking…',
+      LudoPhase.awaitingRoll => 'Your roll, ${p.name}!',
+      LudoPhase.awaitingMove => 'Pick a token to move',
+      _ => null,
+    };
   }
 
   // -------------------------------------------------- per-corner dice HUD
@@ -903,32 +937,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   // ------------------------------------------------------------- controls
-
-  Widget _controls(LudoState s) {
-    final subtitle = switch (s.phase) {
-      LudoPhase.gameOver => 'Game over',
-      LudoPhase.awaitingRoll when session.currentIsAI =>
-        '${s.currentPlayer.name} is thinking…',
-      LudoPhase.awaitingRoll => 'Your roll, ${s.currentPlayer.name}!',
-      LudoPhase.awaitingMove => 'Pick a token to move',
-    };
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              subtitle,
-              style: const TextStyle(fontSize: 14, color: Colors.white70),
-            ),
-          ),
-          // The turn clock lives on the on-turn seat's corner panel, beside
-          // its strike dots — where "whose turn and how long" points at a
-          // player instead of floating unanchored by the subtitle.
-        ],
-      ),
-    );
-  }
+  //
+  // Intentionally empty: the phase prompt ("Your roll, {name}!",
+  // "Pick a token to move", "… is thinking…") lives on the on-turn seat's
+  // corner lamp beside its strike dots now — a full-width status row used
+  // to push the same words to a wide window's far left (playtest: they
+  // belong under/over the corner dots, not half a screen away from them).
 
   // ---------------------------------------------------------- pause menu
 

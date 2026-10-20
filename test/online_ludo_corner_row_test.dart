@@ -6,7 +6,12 @@
 ///   edges while the board sat centered (playtest: turn dots and timer
 ///   should sit directly above/below the player corners);
 /// - the lamps carry state (spot, dots, clock), not identity — the name
-///   lives once, on the yard pill painted inside the corner square.
+///   lives once, on the yard pill painted inside the corner square;
+/// - the on-turn seat carries the phase prompt ("Your roll, {name}!") —
+///   it used to be a full-width status row that landed at a wide
+///   window's far left, half a screen away from the corner dots it was
+///   describing (playtest: it should sit below/above the dots when the
+///   player's turn comes).
 library;
 
 import 'package:flutter/material.dart';
@@ -112,6 +117,31 @@ void main() {
       expect(slab.width, lessThan(1200.0),
           reason: 'a 1440-wide window must not hang the lamps on its edges');
     }
+  });
+
+  testWidgets(
+      'the on-turn seat carries the phase prompt beside its dots',
+      (tester) async {
+    await pumpTable(tester);
+
+    // Ana (red) owns the turn, awaiting a roll: her lamp answers with the
+    // roll prompt right where her strike dots live.
+    final redLamp = find.byKey(const Key('corner-panel-red'));
+    expect(redLamp, findsOneWidget);
+    expect(
+      find.descendant(of: redLamp, matching: find.text('Your roll, Ana!')),
+      findsOneWidget,
+      reason: 'the roll prompt rides the on-turn lamp, beside the dots — '
+          'not a far-left status line',
+    );
+    final greenLamp = find.byKey(const Key('corner-panel-green'));
+    expect(
+      find.descendant(of: greenLamp, matching: find.textContaining('roll')),
+      findsNothing,
+      reason: 'only the seat on turn gets words; mine stays a lamp',
+    );
+    // And the old subtitle is gone: the phrase exists exactly once.
+    expect(find.text('Your roll, Ana!'), findsOneWidget);
   });
 
   testWidgets('the lamps read state only — names live on the yard pill', (

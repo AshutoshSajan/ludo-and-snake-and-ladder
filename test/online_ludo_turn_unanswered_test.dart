@@ -118,6 +118,14 @@ void main() {
     expect(find.textContaining('Five turns in a row'), findsOneWidget,
         reason: 'the card says why');
 
+    // One card family: the win podium caps at 460 wide, and the removal
+    // card — with its own flexing text — used to read wider than the
+    // trophy card on the same window (playtest: the win and loss cards
+    // should share their length, width and height).
+    final removalCard = tester.widget<AlertDialog>(find.byType(AlertDialog));
+    expect(removalCard.constraints?.maxWidth, 460.0,
+        reason: 'the loss card is the podium card, same geometry');
+
     await tester.tap(find.widgetWithText(FilledButton, 'Back to lobby'));
     await tester.pump();
     expect(exits, ['left'],

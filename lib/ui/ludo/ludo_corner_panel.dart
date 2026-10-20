@@ -63,17 +63,19 @@ class StrikeDotsRow extends StatelessWidget {
 }
 
 /// One player-corner panel: color spot, strike dots, and — on the
-/// seat whose turn it is — the turn clock, so "whose turn and how long"
-/// is answered on that seat's own corner. The name is deliberately
-/// absent: the yard pill painted inside the corner square on the board
-/// already says who it is, and a second name plate in the lamp above it
-/// made every corner read as a roster row instead of a status lamp.
+/// seat whose turn it is — the turn clock and the phase prompt, so
+/// "whose turn, what next, how long" is answered on that seat's own
+/// corner. The name is deliberately absent: the yard pill painted
+/// inside the corner square on the board already says who it is, and a
+/// second name plate in the lamp above it made every corner read as a
+/// roster row instead of a status lamp.
 class LudoCornerPanel extends StatelessWidget {
   const LudoCornerPanel({
     super.key,
     required this.color,
     required this.misses,
     required this.onTurn,
+    this.prompt,
     this.clock,
   });
 
@@ -86,6 +88,12 @@ class LudoCornerPanel extends StatelessWidget {
   /// True for the seat that currently owns the turn: the panel answers
   /// with the clock and a gold boundary instead of a plain seat border.
   final bool onTurn;
+
+  /// The phase prompt for the seat on turn ("Your roll, {name}!",
+  /// "Pick a token to move", "… is thinking…") — standing beside the
+  /// strike dots so the table reads the phase where it reads the turn,
+  /// instead of a status line losing itself at a wide window's edge.
+  final String? prompt;
 
   /// The live turn-clock plate ([TurnCountdown]); null when this screen
   /// has no online client (offline tables have no armed clock).
@@ -123,6 +131,22 @@ class LudoCornerPanel extends StatelessWidget {
             key: Key('strike-dots-${color.name}'),
             misses: misses,
           ),
+          // The phase prompt lives beside the dots, only ever on the
+          // on-turn seat's lamp: the row the eye already checks for whose
+          // turn it is gets the "what am I waiting for" in the same hair.
+          if (prompt != null) ...[
+            const SizedBox(width: 8),
+            Text(
+              prompt!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.gold,
+              ),
+            ),
+          ],
           ?clock,
         ],
       ),
@@ -136,7 +160,9 @@ class LudoCornerPanel extends StatelessWidget {
 /// row splits the edge left/right exactly like the yards do.
 List<Widget> cornerPanels({
   required bool top,
-  required List<({LudoColor color, int misses, bool onTurn, Widget? clock})>
+  required List<
+    ({LudoColor color, int misses, bool onTurn, String? prompt, Widget? clock})
+  >
   seats,
 }) {
   final edge = seats.where((s) => yardIsOnTop(s.color) == top).toList()
@@ -157,6 +183,7 @@ List<Widget> cornerPanels({
               color: s.color,
               misses: s.misses,
               onTurn: s.onTurn,
+              prompt: s.prompt,
               clock: s.clock,
             ),
           ),

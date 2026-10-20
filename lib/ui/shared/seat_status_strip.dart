@@ -30,11 +30,14 @@ class SeatStatusStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final notable = [
       for (final s in seats)
-        // Three things make a seat worth a chip: it is played for by the
-        // table, its link dropped, or it is drifting toward the turn
-        // timer's removal (misses show on an otherwise healthy seat too —
-        // that is exactly the case the strip must catch).
-        if (s.status != SeatStatus.connected || !s.live || s.misses > 0) s,
+        // Two things make a seat worth a chip: its link dropped, or the
+        // table plays for it. Misses are deliberately absent — the same
+        // playtest round that took the words off the board ("user name
+        // missed 3 left 2 ... not required") pointed here too: the strike
+        // dots on the seat's own corner carry the whole miss story, and a
+        // chip row repeating it above the board read as a second clock
+        // nobody needed.
+        if (s.status != SeatStatus.connected || !s.live) s,
     ];
     if (notable.isEmpty) return const SizedBox.shrink();
     return Material(
@@ -103,30 +106,18 @@ class SeatStatusStrip extends StatelessWidget {
               Colors.white70,
             ),
     };
-    // Turn-timer drift rides the same chip: a seat can be connected and
-    // still be burning through the five misses. The copy answers BOTH
-    // halves of the only question that matters ("how many did I skip, and
-    // how many chalked-up turn finish me?") — from three up the note turns
-    // warning red, two quiet turns from the drop.
-    final missNote = s.misses > 0
-        ? 'missed ${s.misses} · ${maxTurnMisses - s.misses} left'
-        : '';
-    final statusText = [
-      if (theirs.isNotEmpty) theirs,
-      if (missNote.isNotEmpty) missNote,
-    ].join(' · ');
-    final tint = s.misses >= 3 ? AppColors.danger : baseTint;
+    // Turn-timer misses ride the corner dots only now: a chip row above
+    // the board repeating the count was a second clock (playtest: "not
+    // required") and the strip went back to being event-fed.
+    final statusText = theirs;
+    final tint = baseTint;
     return Tooltip(
       message: mine
           ? switch (s.status) {
               SeatStatus.left => 'You left this game.',
               SeatStatus.connected when !s.live =>
                 'Your own link to the table has dropped — the others are waiting it out.',
-              _ => missNote.isEmpty
-                  ? 'You'
-                  : 'You have missed ${s.misses} turns in a row — '
-                      '${maxTurnMisses - s.misses} quiet turns left before '
-                      'the table removes you.',
+              _ => 'You',
             }
           : statusText.isEmpty
           ? '${s.name} — $theirs'
@@ -139,22 +130,14 @@ class SeatStatusStrip extends StatelessWidget {
           const SizedBox(width: 4),
           Text(
             mine
-                ? (mineText.isEmpty && missNote.isEmpty
-                      ? 'You'
-                      : 'You · ${[if (mineText.isNotEmpty) mineText, if (missNote.isNotEmpty) missNote].join(' · ')}')
+                ? (mineText.isEmpty ? 'You' : 'You · $mineText')
                 : statusText.isEmpty
                 ? s.name
                 : '${s.name} · $statusText',
             style: TextStyle(fontSize: 12, color: tint),
           ),
           const SizedBox(width: 3),
-          Icon(
-            s.misses > 0 && s.live && s.status == SeatStatus.connected
-                ? Icons.timer_off_outlined
-                : icon,
-            size: 13,
-            color: tint,
-          ),
+          Icon(icon, size: 13, color: tint),
         ],
       ),
     );
