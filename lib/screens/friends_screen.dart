@@ -398,20 +398,55 @@ class _FriendsScreenState extends State<FriendsScreen> {
             }
           })
           .catchError((Object e) {
-            if (mounted) _showSnack(e.toString());
+            // The server words its own failures (rate limits, strangers);
+            // transport-level breaks get the fix line instead of an
+            // exception dump.
+            if (mounted) {
+              _showSnack(
+                e is FriendException
+                    ? e.text
+                    : 'The play request did not reach them — check your '
+                        'connection and try Play again.',
+              );
+            }
           });
     }
 
     lobby.addListener(maybeInvite);
     if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) =>
-            OnlineLobbyScreen(startup: OnlineStartup(adoptedClient: lobby)),
-      ),
+    final handoff = MaterialPageRoute(
+      builder: (_) =>
+          OnlineLobbyScreen(startup: OnlineStartup(adoptedClient: lobby)),
     );
+    await Navigator.of(context).push(handoff);
     // Connect only after the push so the lobby panel shows the dial.
-    await lobby.connect();
+    try {
+      await lobby.connect();
+    } catch (e) {
+      // An async-void handler would eat this into the zone — answer with
+      // the fix instead of a silent tap.
+      _abandonHandoff(handoff);
+      return;
+    }
+    // connect() resolves only once the room has formed (the `joined`
+    // handshake carries the code), so a missing code here means the table
+    // never opened — say so instead of leaving a dial spinning forever.
+    final formed = lobby.roomCode;
+    if (!sent && (formed == null || formed.isEmpty)) {
+      _abandonHandoff(handoff);
+    }
+  }
+
+  /// The handoff died before an invite could be sent: leave the dead
+  /// lobby route (the push already happened) and answer with the fix.
+  /// The pop only fires while the handoff's own route is still the top of
+  /// the stack — a user who backed out of the dead lobby first keeps the
+  /// friends screen where it is.
+  void _abandonHandoff(MaterialPageRoute<void> handoff) {
+    if (handoff.isCurrent) handoff.navigator?.pop();
+    _showSnack(
+      'Could not open a table — check the game server, then tap Play again.',
+    );
   }
 
   Future<void> _openChat(FriendEntry friend) async {
