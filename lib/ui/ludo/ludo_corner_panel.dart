@@ -62,6 +62,20 @@ class StrikeDotsRow extends StatelessWidget {
   }
 }
 
+/// The height of one panel slab — the fixed strip a board edge hands its
+/// corner panels, dice gap included.
+///
+/// 46 was flat starvation: the slab spent 14px on the dice gap and the
+/// panel spent its chrome (padding + border) on top, leaving the
+/// [TurnCountdown] a 4.8px glyph row — the count clipped to two slashes
+/// and the watch icon painting past the plate rim (the playtest "timer is
+/// not visible at all, watch icon is also off"). 58 prices the honest
+/// ledger — plate 28 (16px glyph row + padding + border) + panel chrome
+/// 15.2 + dice gap 14 — with the square board taking what remains. The
+/// Ludo view's board sizing subtracts this twice, so the constant and the
+/// view stay in register through it.
+const ludoPanelSlab = 58.0;
+
 /// One player-corner panel: color spot, strike dots, and — on the seat
 /// whose turn it is — the turn clock, so "whose turn and how long" is
 /// answered on that seat's own corner. The name is deliberately absent:
