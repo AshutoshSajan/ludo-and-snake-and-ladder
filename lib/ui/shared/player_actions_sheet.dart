@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/friend_client.dart';
+import '../page_app_bar.dart';
 import '../theme.dart';
 import 'player_avatar.dart';
 
@@ -133,9 +134,10 @@ class _PlayerActionsSheetState extends State<PlayerActionsSheet> {
   void _showSnack(String text) {
     // The root ScaffoldMessenger sits above the navigator, so snackbars
     // work from inside a modal route (the sheet) as well as from screens.
-    ScaffoldMessenger.maybeOf(context)
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+    // The floating reading-column shape is the app's one toast: a raw
+    // snackbar here stretched edge to edge on a desktop window, so the
+    // "friend added" popup read like a system banner (playtest note).
+    showSnackInColumn(context, text);
   }
 
   bool get _isMe => widget.peerSeatId == widget.mySeatId;

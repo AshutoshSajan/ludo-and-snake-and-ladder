@@ -14,13 +14,14 @@ import '../shared/voice_button.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
-import '../shared/table_notice.dart';
+import '../shared/table_alert.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
@@ -63,7 +64,6 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   /// awaitingRoll -> awaitingMove is exactly when the server has accepted a
   /// roll and published its value.
   SnakesPhase? _lastPhase;
-  String? _lastEvent;
 
   /// How long the die tumbles. Matches the online Ludo view, and fits inside
   /// the 700ms beat before the forced move is sent, so the roll is seen before
@@ -152,6 +152,9 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
           context: context,
           barrierDismissible: false,
           builder: (dialogContext) => AlertDialog(
+            // Same card family as the win podium (460 wide) — see the
+            // ludo seat's copy of this dialog.
+            constraints: const BoxConstraints(maxWidth: 460),
             title: const Text('You were removed'),
             content: const Text(
               'Five turns in a row were missed, so the table carried on '
@@ -172,10 +175,13 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     } else {
       final notice = widget.client.leftNotice;
       if (notice != null) {
+        // Read before the clear: leftExit dies with leftNotice.
+        final removed = widget.client.leftExit == SeatExitKind.removed;
         widget.client.clearLeftNotice();
-        // A seat can be announced mid-frame; a toast has to wait for the frame.
+        // A seat can be announced mid-frame; an alert has to wait for the
+        // frame (its own insert waits one more, so geometry is valid).
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showNotice(notice);
+          if (mounted) _showNotice(notice, removed: removed);
         });
       }
     }
@@ -196,14 +202,6 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       if (_rolling) setState(() => _rolling = false);
     }
     _lastPhase = s.phase;
-
-    // A spent roll rides the same broadcast everyone else sees: without
-    // the explanation, "their turn advanced and nothing moved" reads as
-    // the server swallowing a dice tap.
-    if (s.lastEvent == 'skip' && _lastEvent != 'skip' && mounted) {
-      _showNotice(snakesSkipNotice(s));
-    }
-    _lastEvent = s.lastEvent;
 
     if (s.phase == SnakesPhase.gameOver) {
       if (!_gameOverShown) {
@@ -271,16 +269,17 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     );
   }
 
-  void _showNotice(String text) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(text),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+  /// A witness line that a seat is gone from the table, on the top-right
+  /// table alert (this view's own snackbar went with the chatter cuts).
+  /// The glyph matches how the seat left — carried off by the five missed
+  /// turns, or a walk-out chosen by hand. The removed seat's own end card
+  /// is the dialog above; this notice is only for the table that stays.
+  void _showNotice(String notice, {required bool removed}) {
+    showTableAlert(
+      context,
+      notice,
+      icon: removed ? Icons.person_remove_outlined : Icons.logout,
+    );
   }
 
   /// Walking out mid-game is a statement: the seat is forfeited, the pawn
@@ -359,6 +358,11 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                   ? 'Table chat (${widget.client.unreadChats} new)'
                   : 'Table chat',
               onPressed: () => GameChatSheet.show(context, widget.client),
+            ),
+            IconButton(
+              icon: const Icon(Icons.group_add_outlined),
+              tooltip: 'Players at this table',
+              onPressed: () => TablematesSheet.show(context, client: widget.client),
             ),
             // Voice is seated-only; a spectator has no seat for the mesh.
             if (!widget.client.isSpectator) ...[

@@ -10,8 +10,9 @@
 /// - other seats hear the removal as a notice and keep playing;
 /// - the strike dots live on each player's own name pill, driven by the
 ///   client's seat-miss counts (five strikes is the turn tracker's rule);
-/// - a missed-turn toast speaks TO the seat that missed it, not at the
-///   whole table;
+/// - the missed-turn event is consumed silently: the corner strike dots
+///   and the standing turn clock are the whole answer (a third words-on-
+///   top copy — playtest: "this message is not required" — is gone);
 /// - a game the client finally sees end addresses the winner as "you".
 library;
 
@@ -117,6 +118,14 @@ void main() {
     expect(find.textContaining('Five turns in a row'), findsOneWidget,
         reason: 'the card says why');
 
+    // One card family: the win podium caps at 460 wide, and the removal
+    // card — with its own flexing text — used to read wider than the
+    // trophy card on the same window (playtest: the win and loss cards
+    // should share their length, width and height).
+    final removalCard = tester.widget<AlertDialog>(find.byType(AlertDialog));
+    expect(removalCard.constraints?.maxWidth, 460.0,
+        reason: 'the loss card is the podium card, same geometry');
+
     await tester.tap(find.widgetWithText(FilledButton, 'Back to lobby'));
     await tester.pump();
     expect(exits, ['left'],
@@ -137,6 +146,11 @@ void main() {
       'reason': 'timeout',
     });
     await tester.pump();
+    await tester.pump();
+    // The seat-gone line moved to the table alert (top-right pill): its
+    // insert is deferred one frame (mounted context geometry), called from
+    // the view's own post-frame callback — so the pill builds one pump
+    // past the two the old toast path needed.
     await tester.pump();
 
     expect(find.text('You were removed'), findsNothing,
@@ -306,7 +320,7 @@ void main() {
             'the table does not toast at everyone else');
   });
 
-  testWidgets('my missed turn tells me the stakes before the next one', (
+  testWidgets('my missed turn answers only through the corner dots', (
     tester,
   ) async {
     await pumpTable(tester);
@@ -320,19 +334,25 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.textContaining('You missed a turn (2 of 5)'), findsOneWidget,
-        reason: 'the hearer wakes up knowing the count and the cap');
+    // The strikes on the missed seat's corner dots and the standing turn
+    // clock already say everything the old toast repeated — a third
+    // copy at the top of the board just stole attention (playtest: the
+    // "missed a turn" banner is not needed, the dots and timer exist).
+    expect(find.textContaining('missed a turn'), findsNothing,
+        reason: 'the miss rides the dots and the clock, never a toast');
   });
 
-  testWidgets('a server without seat ids still announces the miss by name', (
+  testWidgets('a legacy seat-id-less miss event stays silent too', (
     tester,
   ) async {
     await pumpTable(tester);
 
+    // Older servers still send the pre-seat-id event; the dots are the
+    // only answer now, so whichever shape arrives, no words appear.
     channel.serverAdd({'type': 'turnMissed', 'name': 'Ana', 'count': 1});
     await tester.pump();
     await tester.pump();
-    expect(find.textContaining('Ana missed a turn (1 of 5)'), findsOneWidget,
-        reason: 'pre-seat-id servers keep their old wording for everyone');
+    expect(find.textContaining('Ana missed a turn (1 of 5)'), findsNothing,
+        reason: 'a miss is dot furniture, not a broadcast');
   });
 }

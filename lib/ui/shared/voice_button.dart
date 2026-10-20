@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/online_client.dart';
-import 'table_notice.dart';
+import 'table_alert.dart';
 import '../theme.dart';
 
 /// Table voice: join/leave, and a mute toggle that only matters once
@@ -22,9 +22,10 @@ class VoiceButton extends StatelessWidget {
     if (granted || !context.mounted) return;
     // A refusal is a permission answer, not a bug — say what to do about
     // it. Web shows the mic prompt; a dismissed prompt leaves voice off.
-    showTableNotice(
+    showTableAlert(
       context,
       'No microphone — allow mic access to use table voice',
+      icon: Icons.mic_off_outlined,
     );
   }
 

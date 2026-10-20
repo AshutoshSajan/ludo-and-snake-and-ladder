@@ -13,6 +13,13 @@ class StorageService {
   static const _kAnimations = 'gc.animationsEnabled';
   static const _kOnlineId = 'gc.onlinePlayerId';
   static const _kOnlineName = 'gc.onlineName';
+  static const _kTutorialAsked = 'gc.tutorialAsked';
+  static const _kTutorialDone = 'gc.tutorialDone';
+
+  /// Public aliases for the tutorial keys so tests can seed the real store
+  /// (mock initial values) instead of guessing key strings twice.
+  static const kTutorialAskedKey = _kTutorialAsked;
+  static const kTutorialDoneKey = _kTutorialDone;
 
   Future<PlayerRegistry> loadProfiles() async {
     final sp = await SharedPreferences.getInstance();
@@ -87,6 +94,32 @@ class StorageService {
   Future<void> saveOnlineName(String name) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kOnlineName, name);
+  }
+
+  /// Whether the home screen already offered the guided walkthrough.
+  ///
+  /// The ask is one per player: it is written the moment the player answers —
+  /// either way — so a decline puts the dialog to rest permanently.
+  Future<bool> loadTutorialAsked() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getBool(_kTutorialAsked) ?? false;
+  }
+
+  Future<void> saveTutorialAsked(bool value) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_kTutorialAsked, value);
+  }
+
+  /// Whether the walkthrough was ever completed ("Done"), so other screens
+  /// can steer a replay without re-asking anything.
+  Future<bool> loadTutorialDone() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getBool(_kTutorialDone) ?? false;
+  }
+
+  Future<void> saveTutorialDone(bool value) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_kTutorialDone, value);
   }
 
   /// Convenience JSON helpers for future use (settings blobs, sessions).

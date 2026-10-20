@@ -7,6 +7,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(friends): play invites knock wherever the invitee is
 - Feat(friends): the players seated at your table list themselves
 - Feat(lobby): one-tap friend requests on each room seat row
 - Feat(friends): a players directory with one-tap friend requests
@@ -35,6 +36,11 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ui): the home cards sit in the column every screen uses
+- Fix(web): revalidate the build-derived assets so new icons ship
+- Fix(ui): toasts and popups keep the column, the podium keeps a card
+- Fix(lobby): the server target stays internal to the builds
+- Fix(ludo): the corner lamps sit on the board square and say state only
 - Fix(lobby): the room code card, its toast and the chat order match the header
 - Fix(ui): the in-game chat and GIF sheets read in the header column
 - Fix(online): the evicted seat hears its own removal; corner strikes read the seats feed
@@ -75,6 +81,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(online): spend the cold-start budget on refused first connections
 - Fix(extension): grant wss:// so online play can reach the game server
 ### Other
+- Ci(deploy): only main deploys to Netlify, and superseded action runs cancel
 - Refactor(friends): the room's own rows replace the all-users directory
 - Ci(web): build web on every push, not only before main
 - Ci(guard-dev): count merge parents from git instead of the push payload

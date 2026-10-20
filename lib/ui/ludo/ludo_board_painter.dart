@@ -284,8 +284,12 @@ class LudoBoardPainter extends CustomPainter {
       (o.row + (atTop ? 0.5 : 5.5)) * cell,
     );
     final fontSize = cell * 0.52;
-    const maxPillW = 4.7; // cells
-    final textMax = cell * (maxPillW - 0.5);
+    // The pill takes the inner staging square's width, always: variable
+    // name lengths used to vary it seat to seat, so the four corners no
+    // longer read as matching furniture. The text centres inside and
+    // ellipsizes when it runs out of room.
+    final pillPad = 0.22; // cells of text inset on either side
+    final textMax = cell * (4.0 - pillPad * 2);
     final key = '$name|${color.toARGB32()}|$fontSize';
     final tp = _namePillCache.putIfAbsent(key, () {
       if (_namePillCache.length > 64) _namePillCache.clear();
@@ -304,7 +308,9 @@ class LudoBoardPainter extends CustomPainter {
       )..layout(maxWidth: textMax));
     });
     final thickness = cell * 0.84;
-    final len = math.min(tp.width + cell * 0.5, cell * maxPillW);
+    // Exactly the white staging square's width (4 cells) — constant for
+    // all four corners regardless of the name's own length.
+    final len = cell * 4.0;
     final rect = Rect.fromCenter(
       center: Offset.zero,
       width: len,
@@ -323,7 +329,7 @@ class LudoBoardPainter extends CustomPainter {
         ..strokeWidth = 1.2
         ..color = color.withValues(alpha: 0.5),
     );
-    tp.paint(canvas, Offset(-rect.width / 2 + cell * 0.22, -tp.height / 2));
+    tp.paint(canvas, Offset(-rect.width / 2 + pillPad * cell, -tp.height / 2));
     canvas.restore();
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../engine/ludo/ludo_models.dart';
 import '../../services/online_client.dart';
+import '../page_app_bar.dart';
 import '../theme.dart';
 
 /// One table-chat line as a **bubble**: seat-colored avatar, name and
@@ -418,11 +419,7 @@ class _VoicePillState extends State<VoicePill> {
         });
       }
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)
-          ?..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(content: Text('Voice note unavailable')),
-          );
+        showSnackInColumn(context, 'Voice note unavailable');
       }
     }
   }

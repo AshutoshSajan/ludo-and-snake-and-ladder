@@ -103,7 +103,10 @@ class OnlineStartup {
 }
 
 class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
-  final _serverCtrl = TextEditingController();
+  // The server target is a build-time fact (dart-define, same-origin, or
+  // the dev default) — an edit box for it invited players to point the
+  // app at a foreign relay (playtest: "server url ... should be internal
+  // only"). `defaultServerUrl()` answers everywhere a client is built.
   final _nameCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   final _chatCtrl = TextEditingController();
@@ -161,7 +164,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   @override
   void initState() {
     super.initState();
-    _serverCtrl.text = OnlineLobbyScreen.defaultServerUrl();
     // The inviter's handoff: an already-live client is adopted before
     // the first build, so the lobby panel draws with it from frame one.
     final adopted = widget.startup?.adoptedClient;
@@ -351,7 +353,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     _friendsPoll?.cancel();
     _friendClient?.close();
     _client?.dispose();
-    _serverCtrl.dispose();
     _nameCtrl.dispose();
     _codeCtrl.dispose();
     _chatCtrl.dispose();
@@ -375,7 +376,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     // asking for it again.
     _rememberName(name);
     final client = OnlineClient(
-      _serverCtrl.text.trim(),
+      OnlineLobbyScreen.defaultServerUrl(),
       seatId: _seatId,
       name: name,
       gameType: _gameType,
@@ -547,8 +548,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           ),
         ),
         const SizedBox(height: 24),
-        _field(_serverCtrl, 'Server URL', 'ws://localhost:8080/ws'),
-        const SizedBox(height: 12),
         _field(
           _nameCtrl,
           'Your name',

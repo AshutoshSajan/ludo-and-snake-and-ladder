@@ -1,0 +1,53 @@
+name: Guard dev PR
+
+# The pull_request complement to the push-only guard-dev.yml. One job, one
+# trigger, one file: mixing `push` and `pull_request` in one workflow turns
+# the push-only job into a neutral "skipping" check row on every dev PR,
+# which flips the merge state to UNSTABLE for no reason CI can act on.
+#
+# The rule (CONVENTIONS.md, "Changelog (git-cliff)"): CHANGELOG.md is
+# generated exactly once — by CI's `release-prep`, when the promotion
+# merges into `main`. A PR into `dev` carries commit subjects only, and the
+# hooks only report. This makes that convention a hard fail instead of a
+# habit, after a real PR shipped five changelog amendments that the bot's
+# promotion-time wholesale rewrite throws away anyway.
+on:
+  pull_request:
+    branches: [dev]
+
+permissions: {}
+
+jobs:
+  changelog-hands-off:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        # Three-dot needs the merge base, and a shallow clone silently
+        # mis-computes it (the same trap tool/changelog.sh documents); a
+        # full fetch is seconds of a runner nobody babysits.
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse any CHANGELOG.md change in the PR
+        run: |
+          set -euo pipefail
+          base=origin/${{ github.event.pull_request.base.ref }}
+          # Three-dot = what THIS PR introduces relative to the merge base:
+          # dev's own changes are excluded, and a task branch that resolved
+          # a CHANGELOG conflict by keeping dev's side produces no line
+          # here. Writing new changelog content does.
+          if git diff "$base...$GITHUB_SHA" --name-only -- CHANGELOG.md |
+              grep -q .; then
+            echo "::error::A PR into dev must not change CHANGELOG.md."
+            echo "::error::The file is written only by CI's release-prep job, when the promotion merges into main."
+            echo "::error::Commit subjects only. If a dev merge conflict hit the file, keep dev's side."
+            exit 1
+          fi
+          echo "no CHANGELOG.md change in this PR — OK"
+
+# Several task branches open dev PRs at once; a new push to the branch's
+# PR supersedes the run for it, and each branch's PR gets its own run.
+concurrency:
+  group: guard-dev-pr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true

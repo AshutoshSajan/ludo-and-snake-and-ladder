@@ -19,7 +19,7 @@ import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
-import '../shared/table_notice.dart';
+import '../shared/table_alert.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'ludo_board_painter.dart';
@@ -30,6 +30,7 @@ import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
 import '../../services/server_url.dart';
 
@@ -216,10 +217,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     } else {
       final notice = client?.leftNotice;
       if (notice != null) {
-        client!.clearLeftNotice();
-        // A seat can be announced mid-frame; a toast has to wait for the frame.
+        // Read before the clear: leftExit dies with leftNotice.
+        final removed = client!.leftExit == SeatExitKind.removed;
+        client.clearLeftNotice();
+        // A seat can be announced mid-frame; an alert has to wait for the
+        // frame (its own insert waits one more, so geometry is valid).
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showNotice(notice);
+          if (mounted) _showNotice(notice, removed: removed);
         });
       }
     }
@@ -235,6 +239,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
+        // The win/loss family share one card shape: the podium caps at
+        // 460 so the removal card, with its own flexing content, used to
+        // read wider than the trophy card above it on the same window
+        // (playtest: "length, width, height is different"). One cap, one
+        // family.
+        constraints: const BoxConstraints(maxWidth: 460),
         title: const Text('You were removed'),
         content: const Text(
           'Five turns in a row were missed, so the table carried on without '
@@ -258,8 +268,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     );
   }
 
-  void _showNotice(String text) {
-    showTableNotice(context, text);
+  /// A witness line that a seat is gone from the table, on the top-right
+  /// table alert. The glyph matches how the seat left — carried off by the
+  /// five missed turns, or a walk-out chosen by hand. The removed seat's
+  /// own end card is the dialog above; this notice is only for the table
+  /// that stays.
+  void _showNotice(String notice, {required bool removed}) {
+    showTableAlert(
+      context,
+      notice,
+      icon: removed ? Icons.person_remove_outlined : Icons.logout,
+    );
   }
 
   /// Spectators watch; they don't hand a seat to anyone, including themselves.
@@ -321,12 +340,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         _diceTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted) setState(() => _diceRolling = false);
         });
-        // A spent roll must not read as a swallowed tap: when the roll had
-        // no legal move the engine passed the turn right there, and the
-        // only evidence left is a corner die holding the face. Say why.
-        if (session.state.lastEvent == 'skip') {
-          _showNotice(ludoSkipNotice(session.state));
-        }
+        // A spent roll changes nothing the player can act on: no token had
+        // a legal move, the engine passed the turn right there, and the
+        // die keeps its face. This used to interrupt with "rolled a 3 —
+        // nothing can move" on every such roll, and the playtest counted
+        // it exactly as the chatter they wanted gone ("remove the unwanted
+        // popups like you need 1/6 to start game") — every spent roll was
+        // a popup for a rule the soon-to-come rules pages and in-app
+        // tutorial teach once, where the lamp already names whose turn it
+        // is. The table stays quiet: evidence lives on the die.
       }
       // A rewound sequence (undo, or a resync snapshot) only re-tracks the
       // sequence above — no tumble for a die that was never thrown.
@@ -468,6 +490,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                     : 'Table chat',
                 onPressed: () =>
                     GameChatSheet.show(context, widget.onlineClient!),
+              ),
+            if (widget.onlineClient != null)
+              IconButton(
+                icon: const Icon(Icons.group_add_outlined),
+                tooltip: 'Players at this table',
+                onPressed: () => TablematesSheet.show(
+                  context,
+                  client: widget.onlineClient!,
+                ),
               ),
             if (widget.onlineClient != null &&
                 !(widget.onlineClient!.isSpectator)) ...[
@@ -629,22 +660,45 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 child: Semantics(
                   label: _boardSemanticLabel(s, movable.isNotEmpty),
                   liveRegion: true,
-                  child: Column(
-                    children: [
-                      // The corner identity panels live OUTSIDE the board:
-                      // each corner square is covered by that corner's
-                      // floating dice, so strike dots and the yard name hid
-                      // behind the roll control on exactly the seat whose
-                      // state the table needs to read. Top-edge yards
-                      // (green, yellow) stand above the board; bottom-edge
-                      // yards (red, blue) below. The 14px gap also clears
-                      // the dice, which reach a few pixels beyond the board
-                      // line through their felt margin.
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 14),
-                        child: Row(children: _cornerPanels(s, top: true)),
-                      ),
-                      Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, playArea) {
+                      // The corner panels must sit exactly over the board's
+                      // corners, so their rows are pinned to the same
+                      // square the board underneath will take: the play
+                      // area minus the two fixed panel rows. The dice
+                      // LayoutBuilder below derives the identical square
+                      // from the Expanded's own constraints, so the three
+                      // stay in register on every window size.
+                      const rowSlab = 46.0;
+                      final boardSide = math.min(
+                        playArea.maxWidth,
+                        math.max(playArea.maxHeight - rowSlab * 2, 0.0),
+                      );
+                      final panelWidth = boardSide > 0 ? boardSide : null;
+                      return Column(
+                        children: [
+                          // The corner identity panels live OUTSIDE the
+                          // board: each corner square is covered by that
+                          // corner's floating dice, so strike dots and the
+                          // yard name hid behind the roll control on
+                          // exactly the seat whose state the table needs
+                          // to read. Top-edge yards (green, yellow) stand
+                          // above the board; bottom-edge yards (red, blue)
+                          // below. The 14px gap also clears the dice, which
+                          // reach a few pixels beyond the board line
+                          // through their felt margin. The slab width is
+                          // the board's own square - panel rows used to
+                          // span the whole window, hanging the top corners
+                          // off the screen edges on a desktop display.
+                          SizedBox(
+                            height: rowSlab,
+                            width: panelWidth,
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 14),
+                              child: Row(children: _cornerPanels(s, top: true)),
+                            ),
+                          ),
+                          Expanded(
                         child: Stack(
                           children: [
                             Center(
@@ -750,15 +804,22 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                           ],
                         ),
                       ),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 14),
-                        child: Row(children: _cornerPanels(s, top: false)),
-                      ),
-                    ],
+                          SizedBox(
+                            height: rowSlab,
+                            width: panelWidth,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 14),
+                              child: Row(
+                                children: _cornerPanels(s, top: false),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
-              _controls(s),
             ],
           ),
         ),
@@ -768,12 +829,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
 
   // ------------------------------------------------------- corner panels
 
-  /// The corner-sided identity strips above and below the board: every
-  /// seated player's color spot, name and strike dots, with the turn clock
-  /// beside the dots on the seat that currently owns the turn — the
-  /// question "whose turn and how long" answered on that seat's own
-  /// corner, instead of floating near the subtitle where nothing anchored
-  /// it to a player.
+  /// The corner-sided status lamps above and below the board: every
+  /// seated player's color spot and strike dots, with the turn clock
+  /// beside the dots on the seat that currently owns the turn. The name
+  /// lives in the yard pill painted inside the corner on the board, and
+  /// the phase words belong to the play surfaces (the dice, the tokens),
+  /// so the lamp carries only state ("whose turn, how long, how badly
+  /// hurt") — the question answered on that seat's own corner.
   List<Widget> _cornerPanels(LudoState s, {required bool top}) {
     return cornerPanels(
       top: top,
@@ -781,7 +843,6 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         for (final p in s.players)
           (
             color: p.color,
-            name: p.name,
             misses: widget.onlineClient?.seatMisses[p.id] ?? 0,
             onTurn: p.id == s.currentPlayer.id,
             clock: widget.onlineClient == null
@@ -873,32 +934,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   }
 
   // ------------------------------------------------------------- controls
-
-  Widget _controls(LudoState s) {
-    final subtitle = switch (s.phase) {
-      LudoPhase.gameOver => 'Game over',
-      LudoPhase.awaitingRoll when session.currentIsAI =>
-        '${s.currentPlayer.name} is thinking…',
-      LudoPhase.awaitingRoll => 'Your roll, ${s.currentPlayer.name}!',
-      LudoPhase.awaitingMove => 'Pick a token to move',
-    };
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              subtitle,
-              style: const TextStyle(fontSize: 14, color: Colors.white70),
-            ),
-          ),
-          // The turn clock lives on the on-turn seat's corner panel, beside
-          // its strike dots — where "whose turn and how long" points at a
-          // player instead of floating unanchored by the subtitle.
-        ],
-      ),
-    );
-  }
+  //
+  // Intentionally empty: the phase words live on the play surfaces (the
+  // dice, the tokens), and the turn clock lives on the on-turn seat's
+  // corner lamp, beside its strike dots — a full-width status row used to
+  // push both to a wide window's far left (playtest: they belong with the
+  // corners, not half a screen away; and the spoken-phase line itself is
+  // gone entirely by playtest request).
 
   // ---------------------------------------------------------- pause menu
 
