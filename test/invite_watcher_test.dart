@@ -106,6 +106,8 @@ void main() {
     deliverInvite = true; // the friend just invited us to their table
     await tester.pump(interval);
     await tester.pump();
+    // The card slides in over 220ms like its family — settle the entrance.
+    await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('Play invite'), findsOneWidget,
         reason:
             'the invitation request shows up wherever the invitee is, not '
@@ -163,6 +165,7 @@ void main() {
       await tester.pumpWidget(shell());
       watcher.start();
       await tester.pump(); // the immediate pulse — no interval was awaited
+      await tester.pump(const Duration(milliseconds: 260)); // entrance frame
 
       expect(find.text('Play invite'), findsOneWidget,
           reason: 'start() polls before the periodic cadence, the same trip '
@@ -205,6 +208,7 @@ void main() {
       watcher.start();
       await tester.pump(interval);
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 260));
       await tester.tap(find.text('Join game'));
       await tester.pump();
       await tester.pump();
@@ -219,6 +223,7 @@ void main() {
       // strand the player with a knock they can never press again.
       await tester.pump(interval);
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 260));
       expect(find.text('Play invite'), findsOneWidget);
 
       await tester.tap(find.text('Join game'));
@@ -253,6 +258,7 @@ void main() {
     watcher.start();
     await tester.pump(interval);
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('Not now'), findsOneWidget);
 
     await tester.tap(find.text('Not now'));
@@ -299,6 +305,7 @@ void main() {
     watcher.start();
     await tester.pump(interval);
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 260));
     await tester.tap(find.text('Join game'));
     await tester.pump();
     await tester.pump();
