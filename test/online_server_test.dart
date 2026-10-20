@@ -2967,27 +2967,40 @@ void main() {
           reason: '$shell must revalidate, or a deploy stays invisible',
         );
       }
-      // Fonts and canvaskit are versioned by name and are most of the payload,
-      // so they can be held for a year.
-      for (final asset in [
-        '/assets/fonts/MaterialIcons-Regular.otf',
-        '/canvaskit/canvaskit.js',
-        '/icons/Icon-192.png',
-      ]) {
+      // canvaskit and the launcher icons are genuinely version-stable:
+      // canvaskit ships under a Flutter-version-named directory, the icons
+      // are fixed images. Everything under /assets/ is constant-named but
+      // build-derived — most importantly the tree-shaken MaterialIcons
+      // subset, whose glyph membership changes the moment any icon is added.
+      // Serving that immutably for a year was exactly the "new icons render
+      // blank after a deploy" bug the web origin also fixed.
+      for (final asset in ['/canvaskit/canvaskit.js', '/icons/Icon-192.png']) {
         expect(
           webCacheHeaders(asset)['cache-control'],
           contains('max-age=31536000'),
-          reason: '$asset is content-addressed and safe to hold',
+          reason: '$asset is version-stable and safe to hold',
+        );
+      }
+      for (final asset in [
+        '/assets/fonts/MaterialIcons-Regular.otf',
+        '/assets/AssetManifest.bin',
+      ]) {
+        expect(
+          webCacheHeaders(asset)['cache-control'],
+          contains('no-cache'),
+          reason: '$asset is build-derived and cannot be pinned',
         );
       }
     });
 
-    test('an unknown file is treated as a cacheable asset, not shell', () {
-      // Wrong in the safe direction: a file Flutter adds later is far more
-      // likely to be an asset than the app shell.
+    test('an unknown file is treated as shell, not a cacheable asset', () {
+      // Wrong in the safe direction: a revalidation costs a request, a stale
+      // body costs a bug report. The previous default held unknown files
+      // immutably for a year, which shipped last deploy's contents under a
+      // constant name — the icon-subset bug in miniature.
       expect(
         webCacheHeaders('/something-new.js')['cache-control'],
-        contains('max-age'),
+        contains('no-cache'),
       );
     });
   });
