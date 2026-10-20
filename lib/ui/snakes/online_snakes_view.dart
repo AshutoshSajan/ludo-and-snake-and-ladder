@@ -152,6 +152,9 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
           context: context,
           barrierDismissible: false,
           builder: (dialogContext) => AlertDialog(
+            // Same card family as the win podium (460 wide) — see the
+            // ludo seat's copy of this dialog.
+            constraints: const BoxConstraints(maxWidth: 460),
             title: const Text('You were removed'),
             content: const Text(
               'Five turns in a row were missed, so the table carried on '

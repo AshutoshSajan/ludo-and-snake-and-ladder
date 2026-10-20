@@ -732,6 +732,12 @@ void main() {
               'removal is the game over this client will ever see');
       expect(find.textContaining('Five turns in a row'), findsOneWidget);
 
+      // One card family with the win podium: same 460-wide card shape
+      // (see the ludo seat's removal test).
+      final removalCard =
+          tester.widget<AlertDialog>(find.byType(AlertDialog));
+      expect(removalCard.constraints?.maxWidth, 460.0);
+
       await tester.tap(find.widgetWithText(FilledButton, 'Back to lobby'));
       await tester.pump();
       expect(exits, ['left']);

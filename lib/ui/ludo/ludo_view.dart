@@ -235,6 +235,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
+        // The win/loss family share one card shape: the podium caps at
+        // 460 so the removal card, with its own flexing content, used to
+        // read wider than the trophy card above it on the same window
+        // (playtest: "length, width, height is different"). One cap, one
+        // family.
+        constraints: const BoxConstraints(maxWidth: 460),
         title: const Text('You were removed'),
         content: const Text(
           'Five turns in a row were missed, so the table carried on without '
