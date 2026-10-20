@@ -30,6 +30,7 @@ import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
 import '../../services/server_url.dart';
 
@@ -474,6 +475,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                     : 'Table chat',
                 onPressed: () =>
                     GameChatSheet.show(context, widget.onlineClient!),
+              ),
+            if (widget.onlineClient != null)
+              IconButton(
+                icon: const Icon(Icons.group_add_outlined),
+                tooltip: 'Players at this table',
+                onPressed: () => TablematesSheet.show(
+                  context,
+                  client: widget.onlineClient!,
+                ),
               ),
             if (widget.onlineClient != null &&
                 !(widget.onlineClient!.isSpectator)) ...[

@@ -21,6 +21,7 @@ import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/game_chat_sheet.dart';
+import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
 
 /// Online Snakes & Ladders game view: renders the authoritative server
@@ -362,6 +363,11 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                   ? 'Table chat (${widget.client.unreadChats} new)'
                   : 'Table chat',
               onPressed: () => GameChatSheet.show(context, widget.client),
+            ),
+            IconButton(
+              icon: const Icon(Icons.group_add_outlined),
+              tooltip: 'Players at this table',
+              onPressed: () => TablematesSheet.show(context, client: widget.client),
             ),
             // Voice is seated-only; a spectator has no seat for the mesh.
             if (!widget.client.isSpectator) ...[
