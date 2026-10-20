@@ -7,6 +7,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(friends): play invites knock wherever the invitee is
 - Feat(friends): the players seated at your table list themselves
 - Feat(lobby): one-tap friend requests on each room seat row
 - Feat(friends): a players directory with one-tap friend requests
@@ -35,6 +36,9 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ui): toasts and popups keep the column, the podium keeps a card
+- Fix(lobby): the server target stays internal to the builds
+- Fix(ludo): the corner lamps sit on the board square and say state only
 - Fix(lobby): the room code card, its toast and the chat order match the header
 - Fix(ui): the in-game chat and GIF sheets read in the header column
 - Fix(online): the evicted seat hears its own removal; corner strikes read the seats feed
