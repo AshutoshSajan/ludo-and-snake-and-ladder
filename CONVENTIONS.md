@@ -207,8 +207,19 @@ because an `if` still starts the runner and every job only to skip them. Run
 
 `CHANGELOG.md` is **generated** by [git-cliff](https://git-cliff.org) from the
 commit history using `cliff.toml` (Keep a Changelog format) — never hand-edit
-it. The CI `release-prep` job is the only writer of record; humans and hooks
-regenerate locally to preview or to catch up, never to commit from a bot race.
+it. The CI `release-prep` job is the only writer of record, and it writes at
+exactly one moment: when the dev→`main` promotion merges. It regenerates the
+file, bumps the version in the same commit, and opens the `chore: release
+prep` PR for a human to merge (`guard-main` requires a merge head).
+
+Consequence for every PR into `dev`: **commit subjects only — no
+`CHANGELOG.md` change belongs in a feature commit.** Regenerating the file
+per commit (or fighting its merge conflicts on a task branch) re-creates the
+race the single-writer design exists to prevent, and the bot's wholesale
+rewrite at promotion time throws the per-PR edits away anyway. A local
+`tool/changelog.sh` run is a preview; a `--check` that complains on `dev` is
+the normal pre-promotion state (the `post-merge` hook says so and stops
+there), not something to "fix" before opening a PR.
 
 ```bash
 tool/changelog.sh           # rewrite it
