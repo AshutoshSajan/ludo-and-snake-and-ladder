@@ -39,8 +39,8 @@ import '../services/friend_client.dart';
 import '../services/online_client.dart';
 import '../services/server_url.dart';
 import '../services/storage_service.dart';
+import '../ui/shared/table_alert.dart';
 import '../ui/page_app_bar.dart';
-import '../ui/theme.dart';
 import 'online_lobby_screen.dart';
 
 class InviteWatcher {
@@ -210,35 +210,22 @@ class InviteWatcher {
     return (seatId: id, name: name);
   }
 
-  /// The knock: one popup, the app's standard dialog card, with the two
-  /// answers the invitation contract has. Not now does not answer the
-  /// server — the invite stays pending in the friends tray.
+  /// The knock: the table family's gold-rimmed card at the top right,
+  /// with the two answers the invitation contract has — not a
+  /// white-on-white material dialog. Not now does not answer the server —
+  /// the invite stays pending in the friends tray.
   Future<bool?> _showKnock(FriendInviteView invite) {
-    // Fresh at use time: the context is resolved after every await, so no
-    // stale BuildContext ever crosses an async gap.
-    final context = navigatorKey.currentContext;
-    if (context == null) return Future.value(null);
-    return showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        icon: const Icon(Icons.sports_esports, color: AppColors.gold),
-        title: const Text('Play invite'),
-        content: Text(
+    // The family's overlay state, straight from the navigator key — a
+    // navigator's own context has no Overlay *above* it for the family
+    // to climb to (see showInviteKnock's doc).
+    final overlay = navigatorKey.currentState?.overlay;
+    if (overlay == null) return Future.value(null);
+    return showInviteKnock(
+      overlay,
+      title: 'Play invite',
+      body:
           '${invite.name} invites you to '
           '${invite.game == 'snakes' ? 'Snakes & Ladders' : 'Ludo'}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Not now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Join game'),
-          ),
-        ],
-      ),
     );
   }
 }

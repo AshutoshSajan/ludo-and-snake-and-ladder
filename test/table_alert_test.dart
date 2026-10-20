@@ -17,7 +17,12 @@ import 'package:game_club/ui/shared/table_alert.dart';
 /// The pill's own handle for tests: found by key, not by private type.
 const _alert = Key('table-alert');
 
+/// The knock card's handle: the same family slot, invite-shaped.
+const _knock = Key('invite-knock');
+
 const _say = Key('say');
+
+const _invite = Key('invite');
 
 /// Pumps a plain app whose one button speaks its [lines] — one line per
 /// tap, each tap pumping the deferred insert and the entrance frame — so
@@ -55,6 +60,50 @@ Future<void> _pumpTable(WidgetTester tester, List<String> lines) async {
     await tester.pump();
     await tester.pump();
   }
+}
+
+/// The answer future of the knock one tap raises, plus the builder
+/// context the app handed it, for tests that also speak table lines.
+class _KnockHandle {
+  BuildContext? context;
+  Future<bool?>? answer;
+}
+
+/// Pumps a plain app whose one button raises the invite knock card;
+/// returns the handle whose [answer] fills the moment the tap happens.
+Future<_KnockHandle> _pumpInvite(
+  WidgetTester tester, {
+  String body = 'Swift Otter invites you to Ludo',
+}) async {
+  tester.view.physicalSize = const Size(1440, 900);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+  final handle = _KnockHandle();
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Builder(
+            builder: (context) {
+              handle.context = context;
+              return FilledButton(
+                key: _invite,
+                onPressed: () {
+                  handle.answer ??= showInviteKnock(
+                    Overlay.of(context, rootOverlay: true),
+                    title: 'Play invite',
+                    body: body,
+                  );
+                },
+                child: const Text('invite me'),
+              );
+            },
+          ),
+        ),
+      ),
+    ),
+  );
+  return handle;
 }
 
 void main() {
@@ -150,5 +199,112 @@ void main() {
           'never stacked',
     );
     expect(find.text('Ana left the game'), findsNothing);
+  });
+
+  group('the invite knock card', () {
+    testWidgets('sits top right under the app bar and carries its answers',
+        (tester) async {
+      final handle = await _pumpInvite(tester);
+      await tester.tap(find.byKey(_invite));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250)); // settled slide
+
+      final box = tester.renderObject<RenderBox>(find.byKey(_knock));
+      final origin = box.localToGlobal(Offset.zero);
+      final rightGap = 1440 - (origin.dx + box.size.width);
+      expect(rightGap, inInclusiveRange(0, 16),
+          reason: 'the knock lives at the top-right corner like its family');
+      expect(origin.dy, lessThan(450),
+          reason: 'under the app bar, above the board midline');
+      expect(find.text('Play invite'), findsOneWidget);
+      expect(find.textContaining('Swift Otter invites you to Ludo'),
+          findsOneWidget);
+      expect(find.text('Join game'), findsOneWidget);
+      expect(find.text('Not now'), findsOneWidget);
+      await tester.tap(find.text('Not now'));
+      await handle.answer;
+    });
+
+    testWidgets(
+        'Join answers true and leaves; Not now answers false, both 44-tall',
+        (tester) async {
+      final handle = await _pumpInvite(tester);
+      await tester.tap(find.byKey(_invite));
+      await tester.pump();
+      await tester.pump();
+
+      final joinBox = tester.renderObject<RenderBox>(
+        find.ancestor(
+          of: find.text('Join game'),
+          matching: find.byType(FilledButton),
+        ),
+      );
+      expect(joinBox.size.height, greaterThanOrEqualTo(44.0),
+          reason: 'the invite answer is a real decision, not a label');
+
+      await tester.tap(find.text('Join game'));
+      final joined = await handle.answer;
+      await tester.pump();
+      expect(joined, isTrue);
+      await tester.pump();
+      expect(find.byKey(_knock), findsNothing,
+          reason: 'answered cards leave the corner');
+    });
+
+    testWidgets('a table line yields while the knock is up', (tester) async {
+      final handle = await _pumpInvite(tester);
+      await tester.tap(find.byKey(_invite));
+      await tester.pump();
+      await tester.pump();
+
+      showTableAlert(handle.context!, 'Ana left the game');
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Ana left the game'), findsNothing,
+          reason: 'a knock is the table\'s loudest event; five-second '
+              'lines wait until it is answered');
+      expect(find.byKey(_knock), findsOneWidget,
+          reason: 'the unanswered knock stays put');
+      await tester.tap(find.text('Not now'));
+      await handle.answer;
+    });
+
+    testWidgets(
+        'a second knock replaces the first without stranding its asker',
+        (tester) async {
+      final handle = await _pumpInvite(tester, body: 'first knock');
+      await tester.tap(find.byKey(_invite));
+      await tester.pump();
+      await tester.pump();
+      final first = handle.answer;
+
+      final secondHandle = await _pumpInvite(tester, body: 'second knock');
+      await tester.tap(find.byKey(_invite));
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('second knock'), findsOneWidget);
+      await tester.tap(find.text('Join game'));
+      final second = await secondHandle.answer;
+      await tester.pump();
+      expect(second, isTrue);
+
+      expect(await first, isFalse,
+          reason: 'a displaced knock answers not-joined, never hangs');
+      expect(find.byKey(_knock), findsNothing);
+    });
+  });
+
+  testWidgets('a long knock body caps at the family width', (tester) async {
+    final handle = await _pumpInvite(
+      tester,
+      body: 'go go go ' * 60 + 'Swift Otter wants you at the table now',
+    );
+    await tester.tap(find.byKey(_invite));
+    await tester.pump();
+    await tester.pump();
+    final box = tester.renderObject<RenderBox>(find.byKey(_knock));
+    expect(box.size.width, lessThanOrEqualTo(460));
+    await tester.tap(find.text('Not now'));
+    await handle.answer;
   });
 }
