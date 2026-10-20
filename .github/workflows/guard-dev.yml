@@ -13,14 +13,26 @@ name: Guard dev
 # payload-only parent count is proven unreliable here. Parents are now counted
 # from git itself: the shallow 2-commit checkout costs a few seconds of
 # runner, and the check is worth it.
+#
+# A third rule rides beside those two, as a pull_request job below: a PR into
+# `dev` must not touch `CHANGELOG.md` at all (`changelog-hands-off`). The file
+# is written once — by CI's `release-prep`, when the promotion merges into
+# `main` — and a cheaper convention is not enforcement.
 on:
   push:
+    branches: [dev]
+  pull_request:
     branches: [dev]
 
 permissions: {}
 
 jobs:
   guard-dev:
+    # The push-specific checks are meaningless on a pull_request event (there
+    # is no being-deleted dev, and $GITHUB_SHA is GitHub's test-merge, whose
+    # parents say nothing about dev's real head) — so this job keeps its
+    # original push-only scope explicitly.
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -59,6 +71,42 @@ jobs:
           fi
 
           echo "dev head is a merge commit and not a force-push — OK"
+
+  # A PR into `dev` that changes `CHANGELOG.md` is doing the release's job:
+  # the file is generated exactly once — by CI's `release-prep`, when the
+  # promotion merges into `main` (CONVENTIONS.md, "Changelog (git-cliff)").
+  # Feature commits carry subjects only; hooks only report. This makes the
+  # convention a hard fail instead of a habit, after one PR shipped five
+  # changelog amendments that the bot's wholesale rewrite at promotion time
+  # throws away anyway.
+  changelog-hands-off:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        # Three-dot needs the merge base, and a shallow clone silently
+        # mis-computes it (the same trap tool/changelog.sh documents); the
+        # full fetch is seconds of a runner nobody has to babysit.
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse any CHANGELOG.md change in the PR
+        run: |
+          set -euo pipefail
+          base=origin/${{ github.event.pull_request.base.ref }}
+          # Three-dot = what THIS PR introduces relative to the merge base:
+          # dev's own changes are excluded, and a task branch that resolved
+          # a CHANGELOG conflict by keeping dev's side produces no line
+          # here. Writing new changelog content does.
+          if git diff "$base...$GITHUB_SHA" --name-only -- CHANGELOG.md |
+              grep -q .; then
+            echo "::error::A PR into dev must not change CHANGELOG.md."
+            echo "::error::The file is written only by CI's release-prep job, when the promotion merges into main."
+            echo "::error::Commit subjects only. If a dev merge conflict hit the file, keep dev's side."
+            exit 1
+          fi
+          echo "no CHANGELOG.md change in this PR — OK"
 
 # Several PR merges into dev in a minute produce several pushes; only the
 # newest one is worth a runner. Without this each check queues behind the
