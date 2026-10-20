@@ -17,6 +17,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  group('connect form', () {
+    testWidgets('names nothing about the server — the target is internal', (
+      tester,
+    ) async {
+      // The connect form asked players for the server URL to connect to;
+      // a player pasting a listener's form field exported games to it.
+      // The target is a build-time fact now, so the field must be gone
+      // and the rest of the form still reads.
+      SharedPreferences.setMockInitialValues({});
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: OnlineLobbyScreen())),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Server URL'), findsNothing);
+      expect(find.text('Your name'), findsOneWidget,
+          reason: 'the form still asks its one real question: the name');
+    });
+  });
+
   group('table size picker', () {
     testWidgets('offers 2–4 with four seats selected by default', (
       tester,

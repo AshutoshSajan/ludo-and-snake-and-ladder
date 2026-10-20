@@ -154,9 +154,8 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
   void _chatError(String message) {
     // The root ScaffoldMessenger sits above the navigator, so snackbars
     // work from inside a modal route as well as from the lobby screen.
-    ScaffoldMessenger.maybeOf(context)
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    // Floating, in the reading column — the app's one toast shape.
+    showSnackInColumn(context, message);
   }
 
   @override

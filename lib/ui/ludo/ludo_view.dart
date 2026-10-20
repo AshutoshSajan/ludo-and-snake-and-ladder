@@ -629,22 +629,45 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                 child: Semantics(
                   label: _boardSemanticLabel(s, movable.isNotEmpty),
                   liveRegion: true,
-                  child: Column(
-                    children: [
-                      // The corner identity panels live OUTSIDE the board:
-                      // each corner square is covered by that corner's
-                      // floating dice, so strike dots and the yard name hid
-                      // behind the roll control on exactly the seat whose
-                      // state the table needs to read. Top-edge yards
-                      // (green, yellow) stand above the board; bottom-edge
-                      // yards (red, blue) below. The 14px gap also clears
-                      // the dice, which reach a few pixels beyond the board
-                      // line through their felt margin.
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 14),
-                        child: Row(children: _cornerPanels(s, top: true)),
-                      ),
-                      Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, playArea) {
+                      // The corner panels must sit exactly over the board's
+                      // corners, so their rows are pinned to the same
+                      // square the board underneath will take: the play
+                      // area minus the two fixed panel rows. The dice
+                      // LayoutBuilder below derives the identical square
+                      // from the Expanded's own constraints, so the three
+                      // stay in register on every window size.
+                      const rowSlab = 46.0;
+                      final boardSide = math.min(
+                        playArea.maxWidth,
+                        math.max(playArea.maxHeight - rowSlab * 2, 0.0),
+                      );
+                      final panelWidth = boardSide > 0 ? boardSide : null;
+                      return Column(
+                        children: [
+                          // The corner identity panels live OUTSIDE the
+                          // board: each corner square is covered by that
+                          // corner's floating dice, so strike dots and the
+                          // yard name hid behind the roll control on
+                          // exactly the seat whose state the table needs
+                          // to read. Top-edge yards (green, yellow) stand
+                          // above the board; bottom-edge yards (red, blue)
+                          // below. The 14px gap also clears the dice, which
+                          // reach a few pixels beyond the board line
+                          // through their felt margin. The slab width is
+                          // the board's own square - panel rows used to
+                          // span the whole window, hanging the top corners
+                          // off the screen edges on a desktop display.
+                          SizedBox(
+                            height: rowSlab,
+                            width: panelWidth,
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 14),
+                              child: Row(children: _cornerPanels(s, top: true)),
+                            ),
+                          ),
+                          Expanded(
                         child: Stack(
                           children: [
                             Center(
@@ -750,11 +773,19 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                           ],
                         ),
                       ),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 14),
-                        child: Row(children: _cornerPanels(s, top: false)),
-                      ),
-                    ],
+                          SizedBox(
+                            height: rowSlab,
+                            width: panelWidth,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 14),
+                              child: Row(
+                                children: _cornerPanels(s, top: false),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -768,12 +799,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
 
   // ------------------------------------------------------- corner panels
 
-  /// The corner-sided identity strips above and below the board: every
-  /// seated player's color spot, name and strike dots, with the turn clock
-  /// beside the dots on the seat that currently owns the turn — the
-  /// question "whose turn and how long" answered on that seat's own
-  /// corner, instead of floating near the subtitle where nothing anchored
-  /// it to a player.
+  /// The corner-sided status lamps above and below the board: every
+  /// seated player's color spot and strike dots, with the turn clock
+  /// beside the dots on the seat that currently owns the turn. The name
+  /// lives in the yard pill painted inside the corner on the board, so
+  /// the lamp carries only state ("whose turn, how long, how badly
+  /// hurt") — the question answered on that seat's own corner.
   List<Widget> _cornerPanels(LudoState s, {required bool top}) {
     return cornerPanels(
       top: top,
@@ -781,7 +812,6 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         for (final p in s.players)
           (
             color: p.color,
-            name: p.name,
             misses: widget.onlineClient?.seatMisses[p.id] ?? 0,
             onTurn: p.id == s.currentPlayer.id,
             clock: widget.onlineClient == null

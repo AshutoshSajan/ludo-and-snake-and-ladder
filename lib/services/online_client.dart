@@ -950,21 +950,14 @@ class OnlineClient extends ChangeNotifier {
             : (mine ? 'You left the game' : '$gone left the game');
         onLeft?.call(leftNotice!);
       case 'turnMissed':
-        // One turn just burned because the seat on turn did not answer the
-        // clock. The toast is for the seat that burned it — "you missed a
-        // turn (2 of 5)" is the nudge that makes a slow phone open the
-        // board by the next beat — everyone else watches the strikes
-        // accumulate on that seat's corner dots instead of a broadcast
-        // interrupting their turn (a toast every silent turn of another
-        // player is an alarm that belongs to them, not the table).
-        final seat = msg['seatId'] as String? ?? '';
-        final name = msg['name'] as String? ?? 'A player';
-        final count = (msg['count'] as num?)?.toInt() ?? 0;
-        if (seat.isNotEmpty && seat != seatId) return;
-        leftNotice = seat.isEmpty
-            ? '$name missed a turn ($count of $maxTurnMisses)'
-            : 'You missed a turn ($count of $maxTurnMisses)';
-        onLeft?.call(leftNotice!);
+        // Deliberately silent: the strike dots on the missed seat's corner
+        // (fed by the `seats` frame) already answer "why did that turn
+        // burn", and the turn clock above the plate answers "how long".
+        // A toast repeating both at the top of the board reads as a third
+        // state to keep in the corner of your eye, so the miss event is
+        // consumed and no words appear. The server still sends the event —
+        // removal notices below are the only miss story the table hears.
+        break;
       case 'state':
         if ((msg['game'] as String?) == 'snakes') {
           final incoming = SnakesState.fromJson(

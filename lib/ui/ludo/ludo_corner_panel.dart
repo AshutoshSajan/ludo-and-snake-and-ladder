@@ -9,9 +9,11 @@
 ///
 /// The panels therefore live outside the board: top-row yards (green,
 /// yellow) get theirs above the board, bottom-row yards (red, blue) below
-/// it, each aligned to its own corner column. One panel carries the
-/// corner's color spot, its name, its turn-missed strike dots (red as they
-/// accrue), and — on the seat whose turn it is — the turn clock.
+/// it, each aligned to its own corner column and pinned to the board's
+/// own square width. One panel carries the corner's color spot, its
+/// turn-missed strike dots (red as they accrue), and — on the seat whose
+/// turn it is — the turn clock. The name is painted on the board's yard
+/// pill itself; the lamp repeats state, not identity.
 library;
 
 import 'package:flutter/material.dart';
@@ -60,14 +62,16 @@ class StrikeDotsRow extends StatelessWidget {
   }
 }
 
-/// One player-corner panel: color spot, name, strike dots, and — on the
+/// One player-corner panel: color spot, strike dots, and — on the
 /// seat whose turn it is — the turn clock, so "whose turn and how long"
-/// is answered on that seat's own corner.
+/// is answered on that seat's own corner. The name is deliberately
+/// absent: the yard pill painted inside the corner square on the board
+/// already says who it is, and a second name plate in the lamp above it
+/// made every corner read as a roster row instead of a status lamp.
 class LudoCornerPanel extends StatelessWidget {
   const LudoCornerPanel({
     super.key,
     required this.color,
-    required this.name,
     required this.misses,
     required this.onTurn,
     this.clock,
@@ -75,8 +79,6 @@ class LudoCornerPanel extends StatelessWidget {
 
   /// The corner's board color; also the panel's leading identity spot.
   final LudoColor color;
-
-  final String name;
 
   /// Consecutive missed turns (0..[ludoStrikeDots]).
   final int misses;
@@ -116,19 +118,6 @@ class LudoCornerPanel extends StatelessWidget {
               border: Border.all(width: 1, color: Colors.white24),
             ),
           ),
-          const SizedBox(width: 7),
-          Flexible(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: onTurn ? AppColors.gold : AppColors.ivory.withAlpha(220),
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
           const SizedBox(width: 9),
           StrikeDotsRow(
             key: Key('strike-dots-${color.name}'),
@@ -147,9 +136,7 @@ class LudoCornerPanel extends StatelessWidget {
 /// row splits the edge left/right exactly like the yards do.
 List<Widget> cornerPanels({
   required bool top,
-  required List<
-    ({LudoColor color, String name, int misses, bool onTurn, Widget? clock})
-  >
+  required List<({LudoColor color, int misses, bool onTurn, Widget? clock})>
   seats,
 }) {
   final edge = seats.where((s) => yardIsOnTop(s.color) == top).toList()
@@ -168,7 +155,6 @@ List<Widget> cornerPanels({
             child: LudoCornerPanel(
               key: Key('corner-panel-${s.color.name}'),
               color: s.color,
-              name: s.name,
               misses: s.misses,
               onTurn: s.onTurn,
               clock: s.clock,

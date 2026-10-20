@@ -167,9 +167,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   void _showSnack(String text) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+    // The reading-column toast — the same shape every other screen uses,
+    // so "friend added" and its siblings never stretch edge to edge on a
+    // desktop window while the page below stays in the column.
+    showSnackInColumn(context, text);
   }
 
   // ------------------------------------------------------------- actions
