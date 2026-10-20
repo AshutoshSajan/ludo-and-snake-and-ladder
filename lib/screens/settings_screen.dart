@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/app_providers.dart';
 import '../services/server_url.dart';
 import '../ui/shared/bug_report_sheet.dart';
+import '../ui/shared/tutorial_walkthrough.dart';
 import 'contact_screen.dart';
 import 'friends_screen.dart';
 
@@ -86,6 +87,18 @@ class SettingsScreen extends ConsumerWidget {
                 MaterialPageRoute(
                   builder: (_) => ContactScreen(serverUrl: defaultServerUrl()),
                 ),
+              ),
+            ),
+            // This tile keeps to its own section so parallel additions to
+            // this same list merge cleanly.
+            const Divider(height: 32),
+            ListTile(
+              leading: const Icon(Icons.school_outlined),
+              title: const Text('Replay the tutorial'),
+              subtitle: const Text('A one-minute walk through everything'),
+              onTap: () => TutorialWalkthrough.show(
+                context,
+                steps: TutorialWalkthrough.homeSteps,
               ),
             ),
             const Divider(height: 32),

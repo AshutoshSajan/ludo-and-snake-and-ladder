@@ -10,8 +10,13 @@ import 'package:game_club/ui/page_app_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  // Home-landing tests: the ask is home's story (test/tutorial_test.dart);
+  // admin route tests answer it away in storage.
+  setUp(() {
+    SharedPreferences.setMockInitialValues({'gc.tutorialAsked': true});
+  });
+
   testWidgets('home has no admin entry point', (tester) async {
-    SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(const ProviderScope(child: GameClubApp()));
     await tester.pumpAndSettle();
 
@@ -19,7 +24,6 @@ void main() {
   });
 
   testWidgets('unknown route falls back to home', (tester) async {
-    SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(const ProviderScope(child: GameClubApp()));
     await tester.pumpAndSettle();
     final ctx = tester.element(find.text('Game Club'));
@@ -35,13 +39,8 @@ void main() {
     // resolves the stub and the route stays unregistered, so the deep link
     // falls back to home instead of a sign-in form. (The web build registers
     // the real screen; that half cannot run under `flutter test`.)
-    SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
-      const ProviderScope(
-        child: MaterialApp(
-          home: GameClubApp(),
-        ),
-      ),
+      const ProviderScope(child: MaterialApp(home: GameClubApp())),
     );
     await tester.pumpAndSettle();
     final ctx = tester.element(find.text('Game Club'));
@@ -67,7 +66,9 @@ void main() {
     await tester.pumpWidget(
       const ProviderScope(
         child: MaterialApp(
-          home: Scaffold(body: Center(child: AdminBadge(session: session))),
+          home: Scaffold(
+            body: Center(child: AdminBadge(session: session)),
+          ),
         ),
       ),
     );
@@ -102,9 +103,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     final ctx = tester.element(find.text('signed out'));
-    final notifier = ProviderScope.containerOf(
-      ctx,
-    ).read(adminSessionProvider.notifier);
+    final notifier = ProviderScope.containerOf(ctx)
+        .read(adminSessionProvider.notifier);
     notifier.signIn(
       const AdminSession(
         token: 't',

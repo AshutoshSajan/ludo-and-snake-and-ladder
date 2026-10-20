@@ -6,7 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   testWidgets('app boots to home with both game cards', (tester) async {
-    SharedPreferences.setMockInitialValues({});
+    // The tutorial ask is home's story (test/tutorial_test.dart); the smoke
+    // test answers it away in storage.
+    SharedPreferences.setMockInitialValues({'gc.tutorialAsked': true});
     await tester.pumpWidget(const ProviderScope(child: GameClubApp()));
     await tester.pumpAndSettle();
 
@@ -30,7 +32,7 @@ void main() {
   });
 
   testWidgets('tapping Ludo opens the setup screen', (tester) async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'gc.tutorialAsked': true});
     await tester.pumpWidget(const ProviderScope(child: GameClubApp()));
     await tester.pumpAndSettle();
 

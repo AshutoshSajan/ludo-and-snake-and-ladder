@@ -11,11 +11,15 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:game_club/screens/home_screen.dart';
 import 'package:game_club/ui/page_app_bar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> _pumpHome(WidgetTester tester, double width) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = Size(width, 800);
   addTearDown(tester.view.reset);
+  // The tutorial ask is home's story to own (test/tutorial_test.dart); these
+  // tests are about the column, so the ask is answered away in storage.
+  SharedPreferences.setMockInitialValues({'gc.tutorialAsked': true});
   await tester.pumpWidget(
     const ProviderScope(child: MaterialApp(home: HomeScreen())),
   );
