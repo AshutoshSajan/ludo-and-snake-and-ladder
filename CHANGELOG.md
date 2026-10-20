@@ -35,6 +35,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ui): the home cards sit in the column every screen uses
 - Fix(web): revalidate the build-derived assets so new icons ship
 - Fix(lobby): the room code card, its toast and the chat order match the header
 - Fix(ui): the in-game chat and GIF sheets read in the header column
