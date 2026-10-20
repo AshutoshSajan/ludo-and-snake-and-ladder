@@ -22,6 +22,12 @@ import 'voice_rtc.dart';
 /// playing for them, or they have walked out.
 enum SeatStatus { connected, auto, left }
 
+/// How the seat in [OnlineClient.leftNotice] stopped playing, so the game
+/// views can match the alert's glyph to the wording in one place: the
+/// table carries a seat off when five turns go silent (`removed`), while a
+/// walk-out (`walkedOut`) is a decision the player made by hand.
+enum SeatExitKind { removed, walkedOut }
+
 /// The turn timer's eviction budget, as the server's default builds it.
 /// The copy that counts against it ("missed 2 · 3 left", "count of 5")
 /// reaches the client beside the misses themselves; if a room ever gets a
@@ -529,9 +535,15 @@ class OnlineClient extends ChangeNotifier {
   /// the corner greyed out afterwards.
   String? leftNotice;
 
+  /// How the seat in [leftNotice] left, set in the same breath and cleared
+  /// with it: the alert that carries the line reads this instead of
+  /// re-parsing the sentence.
+  SeatExitKind? leftExit;
+
   void clearLeftNotice() {
     if (leftNotice == null) return;
     leftNotice = null;
+    leftExit = null;
     notifyListeners();
   }
 
@@ -943,6 +955,11 @@ class OnlineClient extends ChangeNotifier {
         final goneSeat = msg['seatId'] as String? ?? '';
         final mine = goneSeat.isNotEmpty && goneSeat == seatId;
         _mySeatEvicted = mine && reason == 'timeout';
+        // One decision, two surfaces: the words for the table and the kind
+        // for the alert's glyph are set together and cleared together.
+        leftExit = reason == 'timeout'
+            ? SeatExitKind.removed
+            : SeatExitKind.walkedOut;
         leftNotice = reason == 'timeout'
             ? (mine
                   ? 'You were removed — five turns missed'

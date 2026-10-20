@@ -147,6 +147,11 @@ void main() {
     });
     await tester.pump();
     await tester.pump();
+    // The seat-gone line moved to the table alert (top-right pill): its
+    // insert is deferred one frame (mounted context geometry), called from
+    // the view's own post-frame callback — so the pill builds one pump
+    // past the two the old toast path needed.
+    await tester.pump();
 
     expect(find.text('You were removed'), findsNothing,
         reason: 'this seat was not removed — there is no end card for it');

@@ -19,7 +19,7 @@ import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
 import '../shared/seat_status_strip.dart';
-import '../shared/table_notice.dart';
+import '../shared/table_alert.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'ludo_board_painter.dart';
@@ -217,10 +217,13 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     } else {
       final notice = client?.leftNotice;
       if (notice != null) {
-        client!.clearLeftNotice();
-        // A seat can be announced mid-frame; a toast has to wait for the frame.
+        // Read before the clear: leftExit dies with leftNotice.
+        final removed = client!.leftExit == SeatExitKind.removed;
+        client.clearLeftNotice();
+        // A seat can be announced mid-frame; an alert has to wait for the
+        // frame (its own insert waits one more, so geometry is valid).
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showNotice(notice);
+          if (mounted) _showNotice(notice, removed: removed);
         });
       }
     }
@@ -265,8 +268,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     );
   }
 
-  void _showNotice(String text) {
-    showTableNotice(context, text);
+  /// A witness line that a seat is gone from the table, on the top-right
+  /// table alert. The glyph matches how the seat left — carried off by the
+  /// five missed turns, or a walk-out chosen by hand. The removed seat's
+  /// own end card is the dialog above; this notice is only for the table
+  /// that stays.
+  void _showNotice(String notice, {required bool removed}) {
+    showTableAlert(
+      context,
+      notice,
+      icon: removed ? Icons.person_remove_outlined : Icons.logout,
+    );
   }
 
   /// Spectators watch; they don't hand a seat to anyone, including themselves.
@@ -328,12 +340,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
         _diceTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted) setState(() => _diceRolling = false);
         });
-        // A spent roll must not read as a swallowed tap: when the roll had
-        // no legal move the engine passed the turn right there, and the
-        // only evidence left is a corner die holding the face. Say why.
-        if (session.state.lastEvent == 'skip') {
-          _showNotice(ludoSkipNotice(session.state));
-        }
+        // A spent roll changes nothing the player can act on: no token had
+        // a legal move, the engine passed the turn right there, and the
+        // die keeps its face. This used to interrupt with "rolled a 3 —
+        // nothing can move" on every such roll, and the playtest counted
+        // it exactly as the chatter they wanted gone ("remove the unwanted
+        // popups like you need 1/6 to start game") — every spent roll was
+        // a popup for a rule the soon-to-come rules pages and in-app
+        // tutorial teach once, where the lamp already names whose turn it
+        // is. The table stays quiet: evidence lives on the die.
       }
       // A rewound sequence (undo, or a resync snapshot) only re-tracks the
       // sequence above — no tumble for a die that was never thrown.

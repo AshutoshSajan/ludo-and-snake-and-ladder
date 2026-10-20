@@ -750,6 +750,10 @@ void main() {
       tester,
     ) async {
       await pumpedTable(tester, mine: false);
+      // The seat-gone line moved to the table alert (top-right pill): its
+      // insert is deferred one frame (mounted context geometry), called
+      // from the view's own post-frame callback — one pump past the toast.
+      await tester.pump();
 
       expect(find.text('You were removed'), findsNothing);
       expect(find.textContaining('was removed — five turns missed'),
