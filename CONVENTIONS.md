@@ -137,7 +137,8 @@ the "you cannot just push to a trunk" rule is enforced by standing jobs:
 | Workflow | Trigger | Enforces |
 |---|---|---|
 | `ci.yml` → `guard-main` | push to `main` | head of `main` must be a **merge commit** (direct pushes and squash merges fail) |
-| `guard-dev.yml` → `guard-dev` | push to `dev` | same merge-commit rule for `dev` — cheap (no checkout: it disproves a commit from the push event payload) |
+| `guard-dev.yml` → `guard-dev` | push to `dev` | same merge-commit rule for `dev` — cheap (parents are disproved from git, not the event payload — that payload variant failed real merges) |
+| `guard-dev-pr.yml` → `changelog-hands-off` | PR into `dev` | **fails any PR whose diff touches `CHANGELOG.md`** — the file is written only by CI's `release-prep` at the promotion (see [the changelog rule](#-changelog-git-cliff)) |
 | `pre-push` hook | every local push | rejects pushes to `main`/`dev` before they happen, then the full local suite |
 | `deps-audit.yml` | weekly cron + PRs into `main` touching `pubspec*` | `pubspec.lock` scanned against OSV.dev advisories (`osv-scanner`); a known-vulnerable package fails the run — see [Dependency health](#-dependency-health) |
 | `prune-branch.yml` | PR into `dev`/`main` closed+merged | deletes the merged head branch (trunks and unknown prefixes excepted) |
@@ -230,7 +231,9 @@ committed copy is behind `main`, and `commit-msg` enforces the Conventional
 Commits subjects the generator reads. Generation has exactly one place in
 the world — the GitHub Actions `release-prep` job, at the dev→`main`
 promotion. A hook that starts regenerating is a regression: delete the step,
-don't negotiate with it.
+don't negotiate with it. This is enforced, not just said: `guard-dev-pr.yml`'s
+`changelog-hands-off` job fails any PR into `dev` whose diff touches the
+file, so the mistake above can no longer be committed even by accident.
 
 ```bash
 tool/changelog.sh           # rewrite it

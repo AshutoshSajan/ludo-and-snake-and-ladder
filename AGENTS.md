@@ -34,7 +34,9 @@ every edit, every commit, every push.
    `chore: release prep` PR for a human to merge. Never hand-edit the file;
    never regenerate-and-commit it on a dev PR (dev PRs carry commit subjects
    only); no git hook ever writes it — hooks only *report*
-   (`tool/changelog.sh --check` in `post-merge`, nothing in `pre-push`).
+   (`tool/changelog.sh --check` in `post-merge`, nothing in `pre-push`). It
+   is enforced: `guard-dev-pr.yml` → `changelog-hands-off` fails any dev PR
+   whose diff touches the file.
    Conventional-commit subjects (`feat(ludo): …`) are mandatory input to
    that generator.
 7. **Verify before you push**: `flutter analyze --fatal-infos` + `flutter
