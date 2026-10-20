@@ -8,6 +8,7 @@ import '../services/server_url.dart';
 import '../ui/shared/bug_report_sheet.dart';
 import 'contact_screen.dart';
 import 'friends_screen.dart';
+import 'rules_screen.dart';
 
 /// Settings: sound, haptics, animation (battery saver) toggles.
 /// All preferences persist via SharedPreferences and apply instantly.
@@ -89,6 +90,13 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
             const Divider(height: 32),
+            ListTile(
+              leading: const Icon(Icons.help_outline),
+              title: const Text('How to play'),
+              subtitle: const Text('Rules for Ludo and Snakes & Ladders'),
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const RulesScreen())),
+            ),
             const ListTile(
               leading: Icon(Icons.info_outline),
               title: Text('Game Club'),
