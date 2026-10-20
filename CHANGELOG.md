@@ -36,6 +36,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ui): the home cards sit in the column every screen uses
+- Fix(web): revalidate the build-derived assets so new icons ship
 - Fix(ui): toasts and popups keep the column, the podium keeps a card
 - Fix(lobby): the server target stays internal to the builds
 - Fix(ludo): the corner lamps sit on the board square and say state only

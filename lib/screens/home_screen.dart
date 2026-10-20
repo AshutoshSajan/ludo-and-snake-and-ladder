@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../engine/core/player_profiles.dart';
 import '../providers/app_providers.dart';
 import '../ui/admin_badge.dart';
+import '../ui/page_app_bar.dart';
 import '../ui/ludo/ludo_board_painter.dart';
 import '../ui/snakes/snakes_board_painter.dart';
 import '../ui/theme.dart';
@@ -31,97 +32,97 @@ class HomeScreen extends ConsumerWidget {
           ),
         ),
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: ListView(
-                padding: const EdgeInsets.all(24),
-                shrinkWrap: true,
-                children: [
+          // Rule 11: the home cards sit in the same reading column the room
+          // creation form uses, so the two screens read as one family instead
+          // of a wide menu and a narrow form trading widths underneath you.
+          // The gradient stays full-bleed: a page background wants the window.
+          child: ContentColumn(
+            child: ListView(
+              padding: const EdgeInsets.all(24),
+              shrinkWrap: true,
+              children: [
+                const SizedBox(height: 12),
+                const ClubHeader(),
+                // Signed-in admins get a visible identity chip (and a way
+                // back to the dashboard). Nobody else sees anything: there
+                // is deliberately no admin entry point for signed-out users.
+                if (admin != null) ...[
                   const SizedBox(height: 12),
-                  const ClubHeader(),
-                  // Signed-in admins get a visible identity chip (and a way
-                  // back to the dashboard). Nobody else sees anything: there
-                  // is deliberately no admin entry point for signed-out users.
-                  if (admin != null) ...[
-                    const SizedBox(height: 12),
-                    Center(child: AdminBadge(session: admin)),
-                  ],
-                  const SizedBox(height: 28),
-                  GameCard(
-                    title: 'Ludo',
-                    subtitle:
-                        'Classic race home · 2–4 players · friends or bots',
-                    preview: CustomPaint(
-                      size: const Size(120, 120),
-                      painter: LudoBoardPainter(),
-                    ),
-                    onTap: () => _openSetup(context, GameKind.ludo),
-                  ),
-                  const SizedBox(height: 16),
-                  GameCard(
-                    title: 'Snakes & Ladders',
-                    subtitle: 'Snakes, ladders & luck · 2–10 players',
-                    preview: CustomPaint(
-                      size: const Size(120, 120),
-                      painter: SnakesBoardPainter(),
-                    ),
-                    onTap: () => _openSetup(context, GameKind.snakes),
-                  ),
-                  const SizedBox(height: 16),
-                  // Leaderboard, online play and settings on one line. They were
-                  // stacked over two rows, which pushed the last one below the
-                  // fold on a phone and made the home screen taller than the
-                  // two game cards it exists to launch. "Play Online" keeps the
-                  // width because it is the one people come for; the other two
-                  // are icon buttons with tooltips.
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.wifi, size: 18),
-                          label: const Text('Play Online'),
-                          onPressed: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const OnlineLobbyScreen(),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      IconButton.outlined(
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const FriendsScreen(),
-                          ),
-                        ),
-                        icon: const Icon(Icons.group_outlined),
-                        tooltip: 'Friends',
-                      ),
-                      const SizedBox(width: 10),
-                      IconButton.outlined(
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const ScoreboardScreen(),
-                          ),
-                        ),
-                        icon: const Icon(Icons.emoji_events),
-                        tooltip: 'Leaderboard',
-                      ),
-                      const SizedBox(width: 10),
-                      IconButton.outlined(
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const SettingsScreen(),
-                          ),
-                        ),
-                        icon: const Icon(Icons.settings_outlined),
-                        tooltip: 'Settings',
-                      ),
-                    ],
-                  ),
+                  Center(child: AdminBadge(session: admin)),
                 ],
-              ),
+                const SizedBox(height: 28),
+                GameCard(
+                  title: 'Ludo',
+                  subtitle: 'Classic race home · 2–4 players · friends or bots',
+                  preview: CustomPaint(
+                    size: const Size(120, 120),
+                    painter: LudoBoardPainter(),
+                  ),
+                  onTap: () => _openSetup(context, GameKind.ludo),
+                ),
+                const SizedBox(height: 16),
+                GameCard(
+                  title: 'Snakes & Ladders',
+                  subtitle: 'Snakes, ladders & luck · 2–10 players',
+                  preview: CustomPaint(
+                    size: const Size(120, 120),
+                    painter: SnakesBoardPainter(),
+                  ),
+                  onTap: () => _openSetup(context, GameKind.snakes),
+                ),
+                const SizedBox(height: 16),
+                // Leaderboard, online play and settings on one line. They were
+                // stacked over two rows, which pushed the last one below the
+                // fold on a phone and made the home screen taller than the
+                // two game cards it exists to launch. "Play Online" keeps the
+                // width because it is the one people come for; the other two
+                // are icon buttons with tooltips.
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.wifi, size: 18),
+                        label: const Text('Play Online'),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const OnlineLobbyScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    IconButton.outlined(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const FriendsScreen(),
+                        ),
+                      ),
+                      icon: const Icon(Icons.group_outlined),
+                      tooltip: 'Friends',
+                    ),
+                    const SizedBox(width: 10),
+                    IconButton.outlined(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const ScoreboardScreen(),
+                        ),
+                      ),
+                      icon: const Icon(Icons.emoji_events),
+                      tooltip: 'Leaderboard',
+                    ),
+                    const SizedBox(width: 10),
+                    IconButton.outlined(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const SettingsScreen(),
+                        ),
+                      ),
+                      icon: const Icon(Icons.settings_outlined),
+                      tooltip: 'Settings',
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ),

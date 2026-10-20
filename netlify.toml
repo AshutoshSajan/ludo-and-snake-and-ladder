@@ -173,8 +173,10 @@
   [headers.values]
     Cache-Control = "no-cache, must-revalidate"
 
-# Versioned build output: hold it for a year. These directories are named
-# rather than blanket-matched on purpose.
+# Versioned build output: held for a year — but only where the path itself
+# carries the version. canvaskit ships under a Flutter-version-named
+# directory; the launcher icons are fixed images. Nothing else is listed as
+# immutable.
 #
 # The obvious `for = "/*"` catch-all is wrong here, and wrong in a way that only
 # shows up in production. A deep link like /ludo/abc does not exist in publish/,
@@ -183,26 +185,52 @@
 # therefore serve the app shell with a one-year immutable cache on every deep
 # link and refresh, and the fix is invisible until someone hard-refreshes a
 # shared game URL and gets last week's build.
-#
-# Listing the versioned directories instead means anything unrecognised — a
-# deep link, a file Flutter adds in a future release — falls through to
-# Netlify's own default of `public, max-age=0, must-revalidate`. Wrong in the
-# safe direction: a revalidation costs a request, a stale shell costs a bug
-# report.
-[[headers]]
-  for = "/assets/*"
-  [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
-
 [[headers]]
   for = "/canvaskit/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
 [[headers]]
-  for = "/fonts/*"
+  for = "/icons/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# Everything Flutter emits under /assets/ is constant-named but
+# build-derived, so it revalidates like the app shell, mirroring
+# lib/server/web_cache.dart exactly. The tree-shaken MaterialIcons subset
+# is regenerated under the same `assets/fonts/MaterialIcons-Regular.otf`
+# name by every build, with a glyph membership that changes the moment any
+# icon is added — an immutable cache served last deploy's subset and the
+# new icons rendered blank. AssetManifest and FontManifest describe every
+# other asset and go stale in the same breath; shaders are regenerated per
+# Flutter version; sounds and images change by deliberate edit. An
+# unrecognised path — a file Flutter adds in a future release — falls
+# through to Netlify's own default of `public, max-age=0, must-revalidate`,
+# which is this same policy.
+[[headers]]
+  for = "/assets/fonts/*"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/assets/shaders/*"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/assets/AssetManifest.bin"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/assets/AssetManifest.bin.json"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/assets/FontManifest.json"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
 
 # Security headers for everything, including the rewritten shell.
 [[headers]]
