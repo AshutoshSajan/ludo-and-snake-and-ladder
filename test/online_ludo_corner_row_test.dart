@@ -20,6 +20,7 @@ import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/engine/ludo/ludo_rules.dart';
 import 'package:game_club/services/online_client.dart';
 import 'package:game_club/ui/ludo/ludo_board_painter.dart';
+import 'package:game_club/ui/ludo/ludo_corner_panel.dart';
 import 'package:game_club/ui/ludo/ludo_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'fake_channel.dart';
@@ -102,7 +103,9 @@ void main() {
     );
     final slabs = tester
         .widgetList<SizedBox>(
-          find.byWidgetPredicate((w) => w is SizedBox && w.height == 46.0),
+          find.byWidgetPredicate(
+            (w) => w is SizedBox && w.height == ludoPanelSlab,
+          ),
         )
         .toList();
     expect(slabs, isNot(isEmpty),

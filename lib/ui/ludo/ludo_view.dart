@@ -669,7 +669,11 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                       // LayoutBuilder below derives the identical square
                       // from the Expanded's own constraints, so the three
                       // stay in register on every window size.
-                      const rowSlab = 46.0;
+                      // The slabs share the panel row's own ledger
+                      // (ludoPanelSlab) instead of a local number: the
+                      // clock plate and dice gap priced there keep these
+                      // three (two rows + board sizing) in register.
+                      const rowSlab = ludoPanelSlab;
                       final boardSide = math.min(
                         playArea.maxWidth,
                         math.max(playArea.maxHeight - rowSlab * 2, 0.0),
