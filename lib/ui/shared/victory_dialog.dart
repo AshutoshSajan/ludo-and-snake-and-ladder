@@ -65,6 +65,11 @@ class _VictoryDialogState extends State<VictoryDialog>
   Widget build(BuildContext context) {
     return Dialog(
       clipBehavior: Clip.antiAlias,
+      // The dialog's rows flex, and an unbounded dialog stretches to the
+      // window (playtest: the win banner was full-screen on web). It keeps
+      // the reading column's proportions instead: the header could be 720,
+      // a card half that width reads like every other popup in the app.
+      constraints: const BoxConstraints(maxWidth: 460),
       child: AnimatedBuilder(
         animation: _fx,
         builder: (context, _) {
