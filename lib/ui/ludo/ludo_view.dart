@@ -815,12 +815,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   // ------------------------------------------------------- corner panels
 
   /// The corner-sided status lamps above and below the board: every
-  /// seated player's color spot and strike dots, with the turn clock and
-  /// the phase prompt beside the dots on the seat that currently owns
-  /// the turn. The name lives in the yard pill painted inside the corner
-  /// on the board, so the lamp carries only state ("whose turn, how
-  /// long, what next, how badly hurt") — the question answered on that
-  /// seat's own corner, never as a left-edge status line.
+  /// seated player's color spot and strike dots, with the turn clock
+  /// beside the dots on the seat that currently owns the turn. The name
+  /// lives in the yard pill painted inside the corner on the board, and
+  /// the phase words belong to the play surfaces (the dice, the tokens),
+  /// so the lamp carries only state ("whose turn, how long, how badly
+  /// hurt") — the question answered on that seat's own corner.
   List<Widget> _cornerPanels(LudoState s, {required bool top}) {
     return cornerPanels(
       top: top,
@@ -830,7 +830,6 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             color: p.color,
             misses: widget.onlineClient?.seatMisses[p.id] ?? 0,
             onTurn: p.id == s.currentPlayer.id,
-            prompt: _seatPrompt(s, p),
             clock: widget.onlineClient == null
                 ? null
                 : (p.id == s.currentPlayer.id
@@ -839,23 +838,6 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
           ),
       ],
     );
-  }
-
-  /// The phase prompt for one seat's lamp. Only the seat owning the turn
-  /// gets words ("Your roll, {name}!" — if the seat is ours, "Your roll"
-  /// is exactly the phrase the old left-edge subtitle used; AI seats
-  /// think instead) — everyone else's lamp stays a lamp: dots and clock
-  /// only.
-  String? _seatPrompt(LudoState s, LudoPlayer p) {
-    if (s.phase == LudoPhase.gameOver) return null;
-    if (p.id != s.currentPlayer.id) return null;
-    return switch (s.phase) {
-      LudoPhase.awaitingRoll when session.currentIsAI =>
-        '${p.name} is thinking…',
-      LudoPhase.awaitingRoll => 'Your roll, ${p.name}!',
-      LudoPhase.awaitingMove => 'Pick a token to move',
-      _ => null,
-    };
   }
 
   // -------------------------------------------------- per-corner dice HUD
@@ -938,11 +920,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
 
   // ------------------------------------------------------------- controls
   //
-  // Intentionally empty: the phase prompt ("Your roll, {name}!",
-  // "Pick a token to move", "… is thinking…") lives on the on-turn seat's
-  // corner lamp beside its strike dots now — a full-width status row used
-  // to push the same words to a wide window's far left (playtest: they
-  // belong under/over the corner dots, not half a screen away from them).
+  // Intentionally empty: the phase words live on the play surfaces (the
+  // dice, the tokens), and the turn clock lives on the on-turn seat's
+  // corner lamp, beside its strike dots — a full-width status row used to
+  // push both to a wide window's far left (playtest: they belong with the
+  // corners, not half a screen away; and the spoken-phase line itself is
+  // gone entirely by playtest request).
 
   // ---------------------------------------------------------- pause menu
 
