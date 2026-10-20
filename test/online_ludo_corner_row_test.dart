@@ -7,11 +7,10 @@
 ///   should sit directly above/below the player corners);
 /// - the lamps carry state (spot, dots, clock), not identity — the name
 ///   lives once, on the yard pill painted inside the corner square;
-/// - the on-turn seat carries the phase prompt ("Your roll, {name}!") —
-///   it used to be a full-width status row that landed at a wide
-///   window's far left, half a screen away from the corner dots it was
-///   describing (playtest: it should sit below/above the dots when the
-///   player's turn comes).
+///   neither is the lamp the place for phase words — a playtest round put
+///   "Your roll, {name}!" beside the dots and the next one asked it gone
+///   ("i don't need your turn username message"), so no spoken line
+///   exists anywhere: dots and a clock say the whole turn story.
 library;
 
 import 'package:flutter/material.dart';
@@ -120,28 +119,18 @@ void main() {
   });
 
   testWidgets(
-      'the on-turn seat carries the phase prompt beside its dots',
+      'on-turn lamps stay wordless — dots and a clock, no phase line',
       (tester) async {
     await pumpTable(tester);
 
-    // Ana (red) owns the turn, awaiting a roll: her lamp answers with the
-    // roll prompt right where her strike dots live.
-    final redLamp = find.byKey(const Key('corner-panel-red'));
-    expect(redLamp, findsOneWidget);
-    expect(
-      find.descendant(of: redLamp, matching: find.text('Your roll, Ana!')),
-      findsOneWidget,
-      reason: 'the roll prompt rides the on-turn lamp, beside the dots — '
-          'not a far-left status line',
-    );
-    final greenLamp = find.byKey(const Key('corner-panel-green'));
-    expect(
-      find.descendant(of: greenLamp, matching: find.textContaining('roll')),
-      findsNothing,
-      reason: 'only the seat on turn gets words; mine stays a lamp',
-    );
-    // And the old subtitle is gone: the phrase exists exactly once.
-    expect(find.text('Your roll, Ana!'), findsOneWidget);
+    // The spoken phase line ("Your roll, {name}!" and friends) was played
+    // both on a full-width row and on the on-turn lamp and removed by the
+    // third playtest round: no seat's lamp holds words now, and no other
+    // status row revived to carry them instead.
+    expect(find.textContaining('roll,'), findsNothing,
+        reason: 'the lamp answers "whose turn, how long" without saying it '
+            'in words — a prompt next to the dots was not wanted');
+    expect(find.text('Pick a token to move'), findsNothing);
   });
 
   testWidgets('the lamps read state only — names live on the yard pill', (

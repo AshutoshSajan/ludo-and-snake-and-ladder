@@ -90,6 +90,25 @@ void main() {
     expect(find.byIcon(Icons.sports_esports), findsOneWidget);
   });
 
+  testWidgets('the Play row opens the pick-a-game dialog', (tester) async {
+    // The play handoff starts with a picker ("Invite Small Fox to…"),
+    // never a silent tap: a build where this dialog does not show has
+    // lost the handoff entirely and must fail loudly here.
+    await _pump(
+      tester,
+      FriendClient(
+        serverUrl: serverUrl,
+        httpClient: MockClient((_) async => ok(_stateBody())),
+      ),
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Play'));
+    await tester.pump();
+
+    expect(find.text('Invite Small Fox to…'), findsOneWidget);
+    expect(find.text('Ludo'), findsOneWidget);
+    expect(find.text('Snakes & Ladders'), findsOneWidget);
+  });
+
   testWidgets(
     'tablemates land in their own section and open the actions sheet',
     (tester) async {
