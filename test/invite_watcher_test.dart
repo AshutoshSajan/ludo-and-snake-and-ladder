@@ -6,10 +6,16 @@
 ///   request should show up to the person whom we are inviting and on
 ///   clicking on that invitation request join game btn he should be able
 ///   to join and play";
+/// - an invite that is already pending at launch knocks on the very first
+///   pulse, not one cadence later (the pulse is what an app-refocus
+///   drives too — a throttled background tab's comeback);
 /// - Join answers `friends/invite/respond` (accept) and walks the player
 ///   into the room the invite carries its code for;
 /// - Not now never answers the server and never re-knocks the same
 ///   invite this session;
+/// - an answer the table cannot take (server error) turns into the
+///   column toast and the next poll may knock the invite again — the
+///   player is not stranded with a dead knock;
 /// - a code-less answer ("their table is not ready") stays on screen as
 ///   the column toast instead of a mystery push;
 /// - no persisted online identity means no polls at all.
@@ -125,6 +131,103 @@ void main() {
         reason: 'the room screen came up ahead of everything else');
     watcher.stop();
   });
+
+  testWidgets(
+    'an invite pending since launch knocks on the first pulse, not later',
+    (tester) async {
+      final posts = <http.Request>[];
+      // The friend sent their invite while the app was closed; both tabs
+      // reopen and the invitee must not wait out a full poll cadence to
+      // hear the knock.
+      final watcher = await watcherWith(
+        MockClient((req) async {
+          posts.add(req);
+          if (req.url.path == '/friends/state') {
+            return http.Response(
+              jsonEncode({
+                'ok': true,
+                'me': {'seatId': 'p2', 'name': 'Bo', 'code': 'PRK7VW'},
+                'friends': [],
+                'incoming': [],
+                'outgoing': [],
+                'blocked': [],
+                'table': [],
+                'invites': [inviteRow],
+              }),
+              200,
+            );
+          }
+          return http.Response(jsonEncode({'ok': true, 'code': 'ABCD'}), 200);
+        }),
+      );
+      await tester.pumpWidget(shell());
+      watcher.start();
+      await tester.pump(); // the immediate pulse — no interval was awaited
+
+      expect(find.text('Play invite'), findsOneWidget,
+          reason: 'start() polls before the periodic cadence, the same trip '
+              'an app-refocus pulse drives');
+      expect(posts.where((r) => r.url.path == '/friends/state'), isNotEmpty);
+      watcher.stop();
+    },
+  );
+
+  testWidgets(
+    'a failed answer toasts where to try again and re-knocks next poll',
+    (tester) async {
+      var respondCalls = 0;
+      final watcher = await watcherWith(
+        MockClient((req) async {
+          if (req.url.path == '/friends/state') {
+            return http.Response(
+              jsonEncode({
+                'ok': true,
+                'me': {'seatId': 'p2', 'name': 'Bo', 'code': 'PRK7VW'},
+                'friends': [],
+                'incoming': [],
+                'outgoing': [],
+                'blocked': [],
+                'table': [],
+                'invites': [inviteRow],
+              }),
+              200,
+            );
+          }
+          // First answer never reaches the table; the retry does.
+          respondCalls++;
+          if (respondCalls == 1) {
+            return http.Response('server woke up on the wrong foot', 503);
+          }
+          return http.Response(jsonEncode({'ok': true, 'code': 'ABCD'}), 200);
+        }),
+      );
+      await tester.pumpWidget(shell());
+      watcher.start();
+      await tester.pump(interval);
+      await tester.pump();
+      await tester.tap(find.text('Join game'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.textContaining('Could not reach their table'),
+          findsOneWidget,
+          reason: 'the failed answer must say itself, not fail silently');
+      expect(find.text('home'), findsOneWidget,
+          reason: 'nothing was pushed on a dead table answer');
+
+      // The invite is back on the next poll — one dead answer must not
+      // strand the player with a knock they can never press again.
+      await tester.pump(interval);
+      await tester.pump();
+      expect(find.text('Play invite'), findsOneWidget);
+
+      await tester.tap(find.text('Join game'));
+      await tester.pumpAndSettle();
+      expect(find.text('home'), findsNothing,
+          reason: 'the retry walks them into the room');
+      watcher.stop();
+    },
+  );
 
   testWidgets('Not now answers nothing and never re-knocks', (tester) async {
     final posts = <http.Request>[];
