@@ -200,4 +200,66 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     client.dispose();
   });
+
+  testWidgets('online: a manual tap wins the race and is sent once', (
+    tester,
+  ) async {
+    final channel = FakeChannel();
+    final client = OnlineClient(
+      'ws://x/ws',
+      seatId: 'p2',
+      name: 'Bo',
+      gameType: 'ludo',
+      channelFactory: (_) => channel,
+    );
+    final joined = client.connect(code: 'CODE');
+    await tester.pump();
+    channel.serverAdd({'type': 'joined', 'code': 'CODE', 'game': 'ludo'});
+    await tester.pump();
+    await joined;
+
+    final state = createLudoState([
+      LudoPlayer(id: 'p1', name: 'Ana', color: LudoColor.red),
+      LudoPlayer(id: 'p2', name: 'Bo', color: LudoColor.green),
+    ]);
+    state.currentPlayerIndex = 1;
+    state.phase = LudoPhase.awaitingMove;
+    state.lastRoll = 4;
+    state.rollSeq = 1;
+    state.lastRolledValue = 4;
+    state.lastRolledBy = 1;
+    final green = state.tokensOf(1);
+    green[0].pos = 52;
+    green[1].pos = 56;
+    green[2].pos = 56;
+    green[3].pos = 56;
+    channel.serverAdd({
+      'type': 'state',
+      'game': 'ludo',
+      'state': state.toJson(),
+    });
+    await tester.pump();
+    await tester.pump();
+
+    final sound = SoundService()..enabled = false;
+    final session = LudoSession.online(
+      client: client,
+      seatId: 'p2',
+      profiles: makeProfiles(),
+      sound: sound,
+      onGameOver: (_) {},
+    );
+    session.tapToken(0);
+    await tester.pump(const Duration(milliseconds: 1500));
+
+    expect(channel.sent.where((m) => m['type'] == 'move'), hasLength(1));
+    expect(
+      channel.sent.where((m) => m['type'] == 'move').single['token'],
+      0,
+    );
+
+    session.dispose();
+    sound.dispose();
+    client.dispose();
+  });
 }
