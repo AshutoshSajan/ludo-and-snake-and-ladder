@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
+import '../../ui/shared/table_alert.dart';
 import '../../ui/theme.dart';
 import 'admin_login_screen.dart';
 
@@ -408,9 +409,11 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
         );
       } on AdminException catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(
+        showTableAlert(
           context,
-        ).showSnackBar(SnackBar(content: Text('Create failed: ${e.body}')));
+          'Create failed: ${e.body}',
+          icon: Icons.error_outline,
+        );
         return;
       }
       _reloadAll();
@@ -1074,9 +1077,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
       _reloadTable();
     } on AdminException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.body)));
+      showTableAlert(context, e.body, icon: Icons.error_outline);
     }
   }
 

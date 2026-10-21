@@ -90,7 +90,7 @@ void main() {
       BugReportSheet.show(t.element(find.byType(Scaffold)), serverUrl: 'ws://x/ws');
       await t.pumpAndSettle();
       await t.tap(find.text('Send'));
-      await t.pump();
+      await t.pumpAndSettle();
       expect(find.text('Tell us what happened first'), findsOneWidget);
     });
 
@@ -115,7 +115,7 @@ void main() {
       await t.ensureVisible(find.text('Send message'));
       await t.pumpAndSettle();
       await t.tap(find.text('Send message'));
-      await t.pump();
+      await t.pumpAndSettle();
       expect(find.text('Write your message first'), findsOneWidget);
     });
 

@@ -35,6 +35,43 @@ void main() {
       expect(find.text('Your name'), findsOneWidget,
           reason: 'the form still asks its one real question: the name');
     });
+
+    testWidgets('the player id is tap-to-copy, with a corner confirmation', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        'gc.onlinePlayerId': 'p123stable',
+        'gc.onlineName': 'Asha',
+      });
+      final copied = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add(call.arguments['text'] as String);
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: OnlineLobbyScreen())),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Player ID p123stable'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('copy-player-id')));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['p123stable']);
+      expect(
+        find.textContaining('Player ID p123stable copied'),
+        findsOneWidget,
+        reason: 'the same top-right card confirms the copy',
+      );
+    });
   });
 
   group('table size picker', () {
@@ -104,7 +141,9 @@ void main() {
       );
 
       await tester.tap(find.byTooltip('Copy room code'));
-      await tester.pump();
+      // The page toast is the top-right overlay card now: its insert waits
+      // one frame and then slides in, so settle the slide before finding it.
+      await tester.pumpAndSettle();
 
       expect(copied, ['LK2X']);
       expect(

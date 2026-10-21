@@ -6,6 +6,7 @@ import 'package:game_club/engine/core/player_profiles.dart' show GameKind;
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/screens/setup_screen.dart';
 import 'package:game_club/ui/ludo/ludo_board_painter.dart';
+import 'package:game_club/ui/ludo/ludo_corner_panel.dart';
 import 'package:game_club/ui/ludo/ludo_view.dart';
 import 'package:game_club/ui/shared/dice_widget.dart';
 import 'package:game_club/ui/shared/sound_toggle_button.dart';
@@ -224,5 +225,40 @@ void main() {
       lessThan(boardLeft + boardSize.width),
       reason: 'a die should ring the board, not overlap it',
     );
+  });
+
+  testWidgets('a local table shows no turn lamps or strike dots', (
+    tester,
+  ) async {
+    // Strike dots and the clock are online-only: the server is what removes
+    // a seat after five missed turns and what arms the timer. A local table
+    // has neither, and the playtest asked for the lamps gone ("we don't need
+    // time, and red green dots for the player turn ... for local gameplay").
+    tester.view.physicalSize = const Size(900, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: LudoGameView(
+            seats: [
+              SeatSetup(name: 'R', color: LudoColor.red),
+              SeatSetup(name: 'G', color: LudoColor.green),
+            ],
+          ),
+        ),
+      ),
+    );
+    // The board's glow controller repeats, so settle is never safe here.
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(StrikeDotsRow), findsNothing);
+    for (final color in ['red', 'green', 'yellow', 'blue']) {
+      expect(find.byKey(Key('corner-panel-$color')), findsNothing);
+    }
   });
 }

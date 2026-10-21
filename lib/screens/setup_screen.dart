@@ -449,8 +449,10 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   void _start() {
     for (final s in _seats) {
       if (s.name.trim().isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Every seat needs a name')),
+        showSnackInColumn(
+          context,
+          'Every seat needs a name',
+          icon: Icons.edit_note,
         );
         return;
       }

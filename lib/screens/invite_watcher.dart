@@ -40,7 +40,6 @@ import '../services/online_client.dart';
 import '../services/server_url.dart';
 import '../services/storage_service.dart';
 import '../ui/shared/table_alert.dart';
-import '../ui/page_app_bar.dart';
 import 'online_lobby_screen.dart';
 
 class InviteWatcher {
@@ -166,21 +165,16 @@ class InviteWatcher {
         // The answer failed to reach the table: leave the invite un-knockable
         // until the next poll brings it back, and say where to try again.
         _knocked.remove(invite.id);
-        final place = navigatorKey.currentContext;
-        if (place != null && place.mounted) {
-          showSnackInColumn(
-            place,
-            'Could not reach their table — the invite stays open in '
-            'your friends tray',
-          );
-        }
+        _speak(
+          'Could not reach their table — the invite stays open in '
+          'your friends tray',
+        );
         continue;
       }
       final next = navigatorKey.currentContext;
       if (next == null || !next.mounted) return;
       if (code == null || code.isEmpty) {
-        showSnackInColumn(
-          next,
+        _speak(
           'Their table is not ready — they may have left before you answered',
         );
         continue;
@@ -192,6 +186,20 @@ class InviteWatcher {
         ),
       );
     }
+  }
+
+  /// Speaks through the app's corner from a navigator-owned context.
+  ///
+  /// [showTableAlert]'s normal lookup walks *up* the tree to the overlay,
+  /// but this listener holds the navigator's context — the overlay is
+  /// below it. Looking up from here throws, and the poller's catch would
+  /// turn a failed answer into silence. The navigator's overlay is passed
+  /// in instead, which is the same canvas the knock uses.
+  void _speak(String text) {
+    final overlay = navigatorKey.currentState?.overlay;
+    final context = navigatorKey.currentContext;
+    if (overlay == null || context == null || !context.mounted) return;
+    showTableAlert(context, text, onOverlay: overlay);
   }
 
   Future<({String seatId, String name})> _loadIdentity() async {

@@ -392,10 +392,32 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     );
   }
 
-  void _showSnack(String text) {
-    // Same column discipline as the body: lobby toasts never stretch a
-    // full window edge, the way the room card and header already don't.
-    showSnackInColumn(context, text);
+  void _showSnack(String text, {IconData icon = Icons.info_outline}) {
+    // One spoken surface for the whole app: the gold card in the top-right
+    // corner, never a white bar across the bottom edge.
+    showSnackInColumn(context, text, icon: icon);
+  }
+
+  /// Copies the identity under the name field so it can be sent to a friend
+  /// (the friends screen discovers players by code, but the id is the thing
+  /// the leaderboard and the server keep — the playtest asked to share it).
+  Future<void> _copyPlayerId() async {
+    if (_seatId.isEmpty) return;
+    try {
+      await Clipboard.setData(ClipboardData(text: _seatId));
+    } catch (_) {
+      if (!mounted) return;
+      _showSnack(
+        'Could not copy — the ID is still shown above',
+        icon: Icons.error_outline,
+      );
+      return;
+    }
+    if (!mounted) return;
+    _showSnack(
+      'Player ID $_seatId copied — share it with friends',
+      icon: Icons.check_circle_outline,
+    );
   }
 
   Future<void> _disconnect() async {
@@ -555,12 +577,57 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         ),
         // The id is shown rather than hidden: it is what the leaderboard
         // records, so a player can see which identity their wins belong to.
+        // Tapping copies it — the playtest wanted to hand it to a friend
+        // without selecting a 14-character string on a phone.
         if (_seatId.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 6, left: 4),
-            child: Text(
-              'Player ID $_seatId \u00b7 reused every time',
-              style: const TextStyle(fontSize: 11, color: Colors.white38),
+            padding: const EdgeInsets.only(top: 8, left: 4, right: 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Tooltip(
+                message: 'Copy your player ID',
+                child: InkWell(
+                  key: const Key('copy-player-id'),
+                  onTap: _copyPlayerId,
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 44),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppColors.gold.withAlpha(90)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.badge_outlined,
+                          size: 16,
+                          color: AppColors.gold,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Player ID $_seatId \u00b7 tap to copy',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: AppColors.ivoryDark,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.copy,
+                          size: 15,
+                          color: AppColors.gold,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         const SizedBox(height: 24),
@@ -979,9 +1046,11 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                       send: ({required bytes, required mime}) =>
                           client.sendKeyboardGif(bytes: bytes, mime: mime),
                       sendLink: client.sendGif,
-                      onError: (message) =>
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(SnackBar(content: Text(message))),
+                      onError: (message) => showSnackInColumn(
+                        context,
+                        message,
+                        icon: Icons.error_outline,
+                      ),
                     ),
                     decoration: InputDecoration(
                       labelText: 'Say something…',
@@ -1014,9 +1083,11 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                     mime: recording.mime,
                     durMs: recording.durMs,
                   ),
-                  onError: (message) =>
-                      ScaffoldMessenger.of(context)
-                          .showSnackBar(SnackBar(content: Text(message))),
+                  onError: (message) => showSnackInColumn(
+                    context,
+                    message,
+                    icon: Icons.error_outline,
+                  ),
                   onRecordingChanged: (recording) => setState(() {
                     _chatRecording = recording;
                   }),

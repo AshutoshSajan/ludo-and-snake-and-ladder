@@ -654,6 +654,32 @@ class OnlineClient extends ChangeNotifier {
     await _openAndHello(preferredColor: preferredColor);
   }
 
+  /// Waits for the authoritative room code the server assigns with `joined`.
+  ///
+  /// [connect] resolves once the socket is open and the `hello` is sent; the
+  /// code arrives on a later server message. Callers that read [roomCode]
+  /// straight after awaiting [connect] will almost always see null — the
+  /// inviter handoff did exactly that and tore down a room that was about to
+  /// form. This waits for the code (or [timeout], returning null), and does
+  /// not need the caller to listen for it.
+  Future<String?> awaitRoomCode({
+    Duration timeout = const Duration(seconds: 45),
+  }) {
+    final current = roomCode;
+    if (current != null && current.isNotEmpty) return Future.value(current);
+    final done = Completer<String?>();
+    void seeCode() {
+      final code = roomCode;
+      if (code == null || code.isEmpty) return;
+      if (!done.isCompleted) done.complete(code);
+    }
+
+    addListener(seeCode);
+    return done.future
+        .timeout(timeout, onTimeout: () => null)
+        .whenComplete(() => removeListener(seeCode));
+  }
+
   Future<void> _openAndHello({LudoColor? preferredColor}) async {
     try {
       // Carry the room code in the URL: a room-affinity load balancer

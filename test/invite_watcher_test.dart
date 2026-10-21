@@ -50,9 +50,10 @@ void main() {
       seatId: 'p2',
       name: 'Bo',
     ),
+    Duration? every,
   }) async {
     final watcher = InviteWatcher(
-      interval: interval,
+      interval: every ?? interval,
       clientFactory: () => FriendClient(
         serverUrl: 'wss://test/ws',
         httpClient: mock,
@@ -203,6 +204,9 @@ void main() {
           }
           return http.Response(jsonEncode({'ok': true, 'code': 'ABCD'}), 200);
         }),
+        // The real cadence is 9s, so the corner line survives long enough
+        // to be read. The test drives the next poll by hand instead.
+        every: const Duration(seconds: 10),
       );
       await tester.pumpWidget(shell());
       watcher.start();
@@ -210,8 +214,9 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 260));
       await tester.tap(find.text('Join game'));
-      await tester.pump();
-      await tester.pump();
+      // The failure speaks through the corner card: its insert waits a
+      // frame and then slides in, so settle that surface before reading it.
+      await tester.pumpAndSettle();
 
       expect(find.textContaining('Could not reach their table'),
           findsOneWidget,
@@ -221,7 +226,7 @@ void main() {
 
       // The invite is back on the next poll — one dead answer must not
       // strand the player with a knock they can never press again.
-      await tester.pump(interval);
+      watcher.poke();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 260));
       expect(find.text('Play invite'), findsOneWidget);
@@ -307,8 +312,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 260));
     await tester.tap(find.text('Join game'));
-    await tester.pump();
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.textContaining('table is not ready'), findsOneWidget);
     // The dialog closed and nothing was pushed: the home route owns the

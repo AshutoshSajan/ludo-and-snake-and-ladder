@@ -1,8 +1,9 @@
-/// The page snack: floating, and never wider than the reading column.
-/// A copied room code used to stretch a full-bleed stripe across a wide
-/// desktop window while the page it copied stayed inside
-/// [kContentMaxWidth] — the toast was the only element ignoring the
-/// header's width, and this pins it into the same column.
+/// The page toast is the table's own card, in the top-right corner.
+///
+/// The playtest called the old shape out plainly: "room code copy is showing
+/// plain white alert at the bottom, i wanted the good popup ui on the top
+/// right of the screen — find all such plain white banners". This pins the
+/// one surface every page message now uses: gold rim, top-right, no snackbar.
 library;
 
 import 'package:flutter/material.dart';
@@ -30,45 +31,46 @@ Future<void> _pumpWide(WidgetTester tester, double width) async {
   );
 }
 
-SnackBar? _shown(WidgetTester tester) {
-  for (final s in tester.widgetList<SnackBar>(find.byType(SnackBar))) {
-    if (s.content is! Text) continue;
-    if ((s.content as Text).data == 'PRK7VW copied') return s;
-  }
-  return null;
-}
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('a wide window keeps the toast inside the reading column', (
+  testWidgets('a page message lands in the top-right table card', (
     tester,
   ) async {
     await _pumpWide(tester, 1200);
     await tester.tap(find.text('Copy code'));
-    await tester.pump(const Duration(milliseconds: 400));
-    final snack = _shown(tester);
-    expect(snack, isNotNull);
-    expect(snack!.behavior, SnackBarBehavior.floating);
-    // 1200px window: (1200 − 720) / 2 = 240px insets center the toast
-    // under the header and body, instead of touching the edges.
-    expect(
-      (snack.margin as EdgeInsets).horizontal,
-      480,
-      reason: 'the toast, like the body, is never wider than the header',
-    );
+    // The overlay insert waits one frame; then the card slides in over
+    // 220ms. Settle the slide so the position assertion sees its resting
+    // place, not a frame mid-flight.
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(const Key('table-alert'));
+    expect(card, findsOneWidget);
+    expect(find.text('PRK7VW copied'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing,
+        reason: 'the plain bottom banner must not exist any more');
+
+    final rect = tester.getRect(card);
+    expect(rect.top, closeTo(64, 1),
+        reason: 'under the 56px app bar, with an 8px breath');
+    expect(rect.right, closeTo(1188, 1),
+        reason: '12px from the right edge — the corner, not a centred bar');
+    expect(rect.left, greaterThan(600),
+        reason: 'on a wide window the message belongs on the far right');
   });
 
-  testWidgets('a phone window keeps the familiar narrow margins', (
-    tester,
-  ) async {
+  testWidgets('a phone keeps the same top-right corner', (tester) async {
     await _pumpWide(tester, 420);
     await tester.tap(find.text('Copy code'));
-    await tester.pump(const Duration(milliseconds: 400));
-    final snack = _shown(tester);
-    expect(snack, isNotNull);
-    // Phone: the computed inset floors at 16px, so the toast reads
-    // exactly as a floating bar always did.
-    expect((snack!.margin as EdgeInsets).horizontal, 32);
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(const Key('table-alert'));
+    expect(card, findsOneWidget);
+    expect(find.text('PRK7VW copied'), findsOneWidget);
+    final rect = tester.getRect(card);
+    expect(rect.right, closeTo(408, 1));
+    expect(rect.top, closeTo(64, 1));
+    expect(rect.width, lessThanOrEqualTo(460),
+        reason: 'the card never grows past its family width');
   });
 }
