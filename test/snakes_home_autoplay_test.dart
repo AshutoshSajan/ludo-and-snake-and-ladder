@@ -139,18 +139,22 @@ void main() {
       expect(find.text('Home'), findsOneWidget);
       expect(find.text('4 of 4 waiting to enter'), findsOneWidget);
 
-      // It hangs directly under the board and never leaves the screen.
+      // On this wide window the one home panel sits to the LEFT of the
+      // board at the board's full height — the playtest's "move the home
+      // area to the left side and make the board as big as possible".
       expect(
-        area.top,
-        greaterThanOrEqualTo(b.bottom - 1),
-        reason: 'the area sits under the board, not on top of it',
+        area.right,
+        lessThanOrEqualTo(b.left + 0.5),
+        reason: 'the home rail sits left of the board, not over it',
       );
+      expect(area.top, closeTo(b.top, 0.5));
+      expect(area.height, closeTo(b.height, 0.5));
+      expect(area.width, lessThan(b.width));
       expect(
         area.bottom,
         lessThan(screenHeight(tester)),
         reason: 'the area is never clipped off screen',
       );
-      expect(area.width, closeTo(b.width, 0.5));
 
       // Every seat's pawn waits in that one area, in the seat's own colour.
       for (var i = 0; i < 4; i++) {
@@ -170,23 +174,61 @@ void main() {
       }
     });
 
-    testWidgets('ten seats still share the one home area, in a single row', (
+    testWidgets('ten seats share the one rail, in a single column', (
       tester,
     ) async {
       await pumpGame(tester, 10);
       expect(homeArea(), findsOneWidget);
-      final b = tester.getRect(board());
-      final tops = <double>{};
+      final area = tester.getRect(homeArea());
+      final lefts = <double>{};
       for (var i = 0; i < 10; i++) {
         expect(homePawn(i), findsOneWidget, reason: 'pawn of seat ${i + 1}');
         final r = tester.getRect(homePawn(i));
-        tops.add(r.top);
-        expect(r.left, greaterThanOrEqualTo(b.left - 0.5));
-        expect(r.right, lessThanOrEqualTo(b.right + 0.5));
+        lefts.add(r.left);
+        expect(
+          area.contains(r.center),
+          isTrue,
+          reason: 'chip ${i + 1} stays inside the one rail',
+        );
+        expect(r.bottom, lessThan(area.bottom + 0.5));
         expect(r.bottom, lessThan(screenHeight(tester)));
       }
-      expect(tops.length, 1, reason: 'ten seats never grow a second area/row');
+      expect(
+        lefts.length,
+        1,
+        reason: 'ten seats never grow a second column',
+      );
       expect(find.text('10 of 10 waiting to enter'), findsOneWidget);
+    });
+
+    testWidgets('a narrow phone keeps the home strip under the board', (
+      tester,
+    ) async {
+      // The rail costs width a phone does not have: the strip leaves a bigger
+      // board there, so the same stage chooses the under-board home.
+      tester.view.physicalSize = const Size(420, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await pumpGame(tester, 3);
+      final b = tester.getRect(board());
+      final area = tester.getRect(homeArea());
+
+      expect(
+        area.top,
+        greaterThanOrEqualTo(b.bottom - 0.5),
+        reason: 'on a phone the home strip sits under the board',
+      );
+      expect(area.width, closeTo(b.width, 0.5));
+      expect(area.bottom, lessThan(900));
+      expect(find.text('3 of 3 waiting to enter'), findsOneWidget);
+
+      final tops = <double>{};
+      for (var i = 0; i < 3; i++) {
+        tops.add(tester.getRect(homePawn(i)).top);
+      }
+      expect(tops.length, 1, reason: 'the phone strip is one row');
     });
   });
 
