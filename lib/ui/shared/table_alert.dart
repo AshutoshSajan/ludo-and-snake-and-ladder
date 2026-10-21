@@ -29,11 +29,15 @@ void showTableAlert(
   BuildContext context,
   String text, {
   IconData icon = Icons.info_outline,
+  OverlayState? onOverlay,
 }) {
   // The root navigator's overlay: game views live inside lobby screens
   // and route stacks, and the top-right corner must always resolve to
-  // the same canvas.
-  final overlay = Overlay.of(context, rootOverlay: true);
+  // the same canvas. An app-level listener holding the *navigator's*
+  // context cannot use the lookup — the overlay is below that context,
+  // not above it — so it passes the navigator's overlay directly.
+  final overlay =
+      onOverlay ?? Overlay.of(context, rootOverlay: true);
   // A live knock outranks a five-second line: paragraph below in
   // [showInviteKnock]. The line is dropped rather than queued — a table
   // line's moment is the moment it happens; held longer it would lie.
@@ -61,6 +65,10 @@ void showTableAlert(
     _showingKind = _CardKind.line;
     overlay.insert(entry);
   });
+  // A post-frame callback alone does not request a frame. Without this, a
+  // line raised by a poll or a listener while nothing else is repainting
+  // would wait for the next unrelated frame — or never land at all.
+  WidgetsBinding.instance.ensureVisualUpdate();
 }
 
 /// The entry showing right now, whatever surface called it: table

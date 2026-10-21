@@ -418,7 +418,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
       builder: (_) =>
           OnlineLobbyScreen(startup: OnlineStartup(adoptedClient: lobby)),
     );
-    await Navigator.of(context).push(handoff);
+    final handoffDone = Navigator.of(context).push(handoff);
     // Connect only after the push so the lobby panel shows the dial.
     try {
       await lobby.connect();
@@ -428,10 +428,18 @@ class _FriendsScreenState extends State<FriendsScreen> {
       _abandonHandoff(handoff);
       return;
     }
-    // connect() resolves only once the room has formed (the `joined`
-    // handshake carries the code), so a missing code here means the table
-    // never opened — say so instead of leaving a dial spinning forever.
-    final formed = lobby.roomCode;
+    if (sent) return;
+    // connect() only opens the socket; the code arrives with `joined` a
+    // moment later. Waiting for it here is what lets the invite exist:
+    // checking roomCode immediately after connect() always saw null and
+    // popped the lobby before the server had named the room. The route's
+    // own future races the wait so leaving the lobby early does not make
+    // this path speak later on the friends screen.
+    final formed = await Future.any<String?>([
+      lobby.awaitRoomCode(),
+      handoffDone.then((_) => null),
+    ]);
+    lobby.removeListener(maybeInvite);
     if (!sent && (formed == null || formed.isEmpty)) {
       _abandonHandoff(handoff);
     }
@@ -443,7 +451,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
   /// the stack — a user who backed out of the dead lobby first keeps the
   /// friends screen where it is.
   void _abandonHandoff(MaterialPageRoute<void> handoff) {
-    if (handoff.isCurrent) handoff.navigator?.pop();
+    // The player may have backed out first: stay silent rather than
+    // speaking a failure about a screen they already left, and never
+    // pop the friends screen they are now looking at.
+    if (!mounted || !handoff.isCurrent) return;
+    handoff.navigator?.pop();
     _showSnack(
       'Could not open a table — check the game server, then tap Play again.',
     );
@@ -1034,9 +1046,7 @@ class _FriendsChatScreenState extends State<FriendsChatScreen> {
     } on FriendException catch (e) {
       if (mounted) {
         setState(() => _messages.removeWhere((m) => m.id == echo.id));
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text(e.text)));
+        showSnackInColumn(context, e.text, icon: Icons.error_outline);
       }
     }
   }

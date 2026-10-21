@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/report_client.dart';
 import '../theme.dart';
+import 'table_alert.dart';
 
 /// "Report an issue" sheet — the one form used everywhere a player can
 /// file something: in-game app bar, Settings, and (with a different
@@ -79,11 +80,11 @@ class _BugReportSheetState extends State<BugReportSheet> {
   Future<void> _submit() async {
     final message = _message.text.trim();
     if (message.isEmpty) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Tell us what happened first')),
-        );
+      showTableAlert(
+        context,
+        'Tell us what happened first',
+        icon: Icons.edit_note,
+      );
       return;
     }
     setState(() => _sending = true);
@@ -99,28 +100,27 @@ class _BugReportSheetState extends State<BugReportSheet> {
         seatId: widget.seatId,
       );
       if (!mounted) return;
+      // Speak on the app's corner before closing the sheet: the card lives
+      // on the root overlay, so it survives the pop instead of vanishing
+      // with the sheet's messenger.
+      showTableAlert(
+        context,
+        'Report sent — thank you! We read every one.',
+        icon: Icons.check_circle_outline,
+      );
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('Report sent — thank you! We read every one.'),
-          ),
-        );
     } on ReportException catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.toString())));
+      showTableAlert(context, e.toString(), icon: Icons.error_outline);
     } catch (_) {
       if (!mounted) return;
       setState(() => _sending = false);
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Could not reach the server')),
-        );
+      showTableAlert(
+        context,
+        'Could not reach the server',
+        icon: Icons.cloud_off,
+      );
     }
   }
 

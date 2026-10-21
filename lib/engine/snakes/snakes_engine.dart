@@ -8,7 +8,7 @@ import '../core/dice.dart';
 /// Classic Chutes & Ladders style jump map: square -> destination.
 const Map<int, int> kSnakesLaddersJumps = {
   // Ladders
-  1: 38, 4: 14, 9: 31, 21: 42, 28: 84, 36: 44, 51: 67, 71: 91, 80: 100,
+  2: 38, 4: 14, 9: 31, 21: 42, 28: 84, 36: 44, 51: 67, 71: 91, 80: 100,
   // Snakes
   16: 6, 47: 26, 49: 11, 56: 53, 62: 19, 64: 60, 87: 24, 93: 73, 95: 75,
   98: 78,
@@ -141,10 +141,10 @@ SnakesState createSnakesState(List<SnakesPlayer> players) {
 /// single forced move (the UI animates it before resolving).
 ///
 /// The one exception is a pawn that has not entered the board yet. Classic
-/// rules require a 1 to come in, landing on square 1 (which on this board is
-/// the foot of the ladder to 38 — so entering is immediately dramatic, and
-/// that is the real game, not a bug). Any other roll cannot move a pawn that
-/// is still off the board, so the turn is simply spent.
+/// rules require a 1 to come in, landing on square 1. The ladder's foot is
+/// square 2 (not 1), so the pawn has to take one more step before the climb
+/// to 38. Any other roll cannot move a pawn that is still off the board, so
+/// the turn is simply spent.
 ///
 /// Without this, `pendingMove`'s `square + roll` let a pawn off the board move
 /// to whatever was rolled, so a 5 put a starting pawn on square 5 and the

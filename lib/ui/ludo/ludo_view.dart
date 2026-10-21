@@ -673,7 +673,16 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                       // (ludoPanelSlab) instead of a local number: the
                       // clock plate and dice gap priced there keep these
                       // three (two rows + board sizing) in register.
-                      const rowSlab = ludoPanelSlab;
+                      //
+                      // The lamps are an ONLINE concept: strike dots exist
+                      // because the server removes a seat after repeated
+                      // missed turns, and the clock is the server's turn
+                      // timer. A local table has neither, so the playtest
+                      // asked for them gone — and dropping the two rows
+                      // hands that height back to the board instead of
+                      // leaving empty felt above and below it.
+                      final showLamps = widget.onlineClient != null;
+                      final rowSlab = showLamps ? ludoPanelSlab : 0.0;
                       final boardSide = math.min(
                         playArea.maxWidth,
                         math.max(playArea.maxHeight - rowSlab * 2, 0.0),
@@ -694,14 +703,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                           // the board's own square - panel rows used to
                           // span the whole window, hanging the top corners
                           // off the screen edges on a desktop display.
-                          SizedBox(
-                            height: rowSlab,
-                            width: panelWidth,
-                            child: Padding(
-                              padding: const EdgeInsets.only(bottom: 14),
-                              child: Row(children: _cornerPanels(s, top: true)),
+                          if (showLamps)
+                            SizedBox(
+                              height: rowSlab,
+                              width: panelWidth,
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 14),
+                                child: Row(
+                                  children: _cornerPanels(s, top: true),
+                                ),
+                              ),
                             ),
-                          ),
                           Expanded(
                         child: Stack(
                           children: [
@@ -808,16 +820,17 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                           ],
                         ),
                       ),
-                          SizedBox(
-                            height: rowSlab,
-                            width: panelWidth,
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 14),
-                              child: Row(
-                                children: _cornerPanels(s, top: false),
+                          if (showLamps)
+                            SizedBox(
+                              height: rowSlab,
+                              width: panelWidth,
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 14),
+                                child: Row(
+                                  children: _cornerPanels(s, top: false),
+                                ),
                               ),
                             ),
-                          ),
                         ],
                       );
                     },
