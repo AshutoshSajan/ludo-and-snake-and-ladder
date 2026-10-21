@@ -344,6 +344,12 @@ class LudoSession extends ChangeNotifier {
           .where((m) => m.tokenIndex == tokenIndex)
           .firstOrNull;
       if (move == null) return;
+      // After the forced intent has already gone out, the board is waiting
+      // for the authoritative snapshot. A late tap in that window must not
+      // send the same move twice.
+      if (_forcedMoveKey == _forcedKeyFor(move) && _forcedMoveTimer == null) {
+        return;
+      }
       // The player answered the prompt first: keep the scheduled forced
       // move from sending the same intent a beat later.
       _forcedMoveTimer?.cancel();
@@ -469,6 +475,12 @@ class LudoSession extends ChangeNotifier {
 
   // ---------------------------------------------------------------- online
 
+  /// Identity of the one pending forced move. A repeated snapshot must not
+  /// reschedule it, and a late tap must not resend it.
+  String _forcedKeyFor(LudoMove move) =>
+      '${state.rollSeq}:${state.currentPlayer.id}:'
+      '${state.lastRoll}:${move.tokenIndex}:${move.to}';
+
   /// Online tables have no local `_roll` of their own to notice the
   /// one-move case. After each authoritative snapshot, if it is this
   /// seat's turn and exactly one pawn can move, send that move after the
@@ -490,8 +502,7 @@ class LudoSession extends ChangeNotifier {
       return;
     }
     final move = moves.single;
-    final key = '${state.rollSeq}:${state.currentPlayer.id}:'
-        '${state.lastRoll}:${move.tokenIndex}:${move.to}';
+    final key = _forcedKeyFor(move);
     if (_forcedMoveKey == key) {
       // The same pending turn can arrive again (presence, chat, a reconnect
       // replay). If the timer is still armed, leave it alone; if it is null
