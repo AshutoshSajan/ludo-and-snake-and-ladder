@@ -128,6 +128,14 @@ class LudoSession extends ChangeNotifier {
   final DieStreak _die = DieStreak();
   Timer? _timer;
   final _stepTimers = <Timer>[];
+
+  /// Online only: the beat between an authoritative roll and the one move
+  /// that roll allows. Offline this is the `_timer` in [_roll]; online the
+  /// server owns the roll, so the client schedules its own intent. Without
+  /// it a lone last pawn could sit on an `awaitingMove` snapshot forever
+  /// while the player waited for a move they had no choice about.
+  Timer? _forcedMoveTimer;
+  String? _forcedMoveKey;
   MoveAnim? activeAnim;
   bool _busy = false;
   bool _over = false;
@@ -187,6 +195,9 @@ class LudoSession extends ChangeNotifier {
     // exactly the message you most needed to hear about.
     client.onMessageArrived = (_) => s.sound.message();
     client.onState = (old, next) => s._adoptState(old, next);
+    // A rejoin can land directly on my `awaitingMove` snapshot without an
+    // onState transition. The factory still has to notice the one-move case.
+    s._scheduleForcedOnlineMove();
     return s;
   }
 
@@ -241,6 +252,7 @@ class LudoSession extends ChangeNotifier {
     final client = online;
     if (client == null) return;
     _timer?.cancel();
+    _forcedMoveTimer?.cancel();
     for (final t in _stepTimers) {
       t.cancel();
     }
@@ -332,6 +344,10 @@ class LudoSession extends ChangeNotifier {
           .where((m) => m.tokenIndex == tokenIndex)
           .firstOrNull;
       if (move == null) return;
+      // The player answered the prompt first: keep the scheduled forced
+      // move from sending the same intent a beat later.
+      _forcedMoveTimer?.cancel();
+      _forcedMoveTimer = null;
       online!.sendMove(tokenIndex);
       return;
     }
@@ -453,6 +469,51 @@ class LudoSession extends ChangeNotifier {
 
   // ---------------------------------------------------------------- online
 
+  /// Online tables have no local `_roll` of their own to notice the
+  /// one-move case. After each authoritative snapshot, if it is this
+  /// seat's turn and exactly one pawn can move, send that move after the
+  /// same 700 ms beat the offline board uses. The key keeps a repeated
+  /// snapshot (or a reconnect replay) from sending the same intent twice.
+  void _scheduleForcedOnlineMove() {
+    if (!isOnline ||
+        !isMyTurnNow ||
+        autoPlayOn ||
+        state.phase != LudoPhase.awaitingMove) {
+      _forcedMoveTimer?.cancel();
+      _forcedMoveTimer = null;
+      return;
+    }
+    final moves = legalMoves(state);
+    if (moves.length != 1) {
+      _forcedMoveTimer?.cancel();
+      _forcedMoveTimer = null;
+      return;
+    }
+    final move = moves.single;
+    final key = '${state.rollSeq}:${state.currentPlayer.id}:'
+        '${state.lastRoll}:${move.tokenIndex}:${move.to}';
+    if (_forcedMoveKey == key) {
+      // The same pending turn can arrive again (presence, chat, a reconnect
+      // replay). If the timer is still armed, leave it alone; if it is null
+      // the move was already sent or the player tapped, so never send twice.
+      return;
+    }
+    _forcedMoveKey = key;
+    _forcedMoveTimer?.cancel();
+    _forcedMoveTimer = Timer(const Duration(milliseconds: 700), () {
+      _forcedMoveTimer = null;
+      if (!isOnline ||
+          !isMyTurnNow ||
+          autoPlayOn ||
+          state.phase != LudoPhase.awaitingMove) {
+        return;
+      }
+      final latest = legalMoves(state);
+      if (latest.length != 1) return;
+      online!.sendMove(latest.single.tokenIndex);
+    });
+  }
+
   /// Adopts an authoritative snapshot from the server. When the snapshot
   /// represents a *move* on the same roll (same rollSeq) and exactly one
   /// token advanced, the move is replayed as the usual walk animation so
@@ -466,6 +527,7 @@ class LudoSession extends ChangeNotifier {
     activeAnim = null;
     _busy = false;
     state = next;
+    _scheduleForcedOnlineMove();
 
     MoveAnim? replay;
     LudoToken? moved;
@@ -621,6 +683,7 @@ class LudoSession extends ChangeNotifier {
   @override
   void dispose() {
     _timer?.cancel();
+    _forcedMoveTimer?.cancel();
     for (final t in _stepTimers) {
       t.cancel();
     }
