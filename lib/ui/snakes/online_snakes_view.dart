@@ -20,7 +20,6 @@ import 'snakes_stage.dart';
 import '../shared/sound_toggle_button.dart';
 import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
-import '../shared/game_chat_sheet.dart';
 import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
 
@@ -342,27 +341,21 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       active: true,
       onLeave: _leave,
       child: Scaffold(
+        // The online dock owns the keyboard inset in the lobby Scaffold
+        // above; subtracting it here as well would shrink the board twice.
+        resizeToAvoidBottomInset: false,
         appBar: PageAppBar(
           title: const Text('Snakes & Ladders'),
           actions: [
             const SoundToggleButton(),
-            // The red dot is the unread count; it clears when the sheet opens.
-            IconButton(
-              icon: Badge(
-                isLabelVisible: widget.client.unreadChats > 0,
-                backgroundColor: Colors.redAccent,
-                smallSize: 9,
-                child: const Icon(Icons.forum_outlined),
-              ),
-              tooltip: widget.client.unreadChats > 0
-                  ? 'Table chat (${widget.client.unreadChats} new)'
-                  : 'Table chat',
-              onPressed: () => GameChatSheet.show(context, widget.client),
-            ),
+            // No chat icon here: the screen-level ResponsiveChatDock owns the
+            // table chat now — docked on wide windows, overlaid from its own
+            // launcher on phones. One entry point, one unread count.
             IconButton(
               icon: const Icon(Icons.group_add_outlined),
               tooltip: 'Players at this table',
-              onPressed: () => TablematesSheet.show(context, client: widget.client),
+              onPressed: () =>
+                  TablematesSheet.show(context, client: widget.client),
             ),
             // Voice is seated-only; a spectator has no seat for the mesh.
             if (!widget.client.isSpectator) ...[

@@ -5,11 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import '../ui/page_app_bar.dart';
-import '../ui/shared/chat_line_view.dart';
-import '../ui/shared/gif_picker_sheet.dart';
-import '../ui/shared/keyboard_content.dart';
-import '../ui/shared/note_composer.dart';
 import '../ui/shared/player_actions_sheet.dart';
+import '../ui/shared/responsive_chat_dock.dart';
 import '../ui/shared/voice_button.dart';
 
 import '../engine/ludo/ludo_models.dart';
@@ -109,11 +106,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   // only"). `defaultServerUrl()` answers everywhere a client is built.
   final _nameCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
-  final _chatCtrl = TextEditingController();
-
-  /// Whether the voice-note control currently owns the composer row —
-  /// the field, GIF and send step aside while the mic is live.
-  bool _chatRecording = false;
 
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
@@ -355,7 +347,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     _client?.dispose();
     _nameCtrl.dispose();
     _codeCtrl.dispose();
-    _chatCtrl.dispose();
     super.dispose();
   }
 
@@ -480,10 +471,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                       if (mounted) await _pollTrays();
                     },
                   ),
-                // No message icon here. Chat lives on the game board's app bar,
-                // next to sound and autoplay, which is where a player is once
-                // a room exists. A second chat icon in the lobby put the same
-                // control in two places.
+                // No message icon here. Table chat belongs to the
+                // screen-level dock below (docked beside the table on a wide
+                // window, an overlay on a phone), so a second icon here would
+                // give the same chat two entry points.
                 if (client != null)
                   IconButton(
                     icon: const Icon(Icons.close),
@@ -523,25 +514,34 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
             ),
             OnlineClient c
                 when c.gameType == 'snakes' && c.snakesState != null =>
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: OnlineSnakesView(
-                  client: c,
-                  onLeave: _disconnectAndClose,
+              ResponsiveChatDock(
+                client: c,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: OnlineSnakesView(
+                    client: c,
+                    onLeave: _disconnectAndClose,
+                  ),
                 ),
               ),
-            OnlineClient c when c.state != null => Padding(
-              padding: const EdgeInsets.all(16),
-              child: LudoGameView(
-                onlineClient: c,
-                onlineSeatId: c.seatId,
-                onOnlineLeave: _disconnectAndClose,
-              ),
-            ),
-            OnlineClient _ => ContentColumn(
+            OnlineClient c when c.state != null => ResponsiveChatDock(
+              client: c,
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: _lobby(client),
+                child: LudoGameView(
+                  onlineClient: c,
+                  onlineSeatId: c.seatId,
+                  onOnlineLeave: _disconnectAndClose,
+                ),
+              ),
+            ),
+            OnlineClient c => ResponsiveChatDock(
+              client: c,
+              child: ContentColumn(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _lobby(c),
+                ),
               ),
             ),
           },
@@ -618,11 +618,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        const Icon(
-                          Icons.copy,
-                          size: 15,
-                          color: AppColors.gold,
-                        ),
+                        const Icon(Icons.copy, size: 15, color: AppColors.gold),
                       ],
                     ),
                   ),
@@ -978,21 +974,6 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 : client.sendStart,
           ),
         const SizedBox(height: 16),
-        // Table talk, inline in the lobby only. Once the game starts this
-        // screen is replaced by the board, which has its own chat control in
-        // the app bar; the two are separate surfaces, not two views of one
-        // panel, so the lobby keeps its inline list and never opens the sheet.
-        // The last lines in replay order — the newest lands at the
-        // BOTTOM like every transcript does. (This used to feed
-        // reversed.take, which printed the newest line at the TOP and
-        // made the lobby read upside-down: older messages pushed newer
-        // ones down the screen.)
-        for (final line in recentChatLines(client.chat))
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: ChatLineView(line: line, compact: true, myName: client.name),
-          ),
-        const SizedBox(height: 16),
         // Table voice: peer-to-peer audio through the room's WebSocket
         // signalling. Spectators have no seat, so no mic.
         if (!spectating)
@@ -1022,88 +1003,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         // on the game views: a second indicator here — a chip row that grew
         // whenever anyone spoke — kept shoving the controls around while
         // callers talked, which read like the screen was breaking.
-        if (!spectating)
-          Row(
-            children: [
-              if (!_chatRecording) ...[
-                IconButton(
-                  icon: const Icon(Icons.gif_box, color: AppColors.gold),
-                  tooltip: 'Send a GIF',
-                  onPressed: () => GifPickerSheet.show(
-                    context,
-                    serverUrl: client.serverUrl,
-                    onPick: (url) => client.sendGif(url),
-                  ),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _chatCtrl,
-                    style: const TextStyle(color: AppColors.ivory),
-                    onSubmitted: (_) => _sendChat(client),
-                    // Same keyboard-GIF story the table chat sheet has:
-                    // one insertion behavior across every chat surface.
-                    contentInsertionConfiguration: keyboardGifInsertion(
-                      send: ({required bytes, required mime}) =>
-                          client.sendKeyboardGif(bytes: bytes, mime: mime),
-                      sendLink: client.sendGif,
-                      onError: (message) => showSnackInColumn(
-                        context,
-                        message,
-                        icon: Icons.error_outline,
-                      ),
-                    ),
-                    decoration: InputDecoration(
-                      labelText: 'Say something…',
-                      labelStyle: const TextStyle(color: AppColors.ivory),
-                      enabledBorder: _border(AppColors.ivory.withAlpha(90)),
-                      focusedBorder: _border(AppColors.gold),
-                    ),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.send, color: AppColors.gold),
-                  tooltip: 'Send chat',
-                  onPressed: () => _sendChat(client),
-                ),
-              ],
-              // The voice control must not be rebuilt while it holds a mic
-              // session — see [NoteComposer]; the row's other members make
-              // way while it records.
-              // Flex follows the state: idle, the composer is one mic
-              // chip and takes only its intrinsic width (a flex slot on
-              // an idle composer split the row in half and left the text
-              // field — and the row's right edge — short of the panel);
-              // while recording the bar takes the row. The Flexible type
-              // never changes, so the mic session survives the rebuild.
-              Flexible(
-                flex: _chatRecording ? 1 : 0,
-                child: NoteComposer(
-                  send: (recording) => client.sendVoiceNote(
-                    bytes: recording.bytes,
-                    mime: recording.mime,
-                    durMs: recording.durMs,
-                  ),
-                  onError: (message) => showSnackInColumn(
-                    context,
-                    message,
-                    icon: Icons.error_outline,
-                  ),
-                  onRecordingChanged: (recording) => setState(() {
-                    _chatRecording = recording;
-                  }),
-                ),
-              ),
-            ],
-          ),
       ],
     );
-  }
-
-  void _sendChat(OnlineClient client) {
-    final text = _chatCtrl.text.trim();
-    if (text.isEmpty) return;
-    client.sendChat(text);
-    _chatCtrl.clear();
   }
 
   Color _colorOf(LudoColor c) => switch (c) {
@@ -1193,13 +1094,6 @@ class SeatFriendControl extends StatelessWidget {
     );
   }
 }
-
-/// The lobby's inline table talk shows the tail of the transcript — the
-/// lines a player is most likely replying to — in replay order, so the
-/// newest sits at the bottom the way every transcript does. Pure so the
-/// order itself can be pinned by a test without staging a room.
-List<ChatLine> recentChatLines(List<ChatLine> chat, {int keep = 6}) =>
-    chat.length > keep ? chat.sublist(chat.length - keep) : List.of(chat);
 
 /// The lobby's room-code card. Copying is a first-class button, not a hope:
 /// the code used to be the only thing in the card, with copying left to the
