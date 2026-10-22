@@ -3,6 +3,8 @@ import '../ui/page_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../providers/app_providers.dart';
 import '../services/server_url.dart';
 import '../ui/shared/bug_report_sheet.dart';
@@ -63,9 +65,11 @@ class SettingsScreen extends ConsumerWidget {
                 'Add friends by code, chat, and invite '
                 'them to a table.',
               ),
-              onTap: () => Navigator.of(
+              onTap: () => pushAppScreen<void>(
                 context,
-              ).push(MaterialPageRoute(builder: (_) => const FriendsScreen())),
+                name: AppRoutes.friends,
+                builder: (_) => const FriendsScreen(),
+              ),
             ),
             ListTile(
               leading: const Icon(Icons.bug_report),
@@ -84,10 +88,11 @@ class SettingsScreen extends ConsumerWidget {
                 'Questions and feedback, with an email '
                 'if you want a reply.',
               ),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ContactScreen(serverUrl: defaultServerUrl()),
-                ),
+              onTap: () => pushAppScreen<void>(
+                context,
+                name: AppRoutes.contact,
+                builder: (_) =>
+                    ContactScreen(serverUrl: defaultServerUrl()),
               ),
             ),
             // This tile keeps to its own section so parallel additions to
@@ -107,8 +112,11 @@ class SettingsScreen extends ConsumerWidget {
               leading: const Icon(Icons.help_outline),
               title: const Text('How to play'),
               subtitle: const Text('Rules for Ludo and Snakes & Ladders'),
-              onTap: () => Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => const RulesScreen())),
+              onTap: () => pushAppScreen<void>(
+                context,
+                name: AppRoutes.rules,
+                builder: (_) => const RulesScreen(),
+              ),
             ),
             const ListTile(
               leading: Icon(Icons.info_outline),

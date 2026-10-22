@@ -6,6 +6,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_router.dart';
+import '../../app_routes.dart';
 import '../../controllers/ludo_session.dart';
 import '../../engine/core/player_profiles.dart';
 import '../../engine/ludo/ludo_board.dart';
@@ -400,10 +402,10 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             ? null
             : () {
                 Navigator.of(context).pop(); // dialog
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(
-                    builder: (_) => LudoGameView(seats: widget.seats),
-                  ),
+                replaceAppScreen<void>(
+                  context,
+                  name: AppRoutes.gameLudo,
+                  builder: (_) => LudoGameView(seats: widget.seats),
                 );
               },
         onHome: () {

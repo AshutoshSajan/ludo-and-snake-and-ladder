@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../providers/app_providers.dart';
 import '../screens/admin/admin_dashboard_screen.dart';
 import '../services/admin_client.dart';
@@ -20,13 +22,13 @@ class AdminBadge extends StatelessWidget {
   final bool compact;
 
   void _open(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => AdminDashboardScreen(
-          client: AdminClient(
-            serverUrl: session.serverUrl,
-            token: session.token,
-          ),
+    pushAppScreen<void>(
+      context,
+      name: AppRoutes.adminDashboard,
+      builder: (_) => AdminDashboardScreen(
+        client: AdminClient(
+          serverUrl: session.serverUrl,
+          token: session.token,
         ),
       ),
     );
