@@ -20,47 +20,12 @@ import 'package:flutter/material.dart';
 
 import '../../engine/ludo/ludo_models.dart';
 import '../theme.dart';
+import '../shared/strike_dots.dart';
 import '../shared/turn_countdown.dart';
 
-/// Five strikes live both in the turn tracker (`maxTurnMisses`, with its
-/// own copy on the server) and here, drawn as dots. The count is
-/// duplicated on purpose: a widget cannot reach the service layer that
-/// owns the rule, so the number is pinned by the strike test — change the
-/// rule and the test breaks instead of the panel drifting.
-const ludoStrikeDots = 5;
-
-/// One corner's strike dot row: five dots, missed ones red, the rest
-/// green — the at-a-glance answer to "why is this corner about to be
-/// removed" that every seat can read from their side of the table.
-class StrikeDotsRow extends StatelessWidget {
-  const StrikeDotsRow({super.key, required this.misses});
-
-  /// Consecutive missed turns for this seat (0..[ludoStrikeDots]).
-  final int misses;
-
-  @override
-  Widget build(BuildContext context) {
-    final shown = misses.clamp(0, ludoStrikeDots);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < ludoStrikeDots; i++)
-          Container(
-            width: 9,
-            height: 9,
-            margin: const EdgeInsets.only(left: 3),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              // A dot that has not been spent reads as the green that is
-              // left; the spent ones turn red in seat order, so "2 of 5
-              // missed" reads as two red dots.
-              color: i < shown ? AppColors.danger : Colors.green.shade600,
-            ),
-          ),
-      ],
-    );
-  }
-}
+// Kept on this library so the corner-panel tests (and any caller that already
+// imports the lamp) keep finding the dots where the lamps put them.
+export '../shared/strike_dots.dart' show StrikeDotsRow, ludoStrikeDots;
 
 /// The height of one panel slab — the fixed strip a board edge hands its
 /// corner panels, dice gap included.

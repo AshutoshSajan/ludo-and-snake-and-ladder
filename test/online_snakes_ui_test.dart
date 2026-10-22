@@ -11,8 +11,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/snakes/snakes_engine.dart';
 import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/online_client.dart';
+import 'package:game_club/ui/page_app_bar.dart' show kContentMaxWidth;
 import 'package:game_club/ui/shared/dice_widget.dart';
 import 'package:game_club/ui/snakes/online_snakes_view.dart';
+import 'package:game_club/ui/snakes/snakes_stage.dart';
+import 'package:game_club/ui/snakes/snakes_turn_hud.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -212,6 +215,54 @@ void main() {
     final rollBtn = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(rollBtn.onPressed, isNull);
     expect(find.text('Ana is rolling...'), findsOneWidget);
+  });
+
+  testWidgets('the turn HUD sits above the board and carries the clock', (
+    tester,
+  ) async {
+    // Playtest: the status line and countdown lived below the board, under
+    // the dice, and read as missing. The HUD now stands between the seats
+    // and the stage, with the phase line and the server's deadline.
+    await connectAndEnterGame(tester);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: OnlineSnakesView(client: client, onLeave: () {}),
+          ),
+        ),
+      ),
+    );
+    channel.serverAdd({
+      'type': 'state',
+      'game': 'snakes',
+      'state': twoPlayerState(currentPlayerId: 'p2').toJson(),
+    });
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // The server arms the clock after the state change, on its own message.
+    channel.serverAdd({'type': 'turnTimer', 'turnMs': 25000});
+    await tester.pump();
+
+    expect(find.byType(SnakesTurnHud), findsOneWidget);
+    expect(find.text('Your turn'), findsOneWidget);
+    expect(find.text('25 s'), findsOneWidget);
+
+    final hud = tester.getRect(find.byType(SnakesTurnHud));
+    final stage = tester.getRect(find.byType(SnakesStage));
+    expect(
+      hud.bottom,
+      lessThanOrEqualTo(stage.top),
+      reason: 'the HUD must be above the board, not below it by the dice',
+    );
+    expect(
+      find.text('Your roll!'),
+      findsOneWidget,
+      reason: 'the phase line moved into the HUD rather than being duplicated',
+    );
+
+    // Dispose the countdown's periodic ticker with the tree.
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('spectators see the board but can never roll', (tester) async {
@@ -800,5 +851,43 @@ void main() {
       expect(find.text('Ana wins!'), findsNothing,
           reason: 'the end screen leaves with the player');
     });
+  });
+
+  testWidgets('the turn card keeps the header reading width on desktop', (
+    tester,
+  ) async {
+    // The online table's turn strip was a full-window card: at 1400px it
+    // spanned more than twice the 720px column the header and board read
+    // at, so the table looked like two unrelated widths.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await connectAndEnterGame(tester);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: OnlineSnakesView(client: client, onLeave: () {}),
+          ),
+        ),
+      ),
+    );
+    channel.serverAdd({
+      'type': 'state',
+      'game': 'snakes',
+      'state': twoPlayerState(currentPlayerId: 'p2').toJson(),
+    });
+    await tester.pump();
+    await tester.pump();
+
+    final hud = tester.getRect(find.byKey(const ValueKey('snakes-turn-hud')));
+    expect(
+      hud.width,
+      closeTo(kContentMaxWidth - 32, 0.5),
+      reason: 'the card sits inside the same 720px column as the header',
+    );
+    expect(hud.center.dx, closeTo(1400 / 2, 0.5));
   });
 }

@@ -35,19 +35,23 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../services/friend_client.dart';
+import '../services/friend_signals.dart';
 import '../services/online_client.dart';
 import '../services/server_url.dart';
+import '../services/sound_service.dart';
 import '../services/storage_service.dart';
 import '../ui/shared/table_alert.dart';
-import '../ui/page_app_bar.dart';
 import 'online_lobby_screen.dart';
 
 class InviteWatcher {
   InviteWatcher({
-    this.interval = const Duration(seconds: 9),
+    this.interval = const Duration(seconds: 5),
     this.clientFactory,
     this.identityOverride,
+    this.chime,
   });
 
   /// The app's root navigator: the knock shows over whatever screen the
@@ -65,12 +69,25 @@ class InviteWatcher {
   /// a first-time player, derives and persists the stable default name.
   final Future<({String seatId, String name})>? identityOverride;
 
+  /// Test seam for the notification sound. Production leaves it null and
+  /// reads the saved sound toggle before chiming; a test that counts
+  /// notifications must not touch platform audio channels.
+  final Future<void> Function()? chime;
+
   Timer? _poller;
   bool _started = false;
 
   /// Invite ids already knocked (and not left re-knockable): one knock per
   /// id per session — the friends tray remains the re-answerable home.
   final Set<int> _knocked = HashSet<int>();
+
+  /// Request ids already present on the previous poll. The first poll
+  /// primes this set without speaking: a player opening the app to three
+  /// unanswered requests should see three dots, not hear three chimes.
+  final Set<int> _seenRequests = HashSet<int>();
+  bool _requestsPrimed = false;
+
+  SoundService? _sound;
 
   FriendClient? _client;
 
@@ -95,6 +112,12 @@ class InviteWatcher {
     _poller = null;
     _client?.close();
     _client = null;
+    _sound?.dispose();
+    _sound = null;
+    _knocked.clear();
+    _seenRequests.clear();
+    _requestsPrimed = false;
+    friendSignals.reset();
     _started = false;
   }
 
@@ -102,7 +125,9 @@ class InviteWatcher {
   /// the nav pulse and tests all drive this; a round already in flight
   /// swallows extra pokes.
   void poke() {
-    if (_knocking) return;
+    // The production lobby can receive a server pulse before `main` starts
+    // the watcher; that is not a reason to poll from an unstarted listener.
+    if (!_started || _knocking) return;
     _knocking = true;
     _tick().whenComplete(() => _knocking = false);
   }
@@ -124,7 +149,12 @@ class InviteWatcher {
 
   Future<void> _poll() async {
     final identity = await _loadIdentity();
-    if (identity.seatId.isEmpty) return; // No online session yet.
+    if (identity.seatId.isEmpty) {
+      // No online session yet: the home Friends button must not keep a dot
+      // from a previous identity.
+      friendSignals.reset();
+      return;
+    }
 
     final factory = clientFactory;
     final answers = _client ??= factory != null
@@ -134,10 +164,50 @@ class InviteWatcher {
       seatId: identity.seatId,
       name: identity.name,
     );
+    friendSignals.update(
+      requests: state.incoming.length,
+      invites: state.invites.where((i) => i.pending).length,
+    );
+    seeRequests(state.incoming);
     await seeInvites(
       identity: identity,
       invites: state.invites,
       answers: answers,
+    );
+  }
+
+  /// Raises the one-time friend-request notification.
+  ///
+  /// The first successful poll only primes the set: the red dot is the
+  /// durable "someone is waiting" signal, and a person who opens the app
+  /// to an existing request should not be greeted by a burst of chimes.
+  /// Every request that appears after that speaks once, then stays silent
+  /// on later polls until it is answered or withdrawn.
+  void seeRequests(Iterable<FriendRequestView> incoming) {
+    final requests = [
+      for (final request in incoming)
+        if (request.id > 0) request,
+    ];
+    final ids = {for (final request in requests) request.id};
+    if (!_requestsPrimed) {
+      _requestsPrimed = true;
+      _seenRequests.addAll(ids);
+      return;
+    }
+    final fresh = [
+      for (final request in requests)
+        if (!_seenRequests.contains(request.id)) request,
+    ];
+    _seenRequests
+      ..clear()
+      ..addAll(ids);
+    if (fresh.isEmpty) return;
+    unawaited(_chime());
+    _speak(
+      fresh.length == 1
+          ? '${fresh.first.name} sent you a friend request'
+          : '${fresh.length} new friend requests',
+      icon: Icons.person_add_alt_1,
     );
   }
 
@@ -153,6 +223,9 @@ class InviteWatcher {
     for (final invite in invites) {
       if (!invite.pending || _knocked.contains(invite.id)) continue;
       _knocked.add(invite.id);
+      // A knock is a doorbell, not a silent badge: the playtest asked for
+      // an audible notification wherever the invitee is.
+      unawaited(_chime());
       final answer = await _showKnock(invite);
       if (answer != true) continue;
       String? code;
@@ -166,31 +239,63 @@ class InviteWatcher {
         // The answer failed to reach the table: leave the invite un-knockable
         // until the next poll brings it back, and say where to try again.
         _knocked.remove(invite.id);
-        final place = navigatorKey.currentContext;
-        if (place != null && place.mounted) {
-          showSnackInColumn(
-            place,
-            'Could not reach their table — the invite stays open in '
-            'your friends tray',
-          );
-        }
+        _speak(
+          'Could not reach their table — the invite stays open in '
+          'your friends tray',
+          icon: Icons.error_outline,
+        );
         continue;
       }
       final next = navigatorKey.currentContext;
       if (next == null || !next.mounted) return;
       if (code == null || code.isEmpty) {
-        showSnackInColumn(
-          next,
+        _speak(
           'Their table is not ready — they may have left before you answered',
+          icon: Icons.timer_off_outlined,
         );
         continue;
       }
-      await Navigator.of(next).push(
-        MaterialPageRoute(
-          builder: (_) =>
-              OnlineLobbyScreen(startup: OnlineStartup(joinCode: code)),
-        ),
-      );
+      await pushAppScreen<void>(
+        next,
+        name: AppRoutes.join(code),
+        builder: (_) =>
+            OnlineLobbyScreen(startup: OnlineStartup(joinCode: code)),
+      ).popped;
+    }
+  }
+
+  /// Speaks through the app's corner from a navigator-owned context.
+  ///
+  /// [showTableAlert]'s normal lookup walks *up* the tree to the overlay,
+  /// but this listener holds the navigator's context — the overlay is
+  /// below it. Looking up from here throws, and the poller's catch would
+  /// turn a failed answer into silence. The navigator's overlay is passed
+  /// in instead, which is the same canvas the knock uses.
+  void _speak(String text, {IconData icon = Icons.info_outline}) {
+    final overlay = navigatorKey.currentState?.overlay;
+    final context = navigatorKey.currentContext;
+    if (overlay == null || context == null || !context.mounted) return;
+    showTableAlert(context, text, icon: icon, onOverlay: overlay);
+  }
+
+  /// The notification chime. Reads the persisted sound toggle so a muted
+  /// table stays muted; the haptic is independent and respects its own
+  /// setting inside [Haptics].
+  Future<void> _chime() async {
+    final injected = chime;
+    if (injected != null) {
+      await injected();
+      return;
+    }
+    try {
+      final sound = _sound ??= SoundService();
+      final enabled = await StorageService().loadSoundEnabled();
+      sound.enabled = enabled;
+      if (enabled) await sound.message();
+    } catch (_) {
+      // A missing platform audio plugin must never swallow the knock.
+    } finally {
+      Haptics.success();
     }
   }
 
@@ -215,6 +320,8 @@ class InviteWatcher {
   /// white-on-white material dialog. Not now does not answer the server —
   /// the invite stays pending in the friends tray.
   Future<bool?> _showKnock(FriendInviteView invite) {
+    // The card is already above the navigator; the chime runs beside it
+    // rather than delaying the visible knock on audio startup.
     // The family's overlay state, straight from the navigator key — a
     // navigator's own context has no Overlay *above* it for the family
     // to climb to (see showInviteKnock's doc).
@@ -229,3 +336,8 @@ class InviteWatcher {
     );
   }
 }
+
+/// The app-wide watcher. `main` starts it after the first frame, the online
+/// lobby pokes it on a server push, and every Friends badge reads the counts
+/// it publishes through [friendSignals].
+final InviteWatcher inviteWatcher = InviteWatcher();

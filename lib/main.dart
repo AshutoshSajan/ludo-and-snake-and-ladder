@@ -3,18 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 
+import 'app_router.dart';
 import 'providers/app_providers.dart';
-import 'screens/admin/admin_gate.dart';
-import 'screens/admin/admin_login_screen.dart'
-    if (dart.library.io) 'screens/admin/admin_login_stub.dart';
-import 'screens/home_screen.dart';
 import 'screens/invite_watcher.dart';
 import 'ui/theme.dart';
-
-/// The app-wide play-invite listener. One instance for the whole app —
-/// it picks a fresh identity from storage each poll, so a guest who goes
-/// online later starts hearing knocks without a restart.
-final InviteWatcher inviteWatcher = InviteWatcher();
 
 void main() {
   // Path URLs (…/admin) instead of hash URLs (…/#/admin) on web, so the
@@ -27,32 +19,42 @@ void main() {
   inviteWatcher.start();
 }
 
-class GameClubApp extends ConsumerWidget {
+class GameClubApp extends ConsumerStatefulWidget {
   const GameClubApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<GameClubApp> createState() => _GameClubAppState();
+}
+
+class _GameClubAppState extends ConsumerState<GameClubApp> {
+  /// One router per app instance: its page stack and browser history belong
+  /// to this mount, and a fresh cold URL starts a fresh stack.
+  late final RouterConfig<Object> _routerConfig;
+
+  @override
+  void initState() {
+    super.initState();
+    _routerConfig = createAppRouterConfig();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Warm up persisted state early.
     ref.watch(profilesProvider);
     ref.watch(soundEnabledProvider);
 
     return _AppFocusPulse(
-      child: MaterialApp(
+      child: MaterialApp.router(
         title: 'Game Club',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.dark(),
-        navigatorKey: InviteWatcher.navigatorKey,
-        // The admin UI lives only in the hosted web app
-        // ([isAdminUiAvailable]): native builds never compile the screens
-        // and packaged add-ons run under an extension origin, so /admin is
-        // registered nowhere else. Anything else falls back to home — a
-        // mistyped deep link is a home screen, never a blank page.
-        routes: {
-          '/': (_) => const HomeScreen(),
-          if (isAdminUiAvailable) '/admin': (_) => const AdminLoginScreen(),
-        },
-        onUnknownRoute: (_) =>
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
+        // The router owns the screen stack: cold URLs and deep links build
+        // it, every push records a real URL, and browser back/forward walk
+        // the same entries. `/admin` is only registered by the router's
+        // admin check, so native builds and packaged add-ons still fall
+        // back to home. A mistyped deep link is a home screen, never a
+        // blank page.
+        routerConfig: _routerConfig,
       ),
     );
   }

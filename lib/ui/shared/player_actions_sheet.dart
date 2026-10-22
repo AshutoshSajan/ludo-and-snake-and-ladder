@@ -132,12 +132,10 @@ class _PlayerActionsSheetState extends State<PlayerActionsSheet> {
   }
 
   void _showSnack(String text) {
-    // The root ScaffoldMessenger sits above the navigator, so snackbars
-    // work from inside a modal route (the sheet) as well as from screens.
-    // The floating reading-column shape is the app's one toast: a raw
-    // snackbar here stretched edge to edge on a desktop window, so the
-    // "friend added" popup read like a system banner (playtest note).
-    showSnackInColumn(context, text);
+    // The gold top-right card on the root overlay, so the "friend added"
+    // line lands in the same corner from inside this sheet as it does from
+    // every page — never a white bar across the bottom (playtest note).
+    showSnackInColumn(context, text, icon: Icons.check_circle_outline);
   }
 
   bool get _isMe => widget.peerSeatId == widget.mySeatId;

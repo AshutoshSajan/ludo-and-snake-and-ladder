@@ -1,7 +1,6 @@
 import '../page_app_bar.dart';
 
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,10 +16,11 @@ import '../shared/seat_status_strip.dart';
 import '../shared/table_alert.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
+import 'snakes_seat_lamps.dart';
+import 'snakes_stage.dart';
+import 'snakes_turn_hud.dart';
 import '../shared/sound_toggle_button.dart';
-import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
-import '../shared/game_chat_sheet.dart';
 import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
 
@@ -96,6 +96,17 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       listen: false,
     ).read(soundServiceProvider).dice();
     Haptics.light();
+  }
+
+  /// The on-turn seat's ten-second warning. Resolved through the same
+  /// container as the dice and chat sounds, so the saved sound toggle
+  /// applies to it like any other effect.
+  void _onCountdownWarn() {
+    if (!mounted) return;
+    ProviderScope.containerOf(
+      context,
+      listen: false,
+    ).read(soundServiceProvider).countdown();
   }
 
   @override
@@ -342,27 +353,21 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       active: true,
       onLeave: _leave,
       child: Scaffold(
+        // The online dock owns the keyboard inset in the lobby Scaffold
+        // above; subtracting it here as well would shrink the board twice.
+        resizeToAvoidBottomInset: false,
         appBar: PageAppBar(
           title: const Text('Snakes & Ladders'),
           actions: [
             const SoundToggleButton(),
-            // The red dot is the unread count; it clears when the sheet opens.
-            IconButton(
-              icon: Badge(
-                isLabelVisible: widget.client.unreadChats > 0,
-                backgroundColor: Colors.redAccent,
-                smallSize: 9,
-                child: const Icon(Icons.forum_outlined),
-              ),
-              tooltip: widget.client.unreadChats > 0
-                  ? 'Table chat (${widget.client.unreadChats} new)'
-                  : 'Table chat',
-              onPressed: () => GameChatSheet.show(context, widget.client),
-            ),
+            // No chat icon here: the screen-level ResponsiveChatDock owns the
+            // table chat now — docked on wide windows, overlaid from its own
+            // launcher on phones. One entry point, one unread count.
             IconButton(
               icon: const Icon(Icons.group_add_outlined),
               tooltip: 'Players at this table',
-              onPressed: () => TablematesSheet.show(context, client: widget.client),
+              onPressed: () =>
+                  TablematesSheet.show(context, client: widget.client),
             ),
             // Voice is seated-only; a spectator has no seat for the mesh.
             if (!widget.client.isSpectator) ...[
@@ -485,59 +490,57 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                 seats: widget.client.lobbySeats,
                 mySeatId: widget.client.seatId,
               ),
+              // Whose turn and how long are the two things a player looks
+              // for, so they sit above the board instead of below it under
+              // the dice (the playtest could not find them there). Capped to
+              // the reading column like the header: on a desktop window the
+              // turn card used to stretch the full window while the board
+              // below stayed a narrow column, which read as a second,
+              // oversized card rather than part of the table.
+              ContentColumn(
+                child: SnakesTurnHud(
+                  client: widget.client,
+                  state: s,
+                  status: status,
+                  // Only the seat that owes the move hears the ten-second
+                  // warning; everyone else's clock is not their action.
+                  onCountdownWarn: _isMyTurn(s) ? _onCountdownWarn : null,
+                ),
+              ),
+              // Every seat's strike dots, so "who is one miss from being
+              // dropped" reads at a glance the way Ludo's corner lamps do.
+              ContentColumn(
+                child: SnakesSeatLamps(state: s, client: widget.client),
+              ),
               // Voice's speaking state lives on the mic button itself (see the
               // ludo board) — nothing wedged between the seats and the board,
               // so talk never moves the board underneath the players.
               Expanded(
-                child: Center(
-                  child: LayoutBuilder(
-                    builder: (context, cons) {
-                      // The board keeps its square shape and the home area sits
-                      // directly under it, inside the same Stack — the layout
-                      // the offline view already uses. Online had no home area
-                      // at all: the board numbers 1..100, so square 0 has no
-                      // cell, and squareCenter(0) fell through the
-                      // boustrophedon maths onto square 10's cell. Every pawn
-                      // still waiting to enter was drawn on top of a numbered
-                      // square, which is why the home area looked missing.
-                      final homeH = _homeStripH;
-                      final boardSize = math.min(
-                        cons.biggest.width,
-                        math.max(cons.biggest.height - homeH, 0.0),
-                      );
-                      return SizedBox(
-                        width: boardSize,
-                        height: boardSize + homeH,
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            CustomPaint(
-                              size: Size.square(boardSize),
-                              painter: SnakesBoardPainter(
-                                highlightSquare:
-                                    s.phase == SnakesPhase.awaitingMove
-                                    ? pendingMove(s).to
-                                    : null,
-                              ),
-                            ),
-                            ..._pawnWidgets(s, boardSize),
-                            _homeArea(boardSize, s),
-                          ],
+                child: LayoutBuilder(
+                  builder: (context, cons) {
+                    // Same stage as the offline view: one square board and one
+                    // home panel, in one coordinate space. The stage puts the
+                    // panel beside the board on a roomy window and under it
+                    // when that leaves a bigger board.
+                    final metrics = SnakesStageMetrics.layout(
+                      available: cons.biggest,
+                      players: s.players.length,
+                    );
+                    return SnakesStage(
+                      metrics: metrics,
+                      board: CustomPaint(
+                        painter: SnakesBoardPainter(
+                          highlightSquare: s.phase == SnakesPhase.awaitingMove
+                              ? pendingMove(s).to
+                              : null,
                         ),
-                      );
-                    },
-                  ),
+                      ),
+                      home: _homeArea(metrics, s),
+                      overlays: _pawnWidgets(s, metrics),
+                    );
+                  },
                 ),
               ),
-              Text(
-                status,
-                style: const TextStyle(fontSize: 14, color: Colors.white70),
-              ),
-              // The on-turn clock — snakes seats get the same standing
-              // instructions ludo does: roll within it, or the turn burns
-              // with you.
-              TurnCountdown(client: widget.client),
-              const SizedBox(height: 6),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                 child: Row(
@@ -575,106 +578,21 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
 
   // ------------------------------------------------------------- home area
 
-  // Same geometry as the offline view, so both games lay the panel out the
-  // same way and a player moving between them sees the same board furniture.
-
-  /// One home area for the whole table, drawn directly under the board.
-  /// Fixed sizes so the chips come out of one formula.
-  static const double _homePad = 8;
-  static const double _homeCaptionH = 20;
-  static const double _homeRowH = 40;
-  static const double _chipGap = 6;
-  static const double _chipMax = 34;
-
-  /// Caption row plus one row of pawns, whatever the seat count.
-  static const double _homeStripH = _homePad * 2 + _homeCaptionH + _homeRowH;
-
-  /// Diameter of a pawn chip, shrunk so every seat fits the panel's width.
-  static double _chipSize(double boardSize, int players) {
-    final n = math.max(players, 1);
-    final avail = boardSize - _homePad * 2 - _chipGap * (n - 1);
-    return math.min(_chipMax, math.max(avail / n, 12));
-  }
-
-  /// The home area: one panel for the whole table, holding every pawn that has
-  /// not yet entered the board. A pawn that has left is simply gone from the
-  /// panel.
-  Widget _homeArea(double boardSize, SnakesState s) {
+  /// The one home panel. [SnakesStageMetrics] owns the geometry, so the
+  /// online table lays out exactly like the offline one; this method only
+  /// decides who is still waiting and paints them.
+  Widget _homeArea(SnakesStageMetrics metrics, SnakesState s) {
     final waiting = [
       for (final p in s.players)
         if (p.square == 0) p,
     ];
-    final d = _chipSize(boardSize, s.players.length);
-    final total = s.players.length * d + (s.players.length - 1) * _chipGap;
-    final left = (boardSize - total) / 2;
-    return Positioned(
-      key: const ValueKey('home-area'),
-      left: 0,
-      top: boardSize,
-      width: boardSize,
-      height: _homeStripH,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: AppColors.feltLight.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white24),
-        ),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Positioned(
-              left: _homePad,
-              right: _homePad,
-              top: _homePad * 0.7,
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.home_rounded,
-                    size: 15,
-                    color: AppColors.gold,
-                  ),
-                  const SizedBox(width: 5),
-                  const Text(
-                    'Home',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.ivory,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      waiting.isEmpty
-                          ? 'every pawn is out'
-                          : '${waiting.length} of ${s.players.length} waiting to enter',
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.white60,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            for (final p in waiting)
-              Positioned(
-                key: ValueKey('home-pawn-${p.tokenIndex}'),
-                left: left + p.tokenIndex * (d + _chipGap),
-                top: _homePad + _homeCaptionH + (_homeRowH - d) / 2,
-                width: d,
-                height: d,
-                child: Pulse(
-                  active:
-                      p.id == s.currentPlayer.id &&
-                      s.phase != SnakesPhase.gameOver,
-                  child: _pawnDot(p, d),
-                ),
-              ),
-          ],
-        ),
-      ),
+    return SnakesHomePanel(
+      metrics: metrics,
+      waiting: waiting,
+      totalPlayers: s.players.length,
+      activePlayerId: s.currentPlayer.id,
+      gameOver: s.phase == SnakesPhase.gameOver,
+      chipBuilder: _pawnDot,
     );
   }
 
@@ -703,8 +621,8 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     );
   }
 
-  List<Widget> _pawnWidgets(SnakesState s, double boardSize) {
-    final cell = boardSize / 10;
+  List<Widget> _pawnWidgets(SnakesState s, SnakesStageMetrics metrics) {
+    final cell = metrics.boardSize / 10;
     final bySquare = <int, List<SnakesPlayer>>{};
     for (final p in s.players) {
       // Square 0 has no board cell; those pawns live in the home strip, and
@@ -714,10 +632,12 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     }
     final widgets = <Widget>[];
     for (final entry in bySquare.entries) {
-      final c = SnakesBoardPainter.squareCenter(
-        entry.key,
-        Size.square(boardSize),
-      );
+      final c =
+          metrics.boardOrigin +
+          SnakesBoardPainter.squareCenter(
+            entry.key,
+            Size.square(metrics.boardSize),
+          );
       final group = entry.value;
       for (var i = 0; i < group.length; i++) {
         final p = group[i];

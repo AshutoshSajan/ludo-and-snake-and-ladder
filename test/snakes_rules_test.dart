@@ -46,17 +46,18 @@ void main() {
       }
     });
 
-    test('a 1 brings the pawn in, and the ladder at 1 takes it to 38', () {
+    test('a 1 brings the pawn in on square 1, below the ladder at 2', () {
       final s = createSnakesState([_p('a', 0), _p('b', 1)]);
       rollDice(s, 1);
       expect(s.phase, SnakesPhase.awaitingMove);
       final mv = pendingMove(s);
-      // Square 1 is the foot of the 1->38 ladder on this board, so entering is
-      // dramatic. That is the real game, not a bug.
-      expect(mv.jump, 'ladder');
-      expect(mv.to, 38);
+      // The ladder starts on square 2, so entering lands on square 1 and the
+      // climb is one step away rather than instant.
+      expect(mv.jump, isNull);
+      expect(mv.to, 1);
       applyMove(s);
-      expect(s.players[0].square, 38);
+      expect(s.players[0].square, 1);
+      // The ladder itself is covered by the next test, from square 1.
     });
 
     test('the die keeps showing the roll that did nothing', () {
@@ -105,8 +106,8 @@ void main() {
 
     test('ladder lifts the pawn', () {
       final s = createSnakesState([_p('a', 0), _p('b', 1)]);
-      s.players[0].square = 0;
-      rollDice(s, 1); // 0+1 = 1 -> ladder to 38
+      s.players[0].square = 1;
+      rollDice(s, 1); // 1+1 = 2 -> ladder to 38
       final mv = pendingMove(s);
       expect(mv.to, 38);
       expect(mv.jump, 'ladder');

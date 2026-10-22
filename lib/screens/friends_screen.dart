@@ -17,6 +17,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../services/friend_client.dart';
 import '../services/online_client.dart';
 import '../services/server_url.dart';
@@ -331,11 +333,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
       );
       if (!mounted) return;
       if (accept && code != null && code.isNotEmpty) {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) =>
-                OnlineLobbyScreen(startup: OnlineStartup(joinCode: code)),
-          ),
+        pushAppScreen<void>(
+          context,
+          name: AppRoutes.join(code),
+          builder: (_) =>
+              OnlineLobbyScreen(startup: OnlineStartup(joinCode: code)),
         );
         return;
       }
@@ -406,7 +408,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                 e is FriendException
                     ? e.text
                     : 'The play request did not reach them — check your '
-                        'connection and try Play again.',
+                          'connection and try Play again.',
               );
             }
           });
@@ -414,11 +416,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
     lobby.addListener(maybeInvite);
     if (!mounted) return;
-    final handoff = MaterialPageRoute(
+    final handoff = pushAppScreen<void>(
+      context,
+      name: AppRoutes.online,
       builder: (_) =>
           OnlineLobbyScreen(startup: OnlineStartup(adoptedClient: lobby)),
     );
-    await Navigator.of(context).push(handoff);
     // Connect only after the push so the lobby panel shows the dial.
     try {
       await lobby.connect();
@@ -428,38 +431,57 @@ class _FriendsScreenState extends State<FriendsScreen> {
       _abandonHandoff(handoff);
       return;
     }
-    // connect() resolves only once the room has formed (the `joined`
-    // handshake carries the code), so a missing code here means the table
-    // never opened — say so instead of leaving a dial spinning forever.
-    final formed = lobby.roomCode;
+    if (sent) return;
+    // connect() only opens the socket; the code arrives with `joined` a
+    // moment later. Waiting for it here is what lets the invite exist:
+    // checking roomCode immediately after connect() always saw null and
+    // popped the lobby before the server had named the room. The entry's
+    // own future races the wait so leaving the lobby early does not make
+    // this path speak later on the friends screen.
+    final formed = await Future.any<String?>([
+      lobby.awaitRoomCode(),
+      handoff.popped.then((_) => null),
+    ]);
+    // `maybeInvite` is the listener path, but a `joined` frame that landed
+    // before the listener was attached would leave an open room with no
+    // invite in it. The awaited code is the same fact: if the room exists
+    // and nothing has been sent, send it now.
+    if (!sent && formed != null && formed.isNotEmpty) {
+      maybeInvite();
+    }
+    lobby.removeListener(maybeInvite);
     if (!sent && (formed == null || formed.isEmpty)) {
       _abandonHandoff(handoff);
     }
   }
 
   /// The handoff died before an invite could be sent: leave the dead
-  /// lobby route (the push already happened) and answer with the fix.
-  /// The pop only fires while the handoff's own route is still the top of
+  /// lobby screen (the push already happened) and answer with the fix.
+  /// The pop only fires while the handoff's own entry is still the top of
   /// the stack — a user who backed out of the dead lobby first keeps the
   /// friends screen where it is.
-  void _abandonHandoff(MaterialPageRoute<void> handoff) {
-    if (handoff.isCurrent) handoff.navigator?.pop();
+  void _abandonHandoff(AppHandle<void> handoff) {
+    // The player may have backed out first: stay silent rather than
+    // speaking a failure about a screen they already left, and never
+    // pop the friends screen they are now looking at.
+    if (!mounted || !handoff.isCurrent) return;
+    handoff.pop();
     _showSnack(
       'Could not open a table — check the game server, then tap Play again.',
     );
   }
 
   Future<void> _openChat(FriendEntry friend) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => FriendsChatScreen(
-          client: _client,
-          me: _seatId,
-          myName: _myName,
-          peer: friend,
-        ),
+    await pushAppScreen<void>(
+      context,
+      name: AppRoutes.friendsChat(friend.seatId),
+      builder: (_) => FriendsChatScreen(
+        client: _client,
+        me: _seatId,
+        myName: _myName,
+        peer: friend,
       ),
-    );
+    ).popped;
     if (!mounted) return;
     await _refresh();
   }
@@ -1034,9 +1056,7 @@ class _FriendsChatScreenState extends State<FriendsChatScreen> {
     } on FriendException catch (e) {
       if (mounted) {
         setState(() => _messages.removeWhere((m) => m.id == echo.id));
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text(e.text)));
+        showSnackInColumn(context, e.text, icon: Icons.error_outline);
       }
     }
   }

@@ -654,6 +654,32 @@ class OnlineClient extends ChangeNotifier {
     await _openAndHello(preferredColor: preferredColor);
   }
 
+  /// Waits for the authoritative room code the server assigns with `joined`.
+  ///
+  /// [connect] resolves once the socket is open and the `hello` is sent; the
+  /// code arrives on a later server message. Callers that read [roomCode]
+  /// straight after awaiting [connect] will almost always see null — the
+  /// inviter handoff did exactly that and tore down a room that was about to
+  /// form. This waits for the code (or [timeout], returning null), and does
+  /// not need the caller to listen for it.
+  Future<String?> awaitRoomCode({
+    Duration timeout = const Duration(seconds: 45),
+  }) {
+    final current = roomCode;
+    if (current != null && current.isNotEmpty) return Future.value(current);
+    final done = Completer<String?>();
+    void seeCode() {
+      final code = roomCode;
+      if (code == null || code.isEmpty) return;
+      if (!done.isCompleted) done.complete(code);
+    }
+
+    addListener(seeCode);
+    return done.future
+        .timeout(timeout, onTimeout: () => null)
+        .whenComplete(() => removeListener(seeCode));
+  }
+
   Future<void> _openAndHello({LudoColor? preferredColor}) async {
     try {
       // Carry the room code in the URL: a room-affinity load balancer
@@ -794,7 +820,8 @@ class OnlineClient extends ChangeNotifier {
     _openAndHello();
   }
 
-  void _onClosed() {    if (_userClosed) {
+  void _onClosed() {
+    if (_userClosed) {
       status = OnlineStatus.idle;
       notifyListeners();
       return;
@@ -1019,6 +1046,11 @@ class OnlineClient extends ChangeNotifier {
         // Re-baselining the client chip here is the point — the deadline is
         // the seat's full window from right now.
         turnMs = (msg['turnMs'] as num?)?.toInt();
+      case 'friendPulse':
+        // The payload is deliberately empty: the watcher reads the state
+        // bundle itself, so the socket never becomes a second source of
+        // truth for requests or invites.
+        onFriendsPulse?.call();
       case 'chat':
         final line = ChatLine.fromJson(msg, serverUrl: serverUrl);
         chat.add(line);
@@ -1100,6 +1132,11 @@ class OnlineClient extends ChangeNotifier {
   /// can play the notification. Separate from [onChat] on purpose: [onChat]
   /// fires for every line, and only the unread ones should make a noise.
   void Function(ChatLine message)? onMessageArrived;
+
+  /// A server push that the friends picture moved — a new request or play
+  /// invite. The app-level [InviteWatcher] owns the poll; this hook lets a
+  /// live socket turn the next five-second beat into an immediate read.
+  void Function()? onFriendsPulse;
 
   // ------------------------------------------------------- voice chat
   //

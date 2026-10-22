@@ -24,9 +24,14 @@ import '../theme.dart';
 /// lives while a deadline does. No deadline — offline games, finished games,
 /// a table gone quiet — means the plate is absent entirely.
 class TurnCountdown extends StatefulWidget {
-  const TurnCountdown({super.key, required this.client});
+  const TurnCountdown({super.key, required this.client, this.onTenSeconds});
 
   final OnlineClient client;
+
+  /// Fired once per armed deadline, when the plate first reads ten seconds or
+  /// fewer. The screens pass it only for the seat that owns the turn, so the
+  /// warning sounds on the device that has to act — not on every spectator's.
+  final VoidCallback? onTenSeconds;
 
   @override
   State<TurnCountdown> createState() => _TurnCountdownState();
@@ -34,6 +39,16 @@ class TurnCountdown extends StatefulWidget {
 
 class _TurnCountdownState extends State<TurnCountdown> {
   Timer? _ticker;
+
+  /// The warning line: at ten seconds or fewer the plate turns red and the
+  /// seat on turn hears the countdown tone once.
+  static const int _warningSeconds = 10;
+  static const int _warningMs = _warningSeconds * 1000;
+
+  /// Whether the tone has already sounded for the current deadline. A
+  /// freshly armed deadline (more than [_warningSeconds] on the wire) clears
+  /// it, so every new turn warns exactly once.
+  bool _warned = false;
 
   /// Remaining-ms from the latest broadcast, and the seconds the local
   /// ticker has burned since it arrived: the chip re-baselines when the
@@ -65,7 +80,24 @@ class _TurnCountdownState extends State<TurnCountdown> {
       _lastTurnMs = ms;
       _burnedMs = 0;
     }
+    // A new arm starts above the warning line; an absent deadline has no
+    // tone to warn about. Both re-open the once-per-turn gate.
+    if (ms == null || ms > _warningMs) _warned = false;
     _syncTicker(ms != null);
+    _maybeWarnTenSeconds();
+  }
+
+  /// Sounds the warning the first time the remaining seconds reach ten.
+  /// Broadcasts re-baseline the figure, so the gate lives on the state, not
+  /// on a particular tick.
+  void _maybeWarnTenSeconds() {
+    if (_warned) return;
+    final ms = widget.client.turnMs;
+    if (ms == null) return;
+    final left = (ms - _burnedMs) / 1000;
+    if (left.ceil() > _warningSeconds) return;
+    _warned = true;
+    widget.onTenSeconds?.call();
   }
 
   void _syncTicker(bool active) {
@@ -73,6 +105,7 @@ class _TurnCountdownState extends State<TurnCountdown> {
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) {
           setState(() => _burnedMs += 1000);
+          _maybeWarnTenSeconds();
         }
       });
     } else if (!active && _ticker != null) {

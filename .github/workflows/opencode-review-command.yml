@@ -1,0 +1,236 @@
+name: OpenCode command
+
+# Trusted discussion commands on a pull request:
+#   * `@opencode <question>` / `/opencode <question>` — a read-only answer.
+#   * `/opencode resolve` inside a review thread — resolve that thread.
+#
+# Same-repository pull requests only. The job is gated on author association
+# before any checkout, and the script repeats the check: a bot or a drive-by
+# commenter cannot spend the model budget or resolve a thread.
+on:
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+# Each command is independent: answering one comment must not cancel another.
+concurrency:
+  group: opencode-command-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  command:
+    if: >
+      github.event.comment.user.type != 'Bot' &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR') &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      # Cheap prefilter before any checkout: every other comment on every PR
+      # would otherwise bill a runner just to discover it has no command.
+      - name: Check for an OpenCode command
+        id: trigger
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -euo pipefail
+          body="$(jq -r '.comment.body // ""' "$EVENT_PATH")"
+          if printf '%s' "$body" |
+              grep -qiE '(^|[^[:alnum:]_@/])[@/]opencode([^[:alnum:]_]|$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No @opencode or /opencode command in the comment; nothing to do."
+          fi
+
+      # Resolve is a GraphQL mutation: do not make it depend on downloading the
+      # model binary. This mirrors the exact anchored rule in command.py.
+      - name: Check command type
+        id: kind
+        if: steps.trigger.outputs.run == 'true'
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -euo pipefail
+          resolve="$(python3 -c 'import json, re, sys; body = json.load(open(sys.argv[1], encoding="utf-8"))["comment"]["body"]; print("true" if re.fullmatch(r"\s*(?:@opencode|/opencode)\s+resolve\s*[.!]?\s*", body, re.I) else "false")' "$EVENT_PATH")"
+          echo "resolve=$resolve" >> "$GITHUB_OUTPUT"
+
+      # Resolve the PR before checking out anything from it. The event for an
+      # issue_comment has no pull_request object, so the API is the only common
+      # source of the base/head SHAs (and of the fork/state facts).
+      - name: Resolve pull request
+        id: pr
+        if: steps.trigger.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          RESOLVE: ${{ steps.kind.outputs.resolve }}
+        run: |
+          set -euo pipefail
+          data="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          state="$(jq -r '.state' <<<"$data")"
+          same_repo="$(jq -r --arg repo "$GITHUB_REPOSITORY" \
+            '(.head.repo.full_name // "") == $repo' <<<"$data")"
+          {
+            echo "number=$(jq -r '.number' <<<"$data")"
+            echo "head_sha=$(jq -r '.head.sha' <<<"$data")"
+            echo "base_sha=$(jq -r '.base.sha' <<<"$data")"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$state" != "open" ] || [ "$same_repo" != "true" ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::OpenCode commands run only on open, same-repository pull requests; skipping."
+            exit 0
+          fi
+
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+          # Resolving a review thread does not read the pull request checkout,
+          # so a comment/head race does not matter for that command.
+          if [ "${RESOLVE:-false}" = "true" ]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          comment_at="$(jq -r '.comment.created_at // ""' "$GITHUB_EVENT_PATH")"
+          pushed_at="$(jq -r '.pushed_at // ""' <<<"$data")"
+          if [ -z "$comment_at" ] || [ -z "$pushed_at" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Could not verify when the head last changed; not reading unverified code."
+            exit 0
+          fi
+
+          # A command approves the head as it stood when the comment was
+          # written. If the head moved after that, do not answer from code the
+          # commenter did not see: that is the TOCTOU race CodeQL flags on a
+          # privileged issue_comment workflow. This comment/head date check is
+          # the guard CodeQL recognises for that event.
+          if [[ $(date -d "$pushed_at" +%s) -gt $(date -d "$comment_at" +%s) ]]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::The pull request head moved after this command was posted; comment again to run it on the current code."
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Do not leave a stale command as a silent skip: tell the commenter why
+      # it did not run and what to do next.
+      - name: Explain a stale command
+        if: steps.pr.outputs.eligible == 'true' && steps.pr.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+          body="$(printf '%s\n\n%s' \
+            '**OpenCode did not run this command.** The pull request may have changed since you commented, so an answer could describe code you did not see. Comment again to run it on the current head.' \
+            '<!-- opencode-command -->')"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments/$COMMENT_ID/replies" \
+              -f body="$body" >/dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              -f body="$body" >/dev/null
+          fi
+
+      - name: Check out trusted scripts
+        if: steps.pr.outputs.eligible == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.base_sha }}
+          sparse-checkout: .github/opencode
+          persist-credentials: false
+          path: trusted
+
+      - name: Check OpenCode scripts
+        id: gate
+        if: steps.pr.outputs.eligible == 'true' && steps.pr.outputs.stale != 'true'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ ! -f trusted/.github/opencode/command.py ]; then
+            echo "::notice::The base commit does not contain the OpenCode command scripts yet; skipping. Commands start once this change is on the target branch."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            # Resolve is a GraphQL mutation and needs no model. Questions will
+            # fail inside the script with a clear message, so do not block the
+            # whole workflow here.
+            echo "::notice::OPENCODE_API_KEY is not configured; questions will fail, but /opencode resolve still works."
+          fi
+
+      - name: Check out pull request head
+        if: steps.gate.outputs.configured == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: workspace
+
+      # Same pinned tarball as the review workflow. A command that needs the
+      # model pays this install; a resolve does too, which is a few seconds of
+      # a runner rather than a second code path.
+      - name: Install OpenCode (pinned)
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          OPENCODE_VERSION: 2.1.2
+          OPENCODE_SHA256: 2e1c665f5e82e531732329f2a3106672873477506e378b17d30eeabd31d139b3
+        run: |
+          set -euo pipefail
+          url="https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-${OPENCODE_VERSION}.tgz"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/opencode.tgz"
+          echo "${OPENCODE_SHA256}  $RUNNER_TEMP/opencode.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/opencode-bin"
+          tar -xzf "$RUNNER_TEMP/opencode.tgz" -C "$RUNNER_TEMP/opencode-bin"
+          install -m 0755 "$RUNNER_TEMP/opencode-bin/package/bin/opencode" \
+            "$RUNNER_TEMP/opencode-bin/opencode"
+          echo "$RUNNER_TEMP/opencode-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opencode-bin/opencode" --version
+
+      - name: Run command
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
+          TRUSTED_DIR: ${{ github.workspace }}/trusted
+          WORKSPACE: ${{ github.workspace }}/workspace
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          OUTPUT_DIR: ${{ runner.temp }}/opencode-command
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          python3 "$TRUSTED_DIR/.github/opencode/command.py" \
+            --workspace "$WORKSPACE" \
+            --trusted-dir "$TRUSTED_DIR" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --head-sha "$HEAD_SHA" \
+            --base-sha "$BASE_SHA" \
+            --output-dir "$OUTPUT_DIR" \
+            --run-url "$RUN_URL"
+
+      - name: Upload command artifact
+        if: always() && steps.gate.outputs.configured == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-command
+          path: ${{ runner.temp }}/opencode-command
+          if-no-files-found: ignore
+          retention-days: 3

@@ -11,7 +11,7 @@
 /// with an https URL), so a player who already knows their keyboard's
 /// GIF button needs no new pathway learned: insertion here ends at the
 /// same chat line the picker would have built. The composer field is
-/// where this is registered — see GameChatSheet and the lobby composer.
+/// where this is registered — see `TableChatPanel`.
 ///
 /// Failure says so: bytes that the server refuses and opaque content uris
 /// both surface the sheet's own error wording, per the one-visual-language
@@ -34,7 +34,10 @@ import 'package:flutter/services.dart' show KeyboardInsertedContent;
 /// [onError] speaks the failure, because a silent dead tap is the one UX
 /// bug this whole file exists to avoid.
 ContentInsertionConfiguration? keyboardGifInsertion({
-  required Future<bool> Function({required List<int> bytes, required String mime})
+  required Future<bool> Function({
+    required List<int> bytes,
+    required String mime,
+  })
   send,
   required void Function(String url) sendLink,
   required void Function(String message) onError,
@@ -54,12 +57,7 @@ ContentInsertionConfiguration? keyboardGifInsertion({
     // The framework wants a plain callback; the upload runs underneath.
     onContentInserted: (content) {
       unawaited(
-        _onContent(
-          content,
-          send: send,
-          sendLink: sendLink,
-          onError: onError,
-        ),
+        _onContent(content, send: send, sendLink: sendLink, onError: onError),
       );
     },
   );
@@ -68,12 +66,14 @@ ContentInsertionConfiguration? keyboardGifInsertion({
 /// A mime the field cannot send is odd enough to say no loudly instead
 /// of forwarding junk the server would 400 anyway — with the same words
 /// a failed upload uses.
-const _keyboardGifError =
-    "That keyboard GIF didn't send — try the GIF button";
+const _keyboardGifError = "That keyboard GIF didn't send — try the GIF button";
 
 Future<void> _onContent(
   KeyboardInsertedContent content, {
-  required Future<bool> Function({required List<int> bytes, required String mime})
+  required Future<bool> Function({
+    required List<int> bytes,
+    required String mime,
+  })
   send,
   required void Function(String url) sendLink,
   required void Function(String message) onError,

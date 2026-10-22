@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_router.dart';
+import '../../app_routes.dart';
 import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
+import '../../ui/shared/table_alert.dart';
 import '../../ui/theme.dart';
 import 'admin_login_screen.dart';
 
@@ -192,12 +195,13 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
             icon: const Icon(Icons.logout),
             tooltip: 'Sign out',
             onPressed: () async {
-              final navigator = Navigator.of(context);
               await widget.client.logout();
+              if (!context.mounted) return;
               ref.read(adminSessionProvider.notifier).signOut();
-              navigator.pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const AdminLoginScreen()),
-                (_) => false,
+              resetAppScreen<void>(
+                context,
+                name: AppRoutes.admin,
+                builder: (_) => const AdminLoginScreen(),
               );
             },
           ),
@@ -408,9 +412,11 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
         );
       } on AdminException catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(
+        showTableAlert(
           context,
-        ).showSnackBar(SnackBar(content: Text('Create failed: ${e.body}')));
+          'Create failed: ${e.body}',
+          icon: Icons.error_outline,
+        );
         return;
       }
       _reloadAll();
@@ -1074,9 +1080,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
       _reloadTable();
     } on AdminException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.body)));
+      showTableAlert(context, e.body, icon: Icons.error_outline);
     }
   }
 

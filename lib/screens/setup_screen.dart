@@ -2,6 +2,8 @@ import '../ui/page_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../../engine/core/player_profiles.dart';
 import '../../engine/ludo/ludo_board.dart';
 import '../../engine/ludo/ludo_models.dart';
@@ -449,8 +451,10 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   void _start() {
     for (final s in _seats) {
       if (s.name.trim().isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Every seat needs a name')),
+        showSnackInColumn(
+          context,
+          'Every seat needs a name',
+          icon: Icons.edit_note,
         );
         return;
       }
@@ -466,10 +470,14 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         ),
     ];
     Haptics.light();
-    Navigator.of(context).pushReplacement(MaterialPageRoute(
+    replaceAppScreen<void>(
+      context,
+      name: widget.game == GameKind.ludo
+          ? AppRoutes.gameLudo
+          : AppRoutes.gameSnakes,
       builder: (_) => widget.game == GameKind.ludo
           ? LudoGameView(seats: seats)
           : SnakesGameView(seats: seats),
-    ));
+    );
   }
 }

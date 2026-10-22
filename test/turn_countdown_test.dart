@@ -67,4 +67,60 @@ void main() {
     // Danger state carries a timer glyph, not a plain outline.
     expect(find.byIcon(Icons.timer_sharp), findsOneWidget);
   });
+
+  testWidgets('the warning sounds once, at ten seconds left', (tester) async {
+    final client = OnlineClient('ws://x/ws', seatId: 'p1', name: 'Ana')
+      ..turnMs = 12_000;
+    var warnings = 0;
+    Widget app() => MaterialApp(
+      home: Scaffold(
+        body: TurnCountdown(
+          client: client,
+          onTenSeconds: () => warnings++,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(app());
+    expect(warnings, 0, reason: 'twelve seconds is not the warning yet');
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('10 s'), findsOneWidget);
+    expect(warnings, 1, reason: 'ten seconds left is the warning line');
+
+    await tester.pump(const Duration(seconds: 4));
+    expect(warnings, 1, reason: 'a warning, not a per-second metronome');
+
+    // The countdown owns a periodic timer; dispose the tree to cancel it.
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a freshly armed deadline warns again', (tester) async {
+    final client = OnlineClient('ws://x/ws', seatId: 'p1', name: 'Ana')
+      ..turnMs = 12_000;
+    var warnings = 0;
+    Widget app() => MaterialApp(
+      home: Scaffold(
+        body: TurnCountdown(
+          client: client,
+          onTenSeconds: () => warnings++,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(app());
+    await tester.pump(const Duration(seconds: 2));
+    expect(warnings, 1);
+
+    // The next turn arms at thirty seconds; the gate opens again.
+    client.turnMs = 30_000;
+    await tester.pumpWidget(app());
+    expect(find.text('30 s'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 20));
+    expect(find.text('10 s'), findsOneWidget);
+    expect(warnings, 2, reason: 'every turn gets its own warning');
+
+    await tester.pumpWidget(const SizedBox());
+  });
 }

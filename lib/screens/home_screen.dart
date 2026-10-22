@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../engine/core/player_profiles.dart';
 import '../providers/app_providers.dart';
+import '../services/friend_signals.dart';
 import '../ui/admin_badge.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/ludo/ludo_board_painter.dart';
@@ -25,11 +28,23 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  @override
-  void initState() {
-    super.initState();
-    // The first-run tutorial ask goes out once storage answers, after the
-    // first frame (the navigator must be live to host the dialog).
+  /// Whether the ask has already been handed to the frame scheduler. One
+  /// ask per home visit, never a second one from a rebuild.
+  bool _askScheduled = false;
+
+  /// Schedules the first-run ask the first time home is the route on top.
+  ///
+  /// Home is built underneath every deep link (`/join/ABCD`, `/friends/…`)
+  /// so back leaves the app only after the linked screen. Asking from
+  /// `initState` meant the dialog opened over that linked screen — a fresh
+  /// browser tab following an invite got the tour prompt instead of the
+  /// invite. [ModalRoute.of] is a dependency, so when the linked screen pops
+  /// back to home this build runs again and the ask is still owed then.
+  void _scheduleTutorialAsk(BuildContext context) {
+    if (_askScheduled) return;
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    _askScheduled = true;
+    // After the first frame: the navigator must be live to host the dialog.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAskForTutorial());
   }
 
@@ -40,6 +55,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Future<void> _maybeAskForTutorial() async {
     final asked = await ref.read(storageProvider).loadTutorialAsked();
     if (!mounted || asked) return;
+    // The player may have left home while storage answered (tapped Play
+    // Online, say). Don't cover that screen; the ask returns when home does.
+    if (ModalRoute.of(context)?.isCurrent != true) {
+      _askScheduled = false;
+      return;
+    }
     final tookTour = await showDialog<bool>(
       context: context,
       // Not dismissible: a stray outside tap is not an answer, it would
@@ -59,6 +80,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _scheduleTutorialAsk(context);
     final admin = ref.watch(adminSessionProvider);
     return Scaffold(
       body: Container(
@@ -126,31 +148,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         key: const ValueKey('tour-online'),
                         icon: const Icon(Icons.wifi, size: 18),
                         label: const Text('Play Online'),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const OnlineLobbyScreen(),
-                          ),
+                        onPressed: () => pushAppScreen<void>(
+                          context,
+                          name: AppRoutes.online,
+                          builder: (_) => const OnlineLobbyScreen(),
                         ),
                       ),
                     ),
                     const SizedBox(width: 10),
                     IconButton.outlined(
                       key: const ValueKey('tour-friends'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const FriendsScreen(),
+                      onPressed: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.friends,
+                        builder: (_) => const FriendsScreen(),
+                      ),
+                      // The app-level watcher owns this count, so the dot is
+                      // already warm before the player opens the lobby or
+                      // the friends tray.
+                      icon: ValueListenableBuilder<int>(
+                        valueListenable: friendSignals.incomingRequests,
+                        builder: (context, pending, _) => Badge(
+                          key: const ValueKey('home-friends-badge'),
+                          isLabelVisible: pending > 0,
+                          backgroundColor: AppColors.danger,
+                          textColor: Colors.white,
+                          label: Text('$pending'),
+                          child: const Icon(Icons.group_outlined),
                         ),
                       ),
-                      icon: const Icon(Icons.group_outlined),
                       tooltip: 'Friends',
                     ),
                     const SizedBox(width: 10),
                     IconButton.outlined(
                       key: const ValueKey('tour-leaderboard'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const ScoreboardScreen(),
-                        ),
+                      onPressed: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.leaderboard,
+                        builder: (_) => const ScoreboardScreen(),
                       ),
                       icon: const Icon(Icons.emoji_events),
                       tooltip: 'Leaderboard',
@@ -158,10 +193,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     const SizedBox(width: 10),
                     IconButton.outlined(
                       key: const ValueKey('tour-settings'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const SettingsScreen(),
-                        ),
+                      onPressed: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.settings,
+                        builder: (_) => const SettingsScreen(),
                       ),
                       icon: const Icon(Icons.settings_outlined),
                       tooltip: 'Settings',
@@ -177,8 +212,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   void _openSetup(BuildContext context, GameKind game) {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => SetupScreen(game: game)));
+    pushAppScreen<void>(
+      context,
+      name: game == GameKind.ludo ? AppRoutes.playLudo : AppRoutes.playSnakes,
+      builder: (_) => SetupScreen(game: game),
+    );
   }
 }
 

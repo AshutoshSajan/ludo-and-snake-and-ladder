@@ -11,8 +11,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/friend_client.dart';
+import 'package:game_club/services/friend_signals.dart';
 import 'package:game_club/services/online_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fake_channel.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -32,9 +35,86 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Server URL'), findsNothing);
-      expect(find.text('Your name'), findsOneWidget,
-          reason: 'the form still asks its one real question: the name');
+      expect(
+        find.text('Your name'),
+        findsOneWidget,
+        reason: 'the form still asks its one real question: the name',
+      );
     });
+
+    testWidgets('the player id is tap-to-copy, with a corner confirmation', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        'gc.onlinePlayerId': 'p123stable',
+        'gc.onlineName': 'Asha',
+      });
+      final copied = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add(call.arguments['text'] as String);
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: OnlineLobbyScreen())),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Player ID p123stable'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('copy-player-id')));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['p123stable']);
+      expect(
+        find.textContaining('Player ID p123stable copied'),
+        findsOneWidget,
+        reason: 'the same top-right card confirms the copy',
+      );
+    });
+  });
+
+  testWidgets('the lobby friends badge follows the shared watcher count', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'gc.onlinePlayerId': 'me',
+      'gc.onlineName': 'Me',
+    });
+    friendSignals.reset();
+    friendSignals.incomingRequests.value = 2;
+    addTearDown(friendSignals.reset);
+
+    final adopted = OnlineClient('ws://via.test/ws', seatId: 'me', name: 'Me');
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: OnlineLobbyScreen(
+            startup: OnlineStartup(adoptedClient: adopted),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final badge = find.byKey(const Key('lobby-friends-badge'));
+    expect(badge, findsOneWidget);
+    expect(
+      tester.widget<Badge>(badge).isLabelVisible,
+      isTrue,
+      reason: 'the app-level watcher read the request before the tray poll',
+    );
+    expect(find.byTooltip('Friends (2 requests waiting)'), findsOneWidget);
+
+    friendSignals.incomingRequests.value = 0;
+    await tester.pump();
+    expect(tester.widget<Badge>(badge).isLabelVisible, isFalse);
   });
 
   group('table size picker', () {
@@ -104,7 +184,9 @@ void main() {
       );
 
       await tester.tap(find.byTooltip('Copy room code'));
-      await tester.pump();
+      // The page toast is the top-right overlay card now: its insert waits
+      // one frame and then slides in, so settle the slide before finding it.
+      await tester.pumpAndSettle();
 
       expect(copied, ['LK2X']);
       expect(
@@ -142,6 +224,216 @@ void main() {
       await tester.pump();
       expect(copied, isEmpty);
       expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('copies a direct-join link built from the page origin', (
+      tester,
+    ) async {
+      final copied = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add(call.arguments['text'] as String);
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: RoomCodeCard(
+                // Lowercase in, canonical uppercase out; the origin is
+                // injected because the test VM has no page origin.
+                code: 'lk2x',
+                base: Uri.parse('https://game.club/some/page?invite=1'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('LK2X'), findsOneWidget);
+      expect(
+        find.text('https://game.club/join/LK2X'),
+        findsOneWidget,
+        reason: 'the link is visible, so it can also be selected by hand',
+      );
+
+      await tester.tap(find.byKey(const Key('copy-join-link')));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['https://game.club/join/LK2X']);
+      expect(
+        find.text('Join link copied — send it to your friends'),
+        findsOneWidget,
+        reason: 'the gold top-right card confirms the copy',
+      );
+      expect(
+        find.byType(SnackBar),
+        findsNothing,
+        reason: 'the app never uses a bottom snackbar for this',
+      );
+    });
+
+    testWidgets('share falls back to copying where the API is absent', (
+      tester,
+    ) async {
+      // `flutter test` is the non-web half, so shareJoinLink is the stub that
+      // answers false; the card must then copy instead of doing nothing.
+      final copied = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add(call.arguments['text'] as String);
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: RoomCodeCard(
+                code: 'LK2X',
+                base: Uri.parse('https://game.club/'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byTooltip('Share join link'));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['https://game.club/join/LK2X']);
+      expect(
+        find.text('Join link copied — send it to your friends'),
+        findsOneWidget,
+      );
+      expect(find.byType(SnackBar), findsNothing);
+    });
+  });
+
+  group('deep-link invitee', () {
+    Widget lobby({
+      required FakeChannelFactory factory,
+      required OnlineStartup startup,
+    }) => ProviderScope(
+      child: MaterialApp(
+        home: OnlineLobbyScreen(
+          startup: startup,
+          clientBuilder:
+              ({
+                required String serverUrl,
+                required String seatId,
+                required String name,
+                required String gameType,
+                required int capacity,
+              }) => OnlineClient(
+                serverUrl,
+                seatId: seatId,
+                name: name,
+                gameType: gameType,
+                capacity: capacity,
+                channelFactory: factory.create,
+              ),
+        ),
+      ),
+    );
+
+    testWidgets('a first-time invitee picks a name, then joins', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      final factory = FakeChannelFactory();
+      await tester.pumpWidget(
+        lobby(
+          factory: factory,
+          startup: const OnlineStartup(joinCode: 'abcd'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('invite-card')), findsOneWidget);
+      expect(find.text("You're invited to room ABCD"), findsOneWidget);
+      expect(
+        find.text('Join room ABCD'),
+        findsOneWidget,
+        reason: 'the invite card carries the prefilled code',
+      );
+      expect(
+        factory.channels,
+        isEmpty,
+        reason: 'the room waits for the player to choose a name',
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('online-name-field')),
+        'Asha',
+      );
+      await tester.tap(find.byKey(const Key('join-invited-room')));
+      await tester.pump();
+
+      expect(factory.channels, hasLength(1));
+      final hello = factory.last.sent.first;
+      expect(hello['type'], 'hello');
+      expect(hello['code'], 'ABCD');
+      expect(hello['name'], 'Asha');
+    });
+
+    testWidgets('a returning invitee joins without tapping Join', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        'gc.onlinePlayerId': 'p1',
+        'gc.onlineName': 'Asha',
+      });
+      final factory = FakeChannelFactory();
+      await tester.pumpWidget(
+        lobby(
+          factory: factory,
+          startup: const OnlineStartup(joinCode: 'abcd'),
+        ),
+      );
+      // The connecting spinner never settles; two pumps flush storage and
+      // the synchronous socket open that follows it.
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byKey(const Key('invite-card')), findsNothing);
+      expect(factory.channels, hasLength(1));
+      final hello = factory.last.sent.first;
+      expect(hello['code'], 'ABCD');
+      expect(hello['name'], 'Asha');
+      expect(hello['spectate'], isNull, reason: 'a plain join takes a seat');
+    });
+
+    testWidgets('a watch link joins the room as a spectator', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'gc.onlinePlayerId': 'p1',
+        'gc.onlineName': 'Asha',
+      });
+      final factory = FakeChannelFactory();
+      await tester.pumpWidget(
+        lobby(
+          factory: factory,
+          startup: const OnlineStartup(joinCode: 'ABCD', watch: true),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(factory.channels, hasLength(1));
+      expect(factory.last.sent.first['spectate'], isTrue);
     });
   });
 
@@ -276,28 +568,6 @@ void main() {
       await tester.tap(find.text('+ Add'));
       await tester.pump();
       expect(added, isZero);
-    });
-  });
-
-  group('recentChatLines — the inline table talk', () {
-    ChatLine line(int at) =>
-        ChatLine(from: 'Ash', text: 'message $at', at: at, seatId: 'seat-$at');
-
-    test('history lists the newest at the bottom, replay order', () {
-      final chat = [for (var i = 1; i <= 9; i++) line(i)];
-      final shown = recentChatLines(chat);
-      expect(
-        shown.map((l) => l.at),
-        [4, 5, 6, 7, 8, 9],
-        reason:
-            'the newest of the window must render at the bottom, '
-            'not push everything older down past itself',
-      );
-    });
-
-    test('a short history shows entire in replay order', () {
-      final chat = [line(1), line(2), line(3)];
-      expect(recentChatLines(chat).map((l) => l.at), [1, 2, 3]);
     });
   });
 }

@@ -1,13 +1,19 @@
-import '../ui/page_app_bar.dart';
 import 'package:flutter/material.dart';
 
 import '../services/online_client.dart';
-import '../ui/theme.dart';
+import '../ui/page_app_bar.dart';
 import '../ui/shared/player_avatar.dart';
+import '../ui/theme.dart';
 import 'online_lobby_screen.dart';
 
 /// The online scoreboard: career stats from the authoritative server's
 /// SQLite store (GET /leaderboard).
+///
+/// This is a club standings page, not a bare table: the champion gets a
+/// winner's card, second and third get their own medal cards, and the rest of
+/// the field sits in one compact, scannable table. The numbers are the same
+/// ones the server always sent — wins, games, average rank — but the page now
+/// answers "who is on top, and how far ahead?" at a glance.
 class ScoreboardScreen extends StatefulWidget {
   const ScoreboardScreen({super.key, this.serverUrl, this.load});
 
@@ -30,13 +36,27 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   /// career stats instead of one merged list.
   String? _game;
 
+  /// The combined finished-game count, cached from the unfiltered board.
+  ///
+  /// A filtered response reports its own `games` count (the Snakes board says
+  /// "5 games"), so using that number on the "All" tab made the tab claim
+  /// "All · 5 games" the moment Snakes was chosen — even though All still
+  /// meant the twelve-game combined board. The detail also undercounts on a
+  /// server with pre-migration rows, whose game is unknown; only the "all"
+  /// response carries the true combined total, so it is captured once and
+  /// kept while the user moves between tabs.
+  int? _allGames;
+
   String get _serverUrl =>
       widget.serverUrl ?? OnlineLobbyScreen.defaultServerUrl();
 
-  Future<LeaderboardData> _fetch() {
+  Future<LeaderboardData> _fetch() async {
     final load = widget.load;
-    if (load != null) return load(_serverUrl);
-    return OnlineClient.fetchLeaderboard(_serverUrl, game: _game);
+    final data = load != null
+        ? await load(_serverUrl)
+        : await OnlineClient.fetchLeaderboard(_serverUrl, game: _game);
+    if (_game == null) _allGames = data.games;
+    return data;
   }
 
   @override
@@ -69,140 +89,674 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           // Inside the content column, so the refresh button lines up with the
           // right edge of the rows it reloads rather than floating at the far
           // edge of a 1900px window with nothing under it.
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _reload),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh leaderboard',
+            onPressed: _reload,
+          ),
         ],
       ),
-      body: FutureBuilder<LeaderboardData>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            // A free-tier host sleeps, and the request now waits ~18s for it to
-            // wake. That wait used to be a bare spinner with no explanation,
-            // which is indistinguishable from a hang — and from the error that
-            // follows if it does eventually give up. The socket path already
-            // says "Starting the game server…"; this uses the same words so
-            // one habit covers both.
-            return const Center(
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(0, -0.55),
+            radius: 1.35,
+            colors: [Color(0xFF1D4E36), AppColors.felt],
+          ),
+        ),
+        child: FutureBuilder<LeaderboardData>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done) {
+              // A free-tier host sleeps, and the request now waits ~18s for it
+              // to wake. That wait used to be a bare spinner with no
+              // explanation, which is indistinguishable from a hang — and from
+              // the error that follows if it does eventually give up. The
+              // socket path already says "Starting the game server…"; this uses
+              // the same words so one habit covers both.
+              return _statePanel(
+                icon: Icons.emoji_events_outlined,
+                iconColor: AppColors.gold,
+                spinner: true,
+                lines: const [
+                  'Starting the leaderboard server…',
+                  'A free-tier host sleeps — the first load can take a moment.',
+                ],
+              );
+            }
+            if (snap.hasError) return _error(snap.error!);
+            final data = snap.data!;
+            return ContentColumn(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text(
-                    'Starting the leaderboard server…',
-                    style: TextStyle(color: AppColors.ivoryDark, fontSize: 13),
-                  ),
-                  SizedBox(height: 6),
-                  Text(
-                    'A free-tier host sleeps — the first load can take a moment.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  // The tabs sit outside the rows so switching games is
+                  // instant to tap and the selection survives a reload. They
+                  // are only worth showing once the server has said it can
+                  // split the board; an older server would offer a Snakes tab
+                  // that could only ever come back with the combined list.
+                  if (data.hasPerGameCounts) _tabs(data),
+                  const SizedBox(height: 12),
+                  // The board's identity and its summary stay put while the
+                  // podium scrolls. Scrolling them away left the title half
+                  // clipped under the fixed tabs, which read as a broken
+                  // header rather than as content moving.
+                  _standingsHeader(data),
+                  const SizedBox(height: 14),
+                  Expanded(
+                    child: data.rows.isEmpty
+                        ? _empty(data.games)
+                        : RefreshIndicator(
+                            onRefresh: () async => _reload(),
+                            color: AppColors.gold,
+                            backgroundColor: AppColors.feltLight,
+                            child: ListView(
+                              padding: const EdgeInsets.fromLTRB(
+                                16,
+                                2,
+                                16,
+                                28,
+                              ),
+                              children: [
+                                _champion(data.rows.first),
+                                if (data.rows.length > 1) ...[
+                                  const SizedBox(height: 12),
+                                  _runnersUp(data.rows),
+                                ],
+                                if (data.rows.length > 3) ...[
+                                  const SizedBox(height: 20),
+                                  _restTable(data.rows.sublist(3)),
+                                ],
+                              ],
+                            ),
+                          ),
                   ),
                 ],
               ),
             );
-          }
-          if (snap.hasError) return _error(snap.error!);
-          final data = snap.data!;
-          // A reading-width column, centred. Same reason as the setup screen:
-          // unconstrained, every row stretched the full viewport, so on a wide
-          // desktop the rank sat at one edge and the name at the other with the
-          // numbers floating in the gulf between them. A leaderboard is a
-          // comparison, and a comparison needs its columns close enough to scan
-          // DOWN as a column rather than across a metre of empty felt.
-          return ContentColumn(
-            child: Column(
-            children: [
-              // The tabs sit outside the FutureBuilder so switching games is
-              // instant to tap and the selection survives a reload. They are
-              // only worth showing once the server has said it can split the
-              // board; an older server would offer a Snakes tab that could
-              // only ever come back with the combined list.
-              if (data.hasPerGameCounts) _tabs(data),
-              Expanded(
-                child: data.rows.isEmpty
-                    ? _empty(data.games)
-                    : RefreshIndicator(
-                        onRefresh: () async => _reload(),
-                        child: ListView(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                          children: [
-                            Text(
-                              // Both numbers, because a tab labelled with a
-                              // count invites the reader to compare it against
-                              // the rows underneath — and the two are different
-                              // quantities. "Ludo · 1 game" above two players
-                              // reads as a broken ranking unless the header
-                              // says plainly that one is games and the other is
-                              // players.
-                              '${data.games} '
-                              '${data.games == 1 ? 'game' : 'games'} · '
-                              '${data.rows.length} '
-                              '${data.rows.length == 1 ? 'player' : 'players'}',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                color: AppColors.ivoryDark,
-                                fontSize: 13,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            ..._podium(data.rows),
-                            for (var i = 3; i < data.rows.length; i++)
-                              _row(i + 1, data.rows[i]),
-                          ],
-                        ),
-                      ),
-              ),
-            ],
-          ),
-          );
-        },
+          },
+        ),
       ),
+    );
+  }
+
+  // --------------------------------------------------------------- the top
+
+  /// The page's own title, under the app bar: a trophy in a gold halo, the
+  /// standings line, and the one summary that names both quantities.
+  ///
+  /// A tab labelled with a game count invites the reader to compare it against
+  /// the rows underneath — and the two are different quantities. "Ludo · 1
+  /// game" above two players reads as a broken ranking unless the summary says
+  /// plainly that one is games and the other is players.
+  Widget _standingsHeader(LeaderboardData data) {
+    final games = data.games;
+    final players = data.rows.length;
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.gold.withValues(alpha: 0.12),
+                border: Border.all(
+                  color: AppColors.gold.withValues(alpha: 0.38),
+                ),
+              ),
+              child: const Icon(
+                Icons.emoji_events,
+                size: 23,
+                color: AppColors.gold,
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Flexible: the title and its subtitle are non-flex children of
+            // this Row otherwise, so a narrow phone (or a wide accessibility
+            // font) overflows the page instead of wrapping the subtitle.
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Club standings',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.ivory,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _game == null
+                        ? 'Career results across both games'
+                        : _game == 'ludo'
+                        ? 'Career results at the Ludo table'
+                        : 'Career results on the Snakes board',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.feltLight.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Text(
+            '$games ${games == 1 ? 'game' : 'games'} · '
+            '$players ${players == 1 ? 'player' : 'players'}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.ivoryDark,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   /// Ludo / Snakes & Ladders / All, labelled with each game's finished count
   /// so an empty tab is visibly empty rather than looking broken.
   ///
-  /// Iconless and scrollable on purpose. Three labelled segments with icons
-  /// do not fit a phone's width, and a SegmentedButton that overflows clips
-  /// its last segment — which made the Snakes tab simply absent rather than
-  /// squashed. Losing the icons buys the room, and the horizontal scroll means
-  /// a longer name or a bigger count can never hide a tab again.
+  /// Pills instead of a SegmentedButton: the count makes each label wider than
+  /// three equal segments allow on a phone, and a scrollable row of pills keeps
+  /// every label readable without clipping the last one.
   Widget _tabs(LeaderboardData data) {
-    // The count is labelled "games" because it counts finished games, not the
-    // players listed underneath. A bare number beside a game name reads as a
-    // row count, and the two genuinely differ — 12 games can belong to 9
-    // players — so "All 12" above 9 rows looked like broken ranking rather than
-    // a label that never claimed to be a row count. The header above the list
-    // spells out both quantities so the comparison resolves instead of
-    // looking like a mismatch.
     String label(String g, int n) => '$g · $n ${n == 1 ? 'game' : 'games'}';
+    final tabs = <({String? value, String label})>[
+      (value: 'ludo', label: label('Ludo', data.ludoGames)),
+      (value: 'snakes', label: label('Snakes', data.snakesGames)),
+      // The all-tab total is the combined board's, not the current filtered
+      // response's `games`. The first load is always All, so it is cached
+      // before any filter can hide it.
+      (value: null, label: label('All', _allGames ?? data.games)),
+    ];
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SegmentedButton<String?>(
-          segments: [
-            ButtonSegment<String?>(
-              value: 'ludo',
-              label: Text(label('Ludo', data.ludoGames)),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
+      // Wrap, not a horizontal scroll: three "Game · N games" pills are wider
+      // than a phone, and a scroll view clipped the selected "All" pill at the
+      // right edge — leaving the current tab half readable with no hint that
+      // it could be scrolled. Wrapping keeps every label whole; on a wide
+      // screen all three stay on one centered row.
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (var i = 0; i < tabs.length; i++)
+            _GameTab(
+              label: tabs[i].label,
+              selected: _game == tabs[i].value,
+              onTap: () => _selectGame(tabs[i].value),
             ),
-            ButtonSegment<String?>(
-              value: 'snakes',
-              label: Text(label('Snakes', data.snakesGames)),
-            ),
-            ButtonSegment<String?>(
-              value: null,
-              label: Text(label('All', data.games)),
-            ),
-          ],
-          selected: {_game},
-          onSelectionChanged: (sel) => _selectGame(sel.first),
-        ),
+        ],
       ),
     );
   }
+
+  // ------------------------------------------------------------ the podium
+
+  /// First place: the one card that is allowed to feel like a trophy.
+  Widget _champion(LeaderboardRow r) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF2B5A3C), Color(0xFF193D2A)],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppColors.gold.withValues(alpha: 0.55),
+          width: 1.5,
+        ),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 18, offset: Offset(0, 8)),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // A washed-out trophy behind the name, so the card reads as the
+          // winner's card even before the text is read.
+          Positioned(
+            right: -14,
+            top: -18,
+            child: Icon(
+              Icons.emoji_events,
+              size: 132,
+              color: AppColors.gold.withValues(alpha: 0.055),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.gold.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: AppColors.gold.withValues(alpha: 0.34),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.workspace_premium,
+                            size: 14,
+                            color: AppColors.gold,
+                          ),
+                          SizedBox(width: 5),
+                          Text(
+                            'CHAMPION',
+                            style: TextStyle(
+                              color: AppColors.gold,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
+                    const Text(
+                      '1st',
+                      style: TextStyle(
+                        color: AppColors.gold,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.gold, width: 2),
+                      ),
+                      child: ClipOval(
+                        child: PlayerAvatar(seed: r.seatId, size: 52),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            r.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.ivory,
+                              fontSize: 21,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${r.wins} ${r.wins == 1 ? 'win' : 'wins'} in '
+                            '${r.games} ${r.games == 1 ? 'game' : 'games'}',
+                            style: const TextStyle(
+                              color: Colors.white60,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: Row(
+                    children: [
+                      _StatCell(
+                        value: '${r.wins}',
+                        label: 'WINS',
+                        color: AppColors.gold,
+                      ),
+                      _statDivider(),
+                      _StatCell(value: '${r.games}', label: 'GAMES'),
+                      _statDivider(),
+                      _StatCell(
+                        value: r.avgRank.toStringAsFixed(1),
+                        label: 'AVG RANK',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statDivider() => Container(
+    width: 1,
+    height: 30,
+    color: Colors.white.withValues(alpha: 0.12),
+  );
+
+  /// Second and third beside each other. With only two players the second card
+  /// takes the full width, which reads fine because there is no third to
+  /// compare it with.
+  Widget _runnersUp(List<LeaderboardRow> rows) {
+    const silver = Color(0xFFB7C0C9);
+    const bronze = Color(0xFFC08552);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: _runnerCard(2, rows[1], silver),
+        ),
+        if (rows.length > 2) ...[
+          const SizedBox(width: 12),
+          Expanded(
+            child: _runnerCard(3, rows[2], bronze),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _runnerCard(int place, LeaderboardRow r, Color accent) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.feltLight.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accent.withValues(alpha: 0.42), width: 1.2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: accent.withValues(alpha: 0.16),
+                  border: Border.all(color: accent.withValues(alpha: 0.5)),
+                ),
+                child: Text(
+                  '$place',
+                  style: TextStyle(
+                    color: accent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Icon(
+                Icons.emoji_events,
+                size: 15,
+                color: accent.withValues(alpha: 0.75),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              ClipOval(child: PlayerAvatar(seed: r.seatId, size: 30)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  r.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.ivory,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${r.wins}W · ${r.games}G · avg ${r.avgRank.toStringAsFixed(1)}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: AppColors.ivoryDark, fontSize: 10.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------- the field
+
+  /// The rest of the table: one card, column labels once, a divider between
+  /// players. This is the part that has to fit ten people on a phone, so it
+  /// stays a table rather than becoming ten more cards.
+  Widget _restTable(List<LeaderboardRow> rows) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: AppColors.feltLight.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.format_list_numbered,
+                  size: 15,
+                  color: AppColors.gold,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'THE REST OF THE TABLE',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white60,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${rows.length} ${rows.length == 1 ? 'player' : 'players'}',
+                  style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+                ),
+              ],
+            ),
+          ),
+          _fieldLabels(),
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0)
+              const Divider(
+                height: 1,
+                thickness: 1,
+                color: Colors.white10,
+                indent: 14,
+                endIndent: 14,
+              ),
+            _fieldRow(i + 4, rows[i]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _fieldLabels() => const Padding(
+    padding: EdgeInsets.fromLTRB(14, 0, 14, 6),
+    child: Row(
+      children: [
+        SizedBox(width: 26),
+        SizedBox(width: 8),
+        SizedBox(width: 30),
+        SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'PLAYER',
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 38,
+          child: Text(
+            'W',
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 34,
+          child: Text(
+            'G',
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 54,
+          child: Text(
+            'AVG',
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _fieldRow(int place, LeaderboardRow r) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 26,
+            child: Text(
+              '$place',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white38, fontSize: 12.5),
+            ),
+          ),
+          const SizedBox(width: 8),
+          PlayerAvatar(seed: r.seatId, size: 30),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              r.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.ivory,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 38,
+            child: Text(
+              '${r.wins}W',
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: AppColors.gold,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 34,
+            child: Text(
+              '${r.games}G',
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: AppColors.ivoryDark,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 54,
+            child: Text(
+              'avg ${r.avgRank.toStringAsFixed(1)}',
+              textAlign: TextAlign.right,
+              style: const TextStyle(color: Colors.white54, fontSize: 11.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------- empty / failure
 
   /// The three "no scores" states say different things, and conflating them
   /// sends the player hunting for the wrong culprit: a server that answered
@@ -220,38 +774,16 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
         : 'Could not reach the server at $_serverUrl.\n'
               'It may be a free-tier host waking up — that takes up to half a '
               'minute. Tap refresh to try again.';
-    return ContentColumn(
-      // `Center` alone centres but does not constrain, so the message still
-      // wrapped at the full viewport width and the "could not reach the server"
-      // paragraph became one unreadable 1900px line. Same column as the rows it
-      // replaces, so the empty and error states sit on the same measure as the
-      // leaderboard they stand in for.
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.cloud_off, size: 40, color: AppColors.ivoryDark),
-            const SizedBox(height: 12),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: AppColors.ivory,
-                fontSize: 14,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('Retry'),
-              onPressed: _reload,
-            ),
-          ],
-          ),
-        ),
-      );
+    return _statePanel(
+      icon: Icons.cloud_off,
+      iconColor: AppColors.ivoryDark,
+      lines: [detail],
+      action: OutlinedButton.icon(
+        icon: const Icon(Icons.refresh, size: 18),
+        label: const Text('Retry'),
+        onPressed: _reload,
+      ),
+    );
   }
 
   Widget _empty(int games) {
@@ -262,148 +794,169 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
       'snakes' => 'Snakes & Ladders',
       _ => null,
     };
-    return Center(
+    final board = game ?? 'combined';
+    final count = '$games ${games == 1 ? 'game' : 'games'}';
+    final message = games == 0
+        ? game == null
+              ? 'No games finished yet on this server.\nWin one — make history.'
+              : 'No $game games finished on this server yet.\n'
+                    'Win one — make history.'
+        : 'The $board leaderboard is empty.\n'
+              '$count finished, but nobody has been recorded in it.';
+    return _statePanel(
+      icon: Icons.emoji_events_outlined,
+      iconColor: AppColors.gold,
+      lines: [message],
+    );
+  }
+
+  /// One card for loading, empty and failed states, so those three never look
+  /// like a different app from the standings they stand in for.
+  Widget _statePanel({
+    required IconData icon,
+    required Color iconColor,
+    required List<String> lines,
+    Widget? action,
+    bool spinner = false,
+  }) {
+    return ContentColumn(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Text(
-          games == 0
-              ? game == null
-                    ? 'No games finished yet on this server.\nWin one — make history.'
-                    : 'No $game games finished on this server yet.\n'
-                          'Win one — make history.'
-              : 'The $game leaderboard is empty.'
-                    '${games == 1 ? 'game' : 'games'} finished, but nobody '
-                    'has been recorded in it.',
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: AppColors.ivory,
-            fontSize: 15,
-            height: 1.5,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+          decoration: BoxDecoration(
+            color: AppColors.feltLight.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: iconColor.withValues(alpha: 0.12),
+                  border: Border.all(color: iconColor.withValues(alpha: 0.35)),
+                ),
+                child: spinner
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: CircularProgressIndicator(strokeWidth: 2.5),
+                      )
+                    : Icon(icon, color: iconColor, size: 30),
+              ),
+              const SizedBox(height: 16),
+              for (var i = 0; i < lines.length; i++) ...[
+                if (i > 0) const SizedBox(height: 6),
+                Text(
+                  lines[i],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: i == 0 ? AppColors.ivory : Colors.white54,
+                    fontSize: i == 0 ? 14.5 : 12,
+                    height: 1.5,
+                    fontWeight: i == 0 ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ],
+              if (action != null) ...[
+                const SizedBox(height: 18),
+                action,
+              ],
+            ],
           ),
         ),
       ),
     );
   }
+}
 
-  /// The top three as highlighted cards; absent ranks are skipped.
-  List<Widget> _podium(List<LeaderboardRow> rows) {
-    const medalColors = [
-      Color(0xFFD9A441), // gold
-      Color(0xFF9FA8B0), // silver
-      Color(0xFFA5682A), // bronze
-    ];
-    const medals = ['1st', '2nd', '3rd'];
-    return [
-      for (var i = 0; i < rows.length && i < 3; i++)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Card(
-            color: AppColors.feltLight,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(color: medalColors[i], width: 1.5),
-            ),
+/// One game tab: a 44px pill, gold when chosen and felt when not.
+class _GameTab extends StatelessWidget {
+  const _GameTab({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: Material(
+        color: selected
+            ? AppColors.gold
+            : AppColors.feltLight.withValues(alpha: 0.8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(999),
+          side: BorderSide(
+            color: selected ? AppColors.gold : Colors.white12,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              child: Row(
-                children: [
-                  Icon(Icons.emoji_events, color: medalColors[i], size: 22),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            // Derived from the seat id the leaderboard groups
-                            // by, so the face always belongs to this player.
-                            PlayerAvatar(seed: rows[i].seatId, size: 22),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                rows[i].name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: AppColors.ivory,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        // Same numbers as before, on the name's line. Stacked
-                        // beneath it, the podium was three two-line cards and
-                        // a phone showed no other players at all.
-                        Text(
-                          '  ·  ${rows[i].wins}W  ${rows[i].games}G  '
-                          'avg ${rows[i].avgRank.toStringAsFixed(1)}',
-                          style: const TextStyle(
-                            color: AppColors.ivoryDark,
-                            fontSize: 11.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    medals[i],
-                    style: TextStyle(
-                      color: medalColors[i],
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: selected ? AppColors.ink : AppColors.ivoryDark,
+                  fontSize: 12.5,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
               ),
             ),
           ),
         ),
-    ];
+      ),
+    );
   }
+}
 
-  Widget _row(int place, LeaderboardRow r) {
-    return Padding(
-      // 2px, not 6: the rows are the only reason a ten-player board fits, and
-      // twelve pixels of padding per row is most of a phone screen.
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
+/// One number over its label on the champion card.
+class _StatCell extends StatelessWidget {
+  const _StatCell({
+    required this.value,
+    required this.label,
+    this.color = AppColors.ivory,
+  });
+
+  final String value;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
         children: [
-          SizedBox(
-            width: 30,
-            child: Text(
-              '$place',
-              style: const TextStyle(color: AppColors.ivoryDark, fontSize: 14),
-            ),
-          ),
-          PlayerAvatar(seed: r.seatId, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              r.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.ivory, fontSize: 15),
-            ),
-          ),
           Text(
-            '${r.wins}W',
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
             style: const TextStyle(
-              color: AppColors.gold,
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
+              color: Colors.white54,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.0,
             ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            '${r.games}G',
-            style: const TextStyle(color: AppColors.ivoryDark, fontSize: 13),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            'avg ${r.avgRank.toStringAsFixed(1)}',
-            style: const TextStyle(color: AppColors.ivoryDark, fontSize: 13),
           ),
         ],
       ),

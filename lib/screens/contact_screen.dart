@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/report_client.dart';
 import '../ui/page_app_bar.dart';
+import '../ui/shared/table_alert.dart';
 import '../ui/theme.dart';
 
 /// Contact page: a fuller-screen twin of the report sheet for players who
@@ -42,9 +43,11 @@ class _ContactScreenState extends State<ContactScreen> {
   Future<void> _send() async {
     final message = _message.text.trim();
     if (message.isEmpty) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('Write your message first')));
+      showTableAlert(
+        context,
+        'Write your message first',
+        icon: Icons.edit_note,
+      );
       return;
     }
     setState(() => _sending = true);
@@ -58,28 +61,25 @@ class _ContactScreenState extends State<ContactScreen> {
         contact: _email.text.trim(),
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('Message sent — we will get back to you.'),
-          ),
-        );
+      // On the root overlay, so the confirmation outlives this screen.
+      showTableAlert(
+        context,
+        'Message sent — we will get back to you.',
+        icon: Icons.check_circle_outline,
+      );
       Navigator.of(context).pop();
     } on ReportException catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.toString())));
+      showTableAlert(context, e.toString(), icon: Icons.error_outline);
     } catch (_) {
       if (!mounted) return;
       setState(() => _sending = false);
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Could not reach the server')),
-        );
+      showTableAlert(
+        context,
+        'Could not reach the server',
+        icon: Icons.cloud_off,
+      );
     }
   }
 

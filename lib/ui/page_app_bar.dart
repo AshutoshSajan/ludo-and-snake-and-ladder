@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_providers.dart';
 import 'admin_badge.dart';
+import 'shared/table_alert.dart';
 
 /// The reading-width column every full-screen page is laid out in.
 ///
@@ -27,28 +28,24 @@ class ContentColumn extends StatelessWidget {
   );
 }
 
-/// The toast a page speaks with: floating, and no wider than the reading
-/// column. A copied room code used to stretch a full-bleed stripe across a
-/// desktop window while everything else on the page stayed inside
-/// [kContentMaxWidth] — the one element that ignored rule 11. On a phone
-/// the inset floors at 16px, so the bar reads exactly as before.
+/// The toast a page speaks with.
+///
+/// Historically this was a Material snackbar pinned to the bottom edge, and
+/// the playtest called that out twice: "room code copy is showing plain white
+/// alert at the bottom, i wanted the good popup ui on the top right of the
+/// screen — find all such plain white banners". Every page message now goes
+/// through the table's own gold-rimmed card at the top right, the same family
+/// as the in-game alerts, so there is one spoken surface in the whole app
+/// instead of a second, plainer one on the bottom edge. The function keeps its
+/// old name because its callers read as "say this on the page"; the surface it
+/// speaks on is [showTableAlert].
 void showSnackInColumn(
   BuildContext context,
   String text, {
-  Duration duration = const Duration(seconds: 4),
+  IconData icon = Icons.info_outline,
+  OverlayState? onOverlay,
 }) {
-  final inset = ((MediaQuery.sizeOf(context).width - kContentMaxWidth) / 2)
-      .clamp(16.0, double.infinity);
-  ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        content: Text(text),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.symmetric(horizontal: inset, vertical: 8),
-        duration: duration,
-      ),
-    );
+  showTableAlert(context, text, icon: icon, onOverlay: onOverlay);
 }
 
 /// An AppBar whose leading icon, title and actions sit inside that column.
