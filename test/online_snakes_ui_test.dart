@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/engine/snakes/snakes_engine.dart';
 import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/online_client.dart';
+import 'package:game_club/ui/page_app_bar.dart' show kContentMaxWidth;
 import 'package:game_club/ui/shared/dice_widget.dart';
 import 'package:game_club/ui/snakes/online_snakes_view.dart';
 import 'package:game_club/ui/snakes/snakes_stage.dart';
@@ -850,5 +851,43 @@ void main() {
       expect(find.text('Ana wins!'), findsNothing,
           reason: 'the end screen leaves with the player');
     });
+  });
+
+  testWidgets('the turn card keeps the header reading width on desktop', (
+    tester,
+  ) async {
+    // The online table's turn strip was a full-window card: at 1400px it
+    // spanned more than twice the 720px column the header and board read
+    // at, so the table looked like two unrelated widths.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await connectAndEnterGame(tester);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: OnlineSnakesView(client: client, onLeave: () {}),
+          ),
+        ),
+      ),
+    );
+    channel.serverAdd({
+      'type': 'state',
+      'game': 'snakes',
+      'state': twoPlayerState(currentPlayerId: 'p2').toJson(),
+    });
+    await tester.pump();
+    await tester.pump();
+
+    final hud = tester.getRect(find.byKey(const ValueKey('snakes-turn-hud')));
+    expect(
+      hud.width,
+      closeTo(kContentMaxWidth - 32, 0.5),
+      reason: 'the card sits inside the same 720px column as the header',
+    );
+    expect(hud.center.dx, closeTo(1400 / 2, 0.5));
   });
 }

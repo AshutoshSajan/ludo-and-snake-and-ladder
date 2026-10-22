@@ -890,7 +890,16 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
             clock: widget.onlineClient == null
                 ? null
                 : (p.id == s.currentPlayer.id
-                      ? TurnCountdown(client: widget.onlineClient!)
+                      ? TurnCountdown(
+                          client: widget.onlineClient!,
+                          // Only the seat whose clock this is gets the
+                          // ten-second tone; the others are watching.
+                          onTenSeconds: p.id == widget.onlineClient!.seatId
+                              ? () => ref
+                                    .read(soundServiceProvider)
+                                    .countdown()
+                              : null,
+                        )
                       : null),
           ),
       ],

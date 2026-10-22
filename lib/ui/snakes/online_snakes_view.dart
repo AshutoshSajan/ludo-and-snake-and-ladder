@@ -16,6 +16,7 @@ import '../shared/seat_status_strip.dart';
 import '../shared/table_alert.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
+import 'snakes_seat_lamps.dart';
 import 'snakes_stage.dart';
 import 'snakes_turn_hud.dart';
 import '../shared/sound_toggle_button.dart';
@@ -95,6 +96,17 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
       listen: false,
     ).read(soundServiceProvider).dice();
     Haptics.light();
+  }
+
+  /// The on-turn seat's ten-second warning. Resolved through the same
+  /// container as the dice and chat sounds, so the saved sound toggle
+  /// applies to it like any other effect.
+  void _onCountdownWarn() {
+    if (!mounted) return;
+    ProviderScope.containerOf(
+      context,
+      listen: false,
+    ).read(soundServiceProvider).countdown();
   }
 
   @override
@@ -480,8 +492,26 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
               ),
               // Whose turn and how long are the two things a player looks
               // for, so they sit above the board instead of below it under
-              // the dice (the playtest could not find them there).
-              SnakesTurnHud(client: widget.client, state: s, status: status),
+              // the dice (the playtest could not find them there). Capped to
+              // the reading column like the header: on a desktop window the
+              // turn card used to stretch the full window while the board
+              // below stayed a narrow column, which read as a second,
+              // oversized card rather than part of the table.
+              ContentColumn(
+                child: SnakesTurnHud(
+                  client: widget.client,
+                  state: s,
+                  status: status,
+                  // Only the seat that owes the move hears the ten-second
+                  // warning; everyone else's clock is not their action.
+                  onCountdownWarn: _isMyTurn(s) ? _onCountdownWarn : null,
+                ),
+              ),
+              // Every seat's strike dots, so "who is one miss from being
+              // dropped" reads at a glance the way Ludo's corner lamps do.
+              ContentColumn(
+                child: SnakesSeatLamps(state: s, client: widget.client),
+              ),
               // Voice's speaking state lives on the mic button itself (see the
               // ludo board) — nothing wedged between the seats and the board,
               // so talk never moves the board underneath the players.
