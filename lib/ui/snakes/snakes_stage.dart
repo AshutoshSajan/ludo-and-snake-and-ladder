@@ -17,6 +17,13 @@ import '../theme.dart';
 /// column height and the board meets the 720px page column; a narrow phone,
 /// where the strip costs less than a rail, keeps the strip under the board.
 ///
+/// Second playtest round, on a 781x768 browser window: centring the board
+/// alone let the 96px rail hang left of the page column and left a matching
+/// band of dead felt on the right. The rail, gap and board now centre as ONE
+/// group, so the rail stays inside the reading width and both side margins
+/// are equal. The rail orientation is unchanged; only its horizontal anchor
+/// moved.
+///
 /// Both the offline and online views use this one class. Their home panels,
 /// pawn positions and (offline) ghost all read the same centres, so the two
 /// modes cannot drift apart again.
@@ -97,22 +104,19 @@ class SnakesStageMetrics {
     final Rect boardRect;
     final Rect homeRect;
     if (side) {
-      // Centre the BOARD on the page, not the board-plus-rail: the board is
-      // the thing the header column and the eye are aligned to. The rail
-      // hangs into the margin on its left. On a width-tight window the
-      // stage pushes over just enough to keep the rail on screen.
-      final left = math.max(
-        homeRailWidth + homeRailGap,
-        (width - board) / 2,
+      // Centre the WHOLE GROUP — rail, gap, board — on the page. Centring
+      // the board alone put the rail left of the page column and stranded
+      // an equal band of felt on the right (the 781x768 playtest window).
+      // The group always fits: the side board is capped by
+      // `width - rail - gap`, so both margins are equal and non-negative.
+      final groupLeft = math.max(
+        (width - board - homeRailWidth - homeRailGap) / 2,
+        0.0,
       );
+      final left = groupLeft + homeRailWidth + homeRailGap;
       final top = math.max((height - board) / 2, 0.0);
       boardRect = Rect.fromLTWH(left, top, board, board);
-      homeRect = Rect.fromLTWH(
-        left - homeRailWidth - homeRailGap,
-        top,
-        homeRailWidth,
-        board,
-      );
+      homeRect = Rect.fromLTWH(groupLeft, top, homeRailWidth, board);
     } else {
       final left = math.max((width - board) / 2, 0.0);
       final top = math.max(
@@ -183,9 +187,10 @@ class SnakesStageMetrics {
 
 /// The board and its one home panel in a single coordinate space.
 ///
-/// The board is centred by [SnakesStageMetrics]; the home panel sits beside
-/// it on a roomy window or under it on a narrow one. [overlays] are positioned
-/// by the caller in the same stage coordinates (pawns, and the offline ghost).
+/// The board and its rail are centred as one group by [SnakesStageMetrics];
+/// the home panel sits beside the board on a roomy window or under it on a
+/// narrow one. [overlays] are positioned by the caller in the same stage
+/// coordinates (pawns, and the offline ghost).
 class SnakesStage extends StatelessWidget {
   const SnakesStage({
     super.key,

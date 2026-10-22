@@ -9,6 +9,11 @@
 /// moves the rail to the left when it does, and caps the board at the 720px
 /// reading column. A phone, where a 96px rail would shrink the board, keeps
 /// the strip.
+///
+/// A second playtest (781x768 browser window) found the board alone centred:
+/// the rail hung outside the page column while an equal band of felt sat
+/// unused on the right. The rail, gap and board now centre as one group, so
+/// the two side margins match and the rail stays inside the reading width.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -31,9 +36,11 @@ void main() {
     expect(m.boardSize, greaterThan(716 - SnakesStageMetrics.homeStripH));
     expect(m.boardSize, lessThanOrEqualTo(kContentMaxWidth));
 
-    // The board — not board-plus-rail — is centred on the page, so it lines
-    // up with the header column instead of being pushed right by the rail.
-    expect(m.boardRect.center.dx, closeTo(720, 0.5));
+    // The whole group — rail, gap, board — is centred on the page, so the
+    // rail sits inside the reading width instead of hanging into the left
+    // margin while the right side carries dead felt.
+    expect((m.homeRect.left + m.boardRect.right) / 2, closeTo(720, 0.5));
+    expect(m.homeRect.left, closeTo(1440 - m.boardRect.right, 0.5));
     expect(m.homeRect.right, lessThanOrEqualTo(m.boardRect.left));
     expect(m.homeRect.top, closeTo(m.boardRect.top, 0.5));
     expect(m.homeRect.height, closeTo(m.boardRect.height, 0.5));
@@ -47,7 +54,31 @@ void main() {
 
     expect(m.homeOnLeft, isTrue, reason: 'equal boards prefer the rail');
     expect(m.boardSize, closeTo(kContentMaxWidth, 0.5));
-    expect(m.boardRect.center.dx, closeTo(960, 0.5));
+    // The cap binds, so the group is narrower than the window and centres
+    // as a unit — the board is off-centre by exactly half the rail+gap.
+    expect((m.homeRect.left + m.boardRect.right) / 2, closeTo(960, 0.5));
+    expect(m.homeRect.left, closeTo(1920 - m.boardRect.right, 0.5));
+  });
+
+  test('a height-limited width centres rail and board together', () {
+    // The reported playtest window (781 wide). The board takes the full
+    // available height, leaving a width-limited side branch: the rail used
+    // to touch x=0 while 75px of dead felt sat on the right. Now both side
+    // margins match and the board stays the largest square that fits.
+    final m = SnakesStageMetrics.layout(
+      available: const Size(781, 600),
+      players: 4,
+    );
+
+    expect(m.homeOnLeft, isTrue);
+    expect(m.boardSize, closeTo(600, 0.5));
+    expect(m.homeRect.left, greaterThan(0));
+    expect(
+      m.homeRect.left,
+      closeTo(m.available.width - m.boardRect.right, 0.6),
+      reason: 'the rail margin and the right margin must be symmetric',
+    );
+    expect(m.homeRect.right, lessThanOrEqualTo(m.boardRect.left));
   });
 
   test('a phone keeps the strip, because the rail would shrink the board', () {
