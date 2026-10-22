@@ -119,15 +119,6 @@ jobs:
             echo "::notice::OPENCODE_API_KEY is not configured; questions will fail, but /opencode resolve still works."
           fi
 
-      - name: Check out pull request head
-        if: steps.gate.outputs.configured == 'true'
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ steps.pr.outputs.head_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: workspace
-
       # Same pinned tarball as the review workflow. A command that needs the
       # model pays this install; a resolve does too, which is a few seconds of
       # a runner rather than a second code path.
