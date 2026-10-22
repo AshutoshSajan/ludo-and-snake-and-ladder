@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../engine/core/player_profiles.dart';
 import '../providers/app_providers.dart';
 import '../ui/admin_badge.dart';
@@ -126,20 +128,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         key: const ValueKey('tour-online'),
                         icon: const Icon(Icons.wifi, size: 18),
                         label: const Text('Play Online'),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const OnlineLobbyScreen(),
-                          ),
+                        onPressed: () => pushAppScreen<void>(
+                          context,
+                          name: AppRoutes.online,
+                          builder: (_) => const OnlineLobbyScreen(),
                         ),
                       ),
                     ),
                     const SizedBox(width: 10),
                     IconButton.outlined(
                       key: const ValueKey('tour-friends'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const FriendsScreen(),
-                        ),
+                      onPressed: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.friends,
+                        builder: (_) => const FriendsScreen(),
                       ),
                       icon: const Icon(Icons.group_outlined),
                       tooltip: 'Friends',
@@ -147,10 +149,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     const SizedBox(width: 10),
                     IconButton.outlined(
                       key: const ValueKey('tour-leaderboard'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const ScoreboardScreen(),
-                        ),
+                      onPressed: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.leaderboard,
+                        builder: (_) => const ScoreboardScreen(),
                       ),
                       icon: const Icon(Icons.emoji_events),
                       tooltip: 'Leaderboard',
@@ -158,10 +160,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     const SizedBox(width: 10),
                     IconButton.outlined(
                       key: const ValueKey('tour-settings'),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const SettingsScreen(),
-                        ),
+                      onPressed: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.settings,
+                        builder: (_) => const SettingsScreen(),
                       ),
                       icon: const Icon(Icons.settings_outlined),
                       tooltip: 'Settings',
@@ -177,8 +179,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   void _openSetup(BuildContext context, GameKind game) {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => SetupScreen(game: game)));
+    pushAppScreen<void>(
+      context,
+      name: game == GameKind.ludo ? AppRoutes.playLudo : AppRoutes.playSnakes,
+      builder: (_) => SetupScreen(game: game),
+    );
   }
 }
 

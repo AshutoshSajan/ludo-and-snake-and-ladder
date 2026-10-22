@@ -1,0 +1,227 @@
+name: OpenCode review
+
+# Advisory, read-only review for pull requests into the integration branch and
+# the release branch. The model never approves, requests changes, or merges; a
+# human owns the merge.
+#
+# Two jobs deliberately:
+#   * `review` only needs `contents: read` and never receives a GitHub token in
+#     the model process.
+#   * `publish` is the only job with `pull-requests: write` / `issues: write`,
+#     and it runs trusted code from the BASE commit, never from the PR head.
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+# A new push supersedes the review of the old commit. The publisher re-checks
+# the PR head before posting, so a run that was already downloading cannot
+# attach a review to a commit that has moved on.
+concurrency:
+  group: opencode-review-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Drafts are work in progress; forks do not get secrets; a bot-authored PR
+    # (Dependabot) does not need a model review.
+    if: >
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.sender.type != 'Bot'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      configured: ${{ steps.gate.outputs.configured }}
+      model: ${{ steps.gate.outputs.model }}
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # The diff is `base...head`; a shallow clone silently loses the merge
+          # base. The model also needs to read nearby files, so a real checkout
+          # is the point.
+          fetch-depth: 0
+          persist-credentials: false
+          path: workspace
+
+      - name: Check out trusted base scripts
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: .github/opencode
+          persist-credentials: false
+          path: trusted
+
+      - name: Check configuration
+        id: gate
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: |
+          set -euo pipefail
+          model="${OPENCODE_MODEL:-opencode/deepseek-v4.1-flash}"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            echo "::notice::OPENCODE_API_KEY is not configured; skipping the OpenCode review."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The workflow starts on the PR that introduces it only after the
+          # merge puts these files on the target branch. Until then a PR does
+          # not fail: it gets a notice and no review.
+          for file in \
+            trusted/.github/opencode/reviewer-agent.json \
+            trusted/.github/opencode/review-prompt.md \
+            trusted/.github/opencode/prepare_review.py \
+            trusted/.github/opencode/publish_review.py; do
+            if [ ! -f "$file" ]; then
+              echo "::notice::The base commit does not contain $file yet; skipping. Reviews start once this change is on the target branch."
+              echo "configured=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare review context
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 trusted/.github/opencode/prepare_review.py \
+            --workspace workspace \
+            --output-dir "$RUNNER_TEMP/artifact" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --repo "$REPO"
+
+      # Pinned release + sha256, the same mold as the osv-scanner and git-cliff
+      # installs. The tarball is the platform binary, not an npm install: CI
+      # needs one executable, not a node_modules tree.
+      - name: Install OpenCode (pinned)
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          OPENCODE_VERSION: 2.1.2
+          OPENCODE_SHA256: 2e1c665f5e82e531732329f2a3106672873477506e378b17d30eeabd31d139b3
+        run: |
+          set -euo pipefail
+          url="https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-${OPENCODE_VERSION}.tgz"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/opencode.tgz"
+          echo "${OPENCODE_SHA256}  $RUNNER_TEMP/opencode.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/opencode-bin"
+          tar -xzf "$RUNNER_TEMP/opencode.tgz" -C "$RUNNER_TEMP/opencode-bin"
+          install -m 0755 "$RUNNER_TEMP/opencode-bin/package/bin/opencode" \
+            "$RUNNER_TEMP/opencode-bin/opencode"
+          echo "$RUNNER_TEMP/opencode-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opencode-bin/opencode" --version
+
+      - name: Run OpenCode
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          MODEL: ${{ steps.gate.outputs.model }}
+          ARTIFACT_DIR: ${{ runner.temp }}/artifact
+          CONFIG: ${{ github.workspace }}/trusted/.github/opencode/reviewer-agent.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR" "$RUNNER_TEMP/opencode-home"
+          prompt="Review the attached pull request context. Return only the contracted <opencode_review> JSON block."
+
+          # env -i: the model process gets no GITHUB_TOKEN, no Actions metadata,
+          # and no repository secrets other than its own provider key. The
+          # trusted config disables project config, so a PR cannot add an
+          # opencode.json or .opencode/agent that widens these permissions.
+          set +e
+          env -i \
+            PATH="$PATH" \
+            HOME="$RUNNER_TEMP/opencode-home" \
+            CI=true \
+            OPENCODE_API_KEY="$OPENCODE_API_KEY" \
+            OPENCODE_CONFIG="$CONFIG" \
+            OPENCODE_DISABLE_PROJECT_CONFIG=1 \
+            OPENCODE_DISABLE_AUTOUPDATE=1 \
+            OPENCODE_DISABLE_TELEMETRY=1 \
+            opencode run --standalone --agent reviewer -m "$MODEL" \
+              --file "$ARTIFACT_DIR/context.md" "$prompt" \
+              > "$ARTIFACT_DIR/review-output.txt" \
+              2> "$ARTIFACT_DIR/review-stderr.txt"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::OpenCode exited with status $status; the publisher will post a parse-failure notice instead of a review."
+            head -c 4000 "$ARTIFACT_DIR/review-stderr.txt" >&2 || true
+          fi
+          # The publisher owns the public error message. A model failure is not
+          # a repository failure, so this job stays green and the artifact is
+          # uploaded for the next job.
+          exit 0
+
+      - name: Upload review artifact
+        if: always() && steps.gate.outputs.configured == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-review
+          path: ${{ runner.temp }}/artifact
+          if-no-files-found: warn
+          retention-days: 3
+
+  publish:
+    needs: review
+    if: always() && needs.review.outputs.configured == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      # Base commit, not PR head: a pull request must not be able to rewrite
+      # the code that decides which comments are posted.
+      - name: Check out trusted publisher
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: .github/opencode
+          persist-credentials: false
+          path: trusted
+
+      - name: Download review artifact
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: opencode-review
+          path: artifact
+
+      - name: Publish review
+        if: steps.download.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MODEL: ${{ needs.review.outputs.model }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 trusted/.github/opencode/publish_review.py \
+            --artifact-dir artifact \
+            --pr "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA" \
+            --model "$MODEL" \
+            --repo "$REPO" \
+            --run-url "$RUN_URL"
+
+      - name: Note the missing artifact
+        if: steps.download.outcome != 'success'
+        run: |
+          echo "::notice::The review artifact is missing; nothing was published."

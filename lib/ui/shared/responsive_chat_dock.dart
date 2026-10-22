@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../app_router.dart';
+import '../../app_routes.dart';
 import '../../screens/friends_screen.dart';
 import '../../services/friend_client.dart';
 import '../../services/note_recorder.dart';
@@ -156,8 +158,11 @@ class _TableChatPanelState extends State<TableChatPanel> {
   }
 
   void _openFriends() {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const FriendsScreen()));
+    pushAppScreen<void>(
+      context,
+      name: AppRoutes.friends,
+      builder: (_) => const FriendsScreen(),
+    );
   }
 
   void _send() {

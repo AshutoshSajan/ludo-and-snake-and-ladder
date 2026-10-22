@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_router.dart';
+import '../../app_routes.dart';
 import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
 import '../../ui/theme.dart';
@@ -183,10 +185,10 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
             serverUrl: _serverCtrl.text.trim(),
           ),
         );
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => AdminDashboardScreen(client: client),
-      ),
+    replaceAppScreen<void>(
+      context,
+      name: AppRoutes.adminDashboard,
+      builder: (_) => AdminDashboardScreen(client: client),
     );
   }
 

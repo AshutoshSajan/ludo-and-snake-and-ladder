@@ -35,6 +35,8 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../services/friend_client.dart';
 import '../services/online_client.dart';
 import '../services/server_url.dart';
@@ -179,12 +181,12 @@ class InviteWatcher {
         );
         continue;
       }
-      await Navigator.of(next).push(
-        MaterialPageRoute(
-          builder: (_) =>
-              OnlineLobbyScreen(startup: OnlineStartup(joinCode: code)),
-        ),
-      );
+      await pushAppScreen<void>(
+        next,
+        name: AppRoutes.join(code),
+        builder: (_) =>
+            OnlineLobbyScreen(startup: OnlineStartup(joinCode: code)),
+      ).popped;
     }
   }
 

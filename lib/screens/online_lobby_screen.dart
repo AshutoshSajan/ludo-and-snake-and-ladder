@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
+import '../app_router.dart';
+import '../app_routes.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/shared/player_actions_sheet.dart';
 import '../ui/shared/responsive_chat_dock.dart';
@@ -11,12 +13,39 @@ import '../ui/shared/voice_button.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../services/friend_client.dart';
+import '../services/join_link.dart';
 import '../services/online_client.dart';
+import '../services/share_link.dart';
 import '../services/storage_service.dart';
 import '../ui/ludo/ludo_view.dart';
 import '../ui/snakes/online_snakes_view.dart';
 import 'friends_screen.dart';
 import '../ui/theme.dart';
+
+/// Builds the client a connect or invite handoff uses. Production leaves
+/// [OnlineLobbyScreen.clientBuilder] null and this default is a real socket;
+/// tests inject a fake-channel factory so an auto-join never dials out.
+typedef OnlineClientBuilder = OnlineClient Function({
+  required String serverUrl,
+  required String seatId,
+  required String name,
+  required String gameType,
+  required int capacity,
+});
+
+OnlineClient _defaultClient({
+  required String serverUrl,
+  required String seatId,
+  required String name,
+  required String gameType,
+  required int capacity,
+}) => OnlineClient(
+  serverUrl,
+  seatId: seatId,
+  name: name,
+  gameType: gameType,
+  capacity: capacity,
+);
 
 /// Online lobby: connect to an authoritative Ludo server, create or join a
 /// room, and jump into the game once the host starts it.
@@ -24,14 +53,18 @@ import '../ui/theme.dart';
 /// The server owns the rules and the dice; this screen only renders what the
 /// server reports (`OnlineClient`) and forwards the player's intents.
 class OnlineLobbyScreen extends StatefulWidget {
-  const OnlineLobbyScreen({super.key, this.startup});
+  const OnlineLobbyScreen({super.key, this.startup, this.clientBuilder});
 
-  /// Optional entry handoff from the friends feature: the inviter walks
-  /// in with a live [OnlineStartup.adoptedClient] (their room already
-  /// exists, the invite carries its code), the invitee walks in with a
-  /// [OnlineStartup.joinCode] and auto-joins. Null stays the plain
-  /// connect form.
+  /// Optional entry handoff from the friends feature or a `/join/<code>`
+  /// URL: the inviter walks in with a live [OnlineStartup.adoptedClient]
+  /// (their room already exists, the invite carries its code), the invitee
+  /// walks in with a [OnlineStartup.joinCode] and auto-joins. Null stays the
+  /// plain connect form.
   final OnlineStartup? startup;
+
+  /// Test seam for the client the lobby dials, so a widget test can join
+  /// with a fake channel instead of a real server. Null in production.
+  final OnlineClientBuilder? clientBuilder;
 
   /// The server the online screens target by default. Precedence:
   /// 1. `--dart-define=GAME_SERVER_URL=wss://host/ws` (build-time override,
@@ -89,7 +122,7 @@ class OnlineLobbyScreen extends StatefulWidget {
 /// already opened a room (the inviter, whose invite referenced that
 /// room's code) or a room code to join (the invitee).
 class OnlineStartup {
-  const OnlineStartup({this.joinCode, this.adoptedClient});
+  const OnlineStartup({this.joinCode, this.adoptedClient, this.watch = false});
 
   /// The invitee path: join this room the moment identity is restored.
   final String? joinCode;
@@ -97,6 +130,10 @@ class OnlineStartup {
   /// The inviter path: this client is already connected (or connecting)
   /// to a room; the lobby adopts it instead of showing the connect form.
   final OnlineClient? adoptedClient;
+
+  /// The `/join/<code>?watch=1` path: open the room as a spectator rather
+  /// than taking a seat.
+  final bool watch;
 }
 
 class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
@@ -109,6 +146,16 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   OnlineClient? _client;
   bool _spectate = false; // "Watch" instead of "Join" in the connect form
+
+  /// The room code that arrived with an invite, held while a first-time
+  /// player chooses a display name. The code stays in the room-code field
+  /// too, so the ordinary Join path works if they dismiss the invite card.
+  String? _inviteCode;
+
+  /// A first-time invitee has no saved name yet: show the invite card and
+  /// wait for a name instead of joining anonymously under the generated
+  /// default. A player with a saved name skips straight into the room.
+  bool _inviteNeedsName = false;
 
   /// Pending friend requests, polled so the app bar's friends doorway can
   /// wear a badge while the table sits waiting. One client per screen;
@@ -216,26 +263,46 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final id = await storage.loadOnlinePlayerId();
     final name = await storage.loadOnlineName();
     if (!mounted) return;
+    final hadStoredName = name.isNotEmpty;
     // A first-time player is given a name rather than an empty field, and it
     // is derived from their id so it is stable: the same player is always the
     // same "Swift Otter", rather than a new name each visit filling the
     // leaderboard with rows of the same person.
-    final resolved = name.isNotEmpty ? name : _defaultNameFor(id);
+    final resolved = hadStoredName ? name : _defaultNameFor(id);
     setState(() {
       _seatId = id;
       _nameCtrl.text = resolved;
       _name = resolved;
     });
-    if (name.isEmpty) {
-      // Persist it now, so it is the same name next time even before they play.
-      await StorageService().saveOnlineName(resolved);
-    }
-    // The invitee's handoff: with identity in hand, join the invited room
-    // straight away — the code came from the accepted invite.
+
     final joinCode = widget.startup?.joinCode;
-    if (!mounted || joinCode == null) return;
-    _codeCtrl.text = joinCode;
-    _connect(createRoom: false, codeOverride: joinCode);
+    final watch = widget.startup?.watch ?? false;
+    if (joinCode == null) {
+      if (!hadStoredName) {
+        // Plain first visit: persist the generated name now, so it is the
+        // same name next time even before they play.
+        await StorageService().saveOnlineName(resolved);
+      }
+      return;
+    }
+
+    final code = normalizeJoinCode(joinCode);
+    _codeCtrl.text = code;
+    if (!hadStoredName) {
+      // A first-time invitee picks their own name: keep the code prefilled
+      // and show the invite card instead of joining under a name they never
+      // chose. The dedicated button on the card joins once they are ready.
+      setState(() {
+        _inviteCode = code;
+        _inviteNeedsName = true;
+        _spectate = watch;
+      });
+      return;
+    }
+    // A returning player stands on their saved identity, so the invite
+    // needs no tap: join the room the link named.
+    setState(() => _spectate = watch);
+    _connect(createRoom: false, codeOverride: code);
   }
 
   /// A stable default name for [id], mixed from the id itself so it is
@@ -356,7 +423,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       _showSnack('Pick a display name first');
       return;
     }
-    final code = codeOverride ?? _codeCtrl.text.trim();
+    final code = normalizeJoinCode(codeOverride ?? _codeCtrl.text);
     if (!createRoom && code.length != 4) {
       _showSnack(
         _spectate ? 'Enter a room code to watch' : 'Room codes are 4 letters',
@@ -366,8 +433,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     // Remembered on connect, so the next visit offers the same name instead of
     // asking for it again.
     _rememberName(name);
-    final client = OnlineClient(
-      OnlineLobbyScreen.defaultServerUrl(),
+    final build = widget.clientBuilder ?? _defaultClient;
+    final client = build(
+      serverUrl: OnlineLobbyScreen.defaultServerUrl(),
       seatId: _seatId,
       name: name,
       gameType: _gameType,
@@ -376,7 +444,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       // on the first lobby feed.
       capacity: createRoom ? _players : 4,
     )..addListener(() => setState(() {}));
-    setState(() => _client = client);
+    setState(() {
+      _inviteNeedsName = false;
+      _client = client;
+    });
     client.connect(
       code: createRoom ? null : code,
       spectate: !createRoom && _spectate,
@@ -461,11 +532,11 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                         ? 'Friends ($_incomingRequests request${_incomingRequests == 1 ? '' : 's'} waiting)'
                         : 'Friends',
                     onPressed: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const FriendsScreen(),
-                        ),
-                      );
+                      await pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.friends,
+                        builder: (_) => const FriendsScreen(),
+                      ).popped;
                       // The tray may have changed inside; refresh now
                       // rather than waiting out the next tick.
                       if (mounted) await _pollTrays();
@@ -570,10 +641,15 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           ),
         ),
         const SizedBox(height: 24),
+        if (_inviteNeedsName && _inviteCode != null) ...[
+          _inviteCard(_inviteCode!),
+          const SizedBox(height: 16),
+        ],
         _field(
           _nameCtrl,
           'Your name',
           _name.isEmpty ? 'e.g. Asha' : 'saved \u2014 tap to change',
+          fieldKey: const Key('online-name-field'),
         ),
         // The id is shown rather than hidden: it is what the leaderboard
         // records, so a player can see which identity their wins belong to.
@@ -676,6 +752,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
           children: [
             Expanded(
               child: TextField(
+                key: const Key('room-code-field'),
                 controller: _codeCtrl,
                 textCapitalization: TextCapitalization.characters,
                 maxLength: 4,
@@ -743,8 +820,63 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     borderRadius: BorderRadius.circular(10),
   );
 
-  Widget _field(TextEditingController ctrl, String label, String hint) {
+  /// The first-time invitee's landing: the room code is already in the
+  /// field below, and this card names whose table it is and gives the one
+  /// tap that joins. The name field below it is prefilled with the stable
+  /// default name; the card waits so a player can choose their own first
+  /// (and so the `Join` button next to the code still works on its own).
+  Widget _inviteCard(String code) {
+    return Card(
+      key: const Key('invite-card'),
+      color: AppColors.feltLight,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              _spectate
+                  ? "You're invited to watch room $code"
+                  : "You're invited to room $code",
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.gold,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _spectate
+                  ? 'Choose a name, then watch the table.'
+                  : 'Choose a name, then join your friend at the table.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.ivory.withAlpha(170),
+                fontSize: 12.5,
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              key: const Key('join-invited-room'),
+              icon: const Icon(Icons.login),
+              label: Text('Join room $code'),
+              onPressed: () => _connect(createRoom: false, codeOverride: code),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _field(
+    TextEditingController ctrl,
+    String label,
+    String hint, {
+    Key? fieldKey,
+  }) {
     return TextField(
+      key: fieldKey,
       controller: ctrl,
       style: const TextStyle(color: AppColors.ivory),
       decoration: InputDecoration(
@@ -1102,34 +1234,97 @@ class SeatFriendControl extends StatelessWidget {
 /// could not share the code at all. The button copies through the clipboard
 /// channel, which browsers honour for a user tap.
 class RoomCodeCard extends StatelessWidget {
-  const RoomCodeCard({super.key, required this.code});
+  const RoomCodeCard({super.key, required this.code, this.base});
 
   /// The room's code, or null while the server has not confirmed a room yet.
   final String? code;
 
-  Future<void> _copy(BuildContext context) async {
-    final value = code;
+  /// The page URI the join link resolves from. Defaults to [Uri.base] (the
+  /// running page); tests inject a stable origin.
+  final Uri? base;
+
+  /// Canonical uppercase spelling: the server keys rooms by it and the load
+  /// balancer hashes it, so a lowercase display must never be copied.
+  String? get _value => code == null ? null : normalizeJoinCode(code!);
+
+  String? get _link {
+    final value = _value;
+    if (value == null) return null;
+    // Only a page served over http(s) can service `/join/<code>`: a native
+    // build has no origin, and a packaged add-on page lives under an
+    // extension scheme where the path means nothing. `base` is the test
+    // seam that bypasses the live-page check.
+    if (base == null) {
+      if (!kIsWeb) return null;
+      final scheme = Uri.base.scheme;
+      if (scheme != 'http' && scheme != 'https') return null;
+    }
+    return joinLinkFor(value, base: base);
+  }
+
+  Future<void> _copyCode(BuildContext context) async {
+    final value = _value;
     if (value == null) return;
+    await _copy(
+      context,
+      value: value,
+      done: '$value copied — send it to your friends',
+      failed: 'Could not copy — please select the code by hand',
+    );
+  }
+
+  Future<void> _copyLink(BuildContext context) async {
+    final link = _link;
+    if (link == null) return;
+    await _copy(
+      context,
+      value: link,
+      done: 'Join link copied — send it to your friends',
+      failed: 'Could not copy the link — select it and copy by hand',
+    );
+  }
+
+  /// Opens the operating system's share sheet where the browser has one.
+  /// Every other case — no Web Share API, an insecure origin, the player
+  /// dismissing the sheet — falls back to the copy path, so the button is
+  /// never a dead end.
+  Future<void> _share(BuildContext context) async {
+    final link = _link;
+    if (link == null) return;
+    final shared = await shareJoinLink(link);
+    if (!context.mounted) return;
+    if (shared) {
+      showSnackInColumn(context, 'Join link shared', icon: Icons.ios_share);
+      return;
+    }
+    await _copyLink(context);
+  }
+
+  Future<void> _copy(
+    BuildContext context, {
+    required String value,
+    required String done,
+    required String failed,
+  }) async {
     try {
       await Clipboard.setData(ClipboardData(text: value));
     } catch (_) {
       // Clipboard write can be denied (insecure origin, old browser). The
-      // code is still selectable by hand — say so instead of failing silent.
+      // value is still selectable by hand — say so instead of failing silent.
       if (context.mounted) {
-        showSnackInColumn(
-          context,
-          'Could not copy — please select the code by hand',
-        );
+        showSnackInColumn(context, failed, icon: Icons.error_outline);
       }
       return;
     }
     if (context.mounted) {
-      showSnackInColumn(context, '$value copied — send it to your friends');
+      showSnackInColumn(context, done, icon: Icons.check_circle_outline);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final value = _value;
+    final link = _link;
     return Card(
       color: AppColors.feltLight,
       child: Padding(
@@ -1142,11 +1337,12 @@ class RoomCodeCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   SelectableText(
-                    code ?? '····',
+                    value ?? '····',
                     style: const TextStyle(
                       color: AppColors.gold,
                       fontSize: 34,
@@ -1158,8 +1354,14 @@ class RoomCodeCard extends StatelessWidget {
                   IconButton(
                     icon: const Icon(Icons.copy, color: AppColors.gold),
                     tooltip: 'Copy room code',
-                    onPressed: code == null ? null : () => _copy(context),
+                    onPressed: value == null ? null : () => _copyCode(context),
                   ),
+                  if (link != null)
+                    IconButton(
+                      icon: const Icon(Icons.ios_share, color: AppColors.gold),
+                      tooltip: 'Share join link',
+                      onPressed: () => _share(context),
+                    ),
                 ],
               ),
             ),
@@ -1171,6 +1373,24 @@ class RoomCodeCard extends StatelessWidget {
                 fontSize: 12,
               ),
             ),
+            if (link != null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const Key('copy-join-link'),
+                icon: const Icon(Icons.link, size: 18),
+                label: const Text('Copy join link'),
+                onPressed: () => _copyLink(context),
+              ),
+              const SizedBox(height: 6),
+              SelectableText(
+                link,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.ivory.withAlpha(150),
+                  fontSize: 11.5,
+                ),
+              ),
+            ],
           ],
         ),
       ),
