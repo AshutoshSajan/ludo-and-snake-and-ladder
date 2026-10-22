@@ -74,6 +74,7 @@ import 'package:game_club/server/media.dart';
 import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
 import 'package:game_club/server/web_cache.dart';
+import 'package:game_club/server/turso_friend_store.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
 import 'package:http/http.dart' as http;
 import 'package:sqlite3/sqlite3.dart';
@@ -537,7 +538,8 @@ void _lobby(Room room) {
 /// wrong, or whose database is still waking up, is serving games perfectly
 /// well, and calling it unhealthy makes the platform recycle an instance that
 /// needed no recycling. So a store failure is reported *as data* — the `store`
-/// field plus a `storeError` — instead of failing the probe.
+/// field plus a `storeError` — instead of failing the probe. The friends
+/// store reports the same way (`friendsStore` / `friendsError`).
 Future<shelf.Response> healthHandler(shelf.Request req) async {
   Object? storeError;
   int? games;
@@ -546,13 +548,21 @@ Future<shelf.Response> healthHandler(shelf.Request req) async {
   } catch (e) {
     storeError = e;
   }
+  Object? friendsError;
+  try {
+    await friendStore.profile('');
+  } catch (e) {
+    friendsError = e;
+  }
   return shelf.Response.ok(
     jsonEncode({
       'ok': true,
       'rooms': authority.rooms.length,
       'games': games,
       'store': leaderboardBackend,
+      'friendsStore': friendsBackend,
       if (storeError != null) 'storeError': '$storeError',
+      if (friendsError != null) 'friendsError': '$friendsError',
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -568,6 +578,15 @@ String get leaderboardBackend {
   final store = leaderboardStore;
   if (store is TursoLeaderboardStore) return 'turso';
   if (store is SqliteLeaderboardStore) return 'sqlite';
+  return store.runtimeType.toString();
+}
+
+/// Which friends backend this instance writes to — the same "silent reset vs
+/// hard failure" distinction as [leaderboardBackend], one store over.
+String get friendsBackend {
+  final store = friendStore;
+  if (store is TursoFriendStore) return 'turso';
+  if (store is SqliteFriendStore) return 'sqlite';
   return store.runtimeType.toString();
 }
 
@@ -664,6 +683,8 @@ Future<shelf.Response> statsHandler(shelf.Request req) async {
       'connections': _openConnections.length,
       'rooms': authority.rooms.length,
       'spectators': spectators,
+      'leaderboardBackend': leaderboardBackend,
+      'friendsBackend': friendsBackend,
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -852,8 +873,9 @@ void resetFeedbackAttempts() {
 // ----------------------------------------------------------------------------
 
 /// Durable friends state. Tests swap in an in-memory store; main() points
-/// it at the same shared SQLite connection as admin history and feedback.
-FriendStore friendStore = FriendStore.inMemory();
+/// it at Turso when configured, otherwise the same shared SQLite connection
+/// as admin history and feedback.
+FriendStore friendStore = SqliteFriendStore.inMemory();
 
 final _friendActionsBurst = <String, List<int>>{};
 final _friendActionsDaily = <String, List<int>>{};
@@ -978,9 +1000,18 @@ Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
         .recordPresence(seatId: profile.seatId, name: profile.name)
         .catchError((Object _) {}),
   );
+  final friendEntries = await friendStore.friends(seatId);
+  final incoming = await friendStore.incoming(seatId);
+  final outgoing = await friendStore.outgoing(seatId);
+  final blocked = await friendStore.blocks(seatId);
+  // Every friend's read marker in one read: a state poll must not fan out
+  // one remote round trip per friend (the ceiling is 200 friends).
+  final latest = friendEntries.isEmpty
+      ? const <String, int>{}
+      : await friendStore.latestMessageIds(seatId);
   final friends = [
-    for (final f in await friendStore.friends(seatId))
-      {...f.toJson(), 'latest': friendStore.latestMessageId(seatId, f.seatId)},
+    for (final f in friendEntries)
+      {...f.toJson(), 'latest': latest[f.seatId] ?? 0},
   ];
   // Table discovery: everyone seated in the rooms this caller is sitting
   // in right now, minus the people a relationship lane already covers
@@ -991,23 +1022,19 @@ Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
   // reflect the room the caller can actually see.
   final covered = <String>{
     for (final f in friends) f['seatId'] as String,
-    for (final r in await friendStore.incoming(seatId)) r.fromSeat,
-    for (final r in await friendStore.outgoing(seatId)) r.toSeat,
-    for (final b in await friendStore.blocks(seatId)) b.blocked,
+    for (final r in incoming) r.fromSeat,
+    for (final r in outgoing) r.toSeat,
+    for (final b in blocked) b.blocked,
   };
   return _friendJson({
     'ok': true,
     'me': profile.toJson(),
     'friends': friends,
     'table': tableRowsFor(seatId, covered),
-    'incoming': [
-      for (final r in await friendStore.incoming(seatId)) r.toJson(),
-    ],
-    'outgoing': [
-      for (final r in await friendStore.outgoing(seatId)) r.toJson(),
-    ],
+    'incoming': [for (final r in incoming) r.toJson()],
+    'outgoing': [for (final r in outgoing) r.toJson()],
     'invites': [for (final i in await friendStore.invites(seatId)) i.toJson()],
-    'blocked': [for (final b in await friendStore.blocks(seatId)) b.toJson()],
+    'blocked': [for (final b in blocked) b.toJson()],
     'time': DateTime.now().millisecondsSinceEpoch,
   });
 }
@@ -1021,7 +1048,7 @@ Future<shelf.Response> friendsLookupHandler(shelf.Request req) async {
     return _friendBadRequest('POST only', code: 405);
   }
   final body = await _readJsonBody(req);
-  final target = friendStore.resolveTarget(
+  final target = await friendStore.resolveTarget(
     (body['target'] as String? ?? '').trim(),
   );
   if (target == null) {
@@ -1122,7 +1149,7 @@ Future<shelf.Response> friendsRemoveHandler(shelf.Request req) async {
   }
   final acting = await _friendBanned(seatId);
   if (acting != null) return acting;
-  if (!friendStore.areFriends(seatId, target)) {
+  if (!await friendStore.areFriends(seatId, target)) {
     return _friendBadRequest('not friends', code: 404);
   }
   await friendStore.remove(seatId, target);
@@ -1198,7 +1225,10 @@ Future<shelf.Response> friendsReportHandler(shelf.Request req) async {
     return _friendBadRequest('seatId and target required');
   }
   if (await _friendBanned(seatId) case final banned?) return banned;
-  final name = reportStoreLookupName(target, body['name'] as String? ?? '');
+  final name = await reportStoreLookupName(
+    target,
+    body['name'] as String? ?? '',
+  );
   try {
     final entry = await reportStore.create(
       category: 'player',
@@ -1220,8 +1250,8 @@ Future<shelf.Response> friendsReportHandler(shelf.Request req) async {
 
 /// The display name for a reported player: prefer the profile's live name,
 /// fall back to the one the client sent with the report.
-String reportStoreLookupName(String seatId, String fallback) {
-  final profile = friendStore.profile(seatId);
+Future<String> reportStoreLookupName(String seatId, String fallback) async {
+  final profile = await friendStore.profile(seatId);
   if (profile != null && profile.name.trim().isNotEmpty) return profile.name;
   return fallback.trim().isEmpty ? seatId : fallback.trim();
 }
@@ -2088,11 +2118,16 @@ Future<void> main(List<String> args) async {
   final sharedDb = sqlite3.open(dbPath);
   adminStore = AdminStore.fromDb(sharedDb);
   reportStore = ReportStore.fromDb(sharedDb);
-  // Friends state joins the same shared connection: the admin Data tab
-  // whitelists the friend_* tables, and one shared file keeps local runs
-  // + single-replica deployments self-consistent.
+  // Friends state: Turso when configured, so friendships, requests, DMs and
+  // invites survive a redeploy on an ephemeral host; otherwise the shared
+  // SQLite file. The local friend tables are created either way — the admin
+  // Data tab whitelists them and reaches them through [sharedDb], so they
+  // must exist on that connection even when Turso is the store of record
+  // (they receive no writes then).
   friendStore.close();
-  friendStore = FriendStore.fromDb(sharedDb);
+  final localFriendStore = SqliteFriendStore.fromDb(sharedDb);
+  final tursoFriends = TursoFriendStore.fromEnvironment(env);
+  friendStore = tursoFriends ?? localFriendStore;
   adminToken = (env['ADMIN_TOKEN'] ?? '').trim();
   authority = GameAuthority(
     leaderboard: leaderboardStore,
@@ -2325,6 +2360,7 @@ Future<void> main(List<String> args) async {
     'ws://${server.address.host}:${server.port}/ws '
     '(instance: $instanceId, '
     'leaderboard: ${turso != null ? 'Turso' : dbPath}, '
+    'friends: ${tursoFriends != null ? 'Turso' : dbPath}, '
     'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
     'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})',
   );
@@ -2346,6 +2382,22 @@ Future<void> main(List<String> args) async {
         '   If this says CERTIFICATE_VERIFY_FAILED, the runtime image is '
         'missing ca-certificates (debian:bookworm-slim ships no '
         '/etc/ssl/certs) — fix the Dockerfile, not the token.',
+      );
+    }
+  }
+
+  // The friends store gets the same one-line proof. A Turso-backed friends
+  // store that cannot reach its database must fail loudly here rather than
+  // look healthy until the first player opens the Friends screen.
+  if (tursoFriends != null) {
+    try {
+      await friendStore.profile('');
+      stdout.writeln('Turso friends store reachable.');
+    } catch (e) {
+      stderr.writeln(
+        '!! Turso friends store is NOT reachable: $e\n'
+        '   Fix the connection (or the CA certificates) before players '
+        'start adding friends.',
       );
     }
   }
