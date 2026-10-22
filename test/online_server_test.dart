@@ -2524,6 +2524,8 @@ void main() {
         expect(body['instance'], instanceId);
         expect(body['rooms'], 1);
         expect(body['spectators'], 1);
+        expect(body['leaderboardBackend'], 'sqlite');
+        expect(body['friendsBackend'], 'sqlite');
         // Connections counts only live WebSockets in this process; a direct
         // handler call has none, and the joined-room map is not double-counted.
         expect(body['connections'], isA<int>());
@@ -2694,6 +2696,8 @@ void main() {
       expect(body['ok'], isTrue);
       expect(body['rooms'], isA<int>());
       expect(body['games'], isA<int>());
+      expect(body['store'], 'sqlite');
+      expect(body['friendsStore'], 'sqlite');
     });
   });
 

@@ -116,7 +116,7 @@ void main() {
     reportStore = ReportStore.fromDb(db);
     // A fresh friends table per test: seat ids repeat across scenarios,
     // and a leftover friendship from a previous test would 400 them.
-    friendStore = FriendStore.inMemory();
+    friendStore = SqliteFriendStore.inMemory();
     adminToken = 'secret';
     resetFriendAttempts();
     resetFeedbackAttempts();

@@ -34,7 +34,9 @@ class FriendProfile {
     required this.seenMs,
   });
 
-  FriendProfile._fromRow(Row r)
+  /// Builds a profile from a store row. Public for the remote backend,
+  /// which decodes a pipeline row into a plain map before mapping it.
+  FriendProfile.fromRow(Map<String, Object?> r)
     : this(
         seatId: r['seat_id'] as String,
         name: r['name'] as String,
@@ -66,7 +68,8 @@ class FriendEntry {
     required this.sinceMs,
   });
 
-  FriendEntry._fromRow(Row r)
+  /// Builds an entry from a store row (remote backend row maps included).
+  FriendEntry.fromRow(Map<String, Object?> r)
     : seatId = r['seat_id'] as String,
       name = r['name'] as String,
       code = r['code'] as String,
@@ -101,7 +104,8 @@ class FriendRequest {
     required this.createdAtMs,
   });
 
-  FriendRequest._fromRow(Row r)
+  /// Builds a request from a store row (remote backend row maps included).
+  FriendRequest.fromRow(Map<String, Object?> r)
     : this(
         id: r['id'] as int,
         fromSeat: r['from_seat'] as String,
@@ -147,7 +151,8 @@ class FriendMessage {
     this.replyBody = '',
   });
 
-  FriendMessage._fromRow(Row r)
+  /// Builds a message from a store row (remote backend row maps included).
+  FriendMessage.fromRow(Map<String, Object?> r)
     : this(
         id: r['id'] as int,
         fromSeat: r['from_seat'] as String,
@@ -205,7 +210,8 @@ class FriendInvite {
     this.code,
   });
 
-  FriendInvite._fromRow(Row r)
+  /// Builds an invite from a store row (remote backend row maps included).
+  FriendInvite.fromRow(Map<String, Object?> r)
     : this(
         id: r['id'] as int,
         fromSeat: r['from_seat'] as String,
@@ -259,6 +265,14 @@ class FriendCaps {
   static const pendingPerSeat = 50;
   static const invitesPerSeat = 20;
 
+  /// Blocks one seat may hold.
+  static const blocksPerSeat = 200;
+
+  /// Identity caps: a trimmed, non-empty seat id and display name are
+  /// required; a too-long display name is clamped, not rejected.
+  static const maxNameLength = 60;
+  static const maxMessageLength = 1000;
+
   /// DM history kept per pair; older rows are trimmed on every send.
   static const chatHistoryPerPair = 200;
 
@@ -276,7 +290,8 @@ class FriendBlock {
     required this.createdAtMs,
   });
 
-  FriendBlock._fromRow(Row r)
+  /// Builds a block from a store row (remote backend row maps included).
+  FriendBlock.fromRow(Map<String, Object?> r)
     : blocker = r['blocker'] as String,
       blocked = r['blocked'] as String,
       blockedName = r['blocked_name'] as String? ?? '',
@@ -297,25 +312,168 @@ class FriendBlock {
   };
 }
 
-class FriendStore {
-  FriendStore._(this._db, {required bool owns, DateTime Function()? clock})
-    : _ownsDb = owns,
-      _now = clock ?? DateTime.now {
+/// The friends persistence contract.
+///
+/// Two backends implement it:
+///
+/// * [SqliteFriendStore] — the local SQLite file (the default), also used
+///   by tests and by local development with no Turso configured.
+/// * [TursoFriendStore] (`turso_friend_store.dart`) — a hosted Turso/libSQL
+///   database over its HTTP pipeline API, so friendships survive a redeploy
+///   on an ephemeral host. It reads the same `TURSO_DATABASE_URL` +
+///   `TURSO_AUTH_TOKEN` variables the leaderboard and room registry use.
+///
+/// All identity, caps, ordering, and error semantics live here: a backend
+/// must preserve them exactly so the HTTP handlers stay wire-compatible.
+abstract interface class FriendStore {
+  /// Blocks one seat may hold (also quoted by the admin panel).
+  static const blocksPerSeat = FriendCaps.blocksPerSeat;
+
+  /// Registers (or refreshes) the caller's profile and returns it. The
+  /// friend code is minted on first sight and never re-issued.
+  Future<FriendProfile> serve(String seatId, String name);
+
+  /// The profile for [seatId], if that player ever registered.
+  Future<FriendProfile?> profile(String seatId);
+
+  /// The profile owning [code] (case-insensitive), if any.
+  Future<FriendProfile?> profileByCode(String code);
+
+  /// Resolves a 6-char uppercase friend code or a bare seat id.
+  Future<FriendProfile?> resolveTarget(String target);
+
+  /// True when the pair has an accepted friendship.
+  Future<bool> areFriends(String a, String b);
+
+  /// Number of accepted friends [seatId] has.
+  Future<int> friendCount(String seatId);
+
+  /// Sends a request, or returns `'accepted'` when the reverse pending
+  /// request already exists. Returns `'pending'` otherwise.
+  Future<String> sendRequest(
+    String fromSeat,
+    String fromName,
+    String target, {
+    String? targetName,
+  });
+
+  /// Accepts or declines a pending request addressed to [seatId].
+  Future<bool> respond(String seatId, int requestId, {required bool accept});
+
+  /// Withdraws an outgoing request (the "Sent" side cancels).
+  Future<bool> cancel(String fromSeat, int requestId);
+
+  /// Deletes the friendship between [a] and [b], whichever side breaks it.
+  Future<bool> remove(String a, String b);
+
+  /// All accepted friends of [seatId] (alphabetical by name).
+  Future<List<FriendEntry>> friends(String seatId);
+
+  /// True when [blocker] has blocked [about].
+  Future<bool> isBlocked(String blocker, String about);
+
+  /// Blocks [about] for [blocker]: severs the friendship, drops pending
+  /// requests/invites between them, and denies future contact. Idempotent.
+  Future<bool> block(String blocker, String about, {String? targetName});
+
+  /// Lifts a block. True when one actually existed.
+  Future<bool> unblock(String blocker, String about);
+
+  /// Who [seatId] has blocked (newest block first).
+  Future<List<FriendBlock>> blocks(String seatId);
+
+  /// Requests addressed TO [seatId], oldest first.
+  Future<List<FriendRequest>> incoming(String seatId);
+
+  /// Requests [seatId] sent which have not been answered.
+  Future<List<FriendRequest>> outgoing(String seatId);
+
+  /// One DM by id, if it still exists.
+  Future<FriendMessage?> message(int id);
+
+  /// Sends a DM between friends, optionally quoting an earlier message.
+  Future<FriendMessage> send(
+    String fromSeat,
+    String toSeat,
+    String body, {
+    int? replyTo,
+  });
+
+  /// History for the pair in send order, newest page when [since] is null.
+  Future<FriendChatPage> chat(
+    String seatId,
+    String peer, {
+    int? since,
+    int limit = 50,
+  });
+
+  /// The highest message id on the pair (0 when they have no messages).
+  Future<int> latestMessageId(String seatId, String peer);
+
+  /// The highest message id with every peer [seatId] has a DM with, keyed
+  /// by the peer seat id. One read for the whole friend list: a remote
+  /// backend must not need one round trip per friend.
+  Future<Map<String, int>> latestMessageIds(String seatId);
+
+  /// Sets (or clears) the like on a message; null when the caller is not a
+  /// participant (or the message is gone).
+  Future<FriendMessage?> like(
+    String seatId,
+    int messageId, {
+    required bool liked,
+  });
+
+  /// Records a play invite, superseding any earlier pending invite between
+  /// the same pair.
+  Future<FriendInvite> sendInvite(
+    String fromSeat,
+    String fromName,
+    String toSeat,
+    String game, {
+    String? code,
+  });
+
+  /// The invitee answers. Accept returns the room code (null when none).
+  Future<String?> respondInvite(
+    String seatId,
+    int inviteId, {
+    required bool accept,
+  });
+
+  /// Invites addressed to [seatId] (pending first, newest first), expiring
+  /// stale pendings in place on read.
+  Future<List<FriendInvite>> invites(String seatId);
+
+  /// Releases backend resources (database handles, HTTP clients).
+  void close();
+}
+
+/// SQLite-backed [FriendStore]: open with a file path for persistence,
+/// [SqliteFriendStore.inMemory] for tests, or [SqliteFriendStore.withClock]
+/// when a test needs deterministic invite expiry.
+class SqliteFriendStore implements FriendStore {
+  SqliteFriendStore._(
+    this._db, {
+    required bool owns,
+    DateTime Function()? clock,
+  }) : _ownsDb = owns,
+       _now = clock ?? DateTime.now {
     _migrate();
   }
 
-  factory FriendStore.inMemory() =>
-      FriendStore._(sqlite3.openInMemory(), owns: true);
+  factory SqliteFriendStore.inMemory() =>
+      SqliteFriendStore._(sqlite3.openInMemory(), owns: true);
 
-  factory FriendStore(String path) =>
-      FriendStore._(sqlite3.open(path), owns: true);
+  factory SqliteFriendStore(String path) =>
+      SqliteFriendStore._(sqlite3.open(path), owns: true);
 
-  factory FriendStore.withClock(DateTime Function() clock) =>
-      FriendStore._(sqlite3.openInMemory(), owns: true, clock: clock);
+  factory SqliteFriendStore.withClock(DateTime Function() clock) =>
+      SqliteFriendStore._(sqlite3.openInMemory(), owns: true, clock: clock);
 
   /// Shares the production connection: one SQLite file for everything the
   /// dashboard shows, exactly like the report store.
-  factory FriendStore.fromDb(Database db) => FriendStore._(db, owns: false);
+  factory SqliteFriendStore.fromDb(Database db, {DateTime Function()? clock}) =>
+      SqliteFriendStore._(db, owns: false, clock: clock);
 
   final Database _db;
   final bool _ownsDb;
@@ -414,9 +572,6 @@ class FriendStore {
 
   // ------------------------------------------------------------- identity
 
-  static const maxNameLength = 60;
-  static const maxMessageLength = 1000;
-
   /// The per-call identity: a trimmed, non-empty seat id and display name,
   /// the name clamped rather than rejected (a too-long display name is a
   /// trimming job, not an error).
@@ -425,16 +580,17 @@ class FriendStore {
     final nm = name.trim();
     if (id.isEmpty) throw ArgumentError('seatId required');
     if (nm.isEmpty) throw ArgumentError('name required');
-    return (id, nm.substring(0, nm.length.clamp(0, maxNameLength)));
+    return (id, nm.substring(0, nm.length.clamp(0, FriendCaps.maxNameLength)));
   }
 
   /// Registers (or refreshes) the caller's profile and returns it. The
   /// friend code is minted on first sight and never re-issued — everyone
   /// who has ever seen the code must keep finding the same profile.
+  @override
   Future<FriendProfile> serve(String seatId, String name) async {
     final (id, nm) = _checkCaller(seatId, name);
     final now = _nowMs;
-    final existing = profile(id);
+    final existing = await profile(id);
     if (existing != null) {
       if (existing.name != nm) {
         _db.execute(
@@ -447,7 +603,7 @@ class FriendStore {
           [now, id],
         );
       }
-      return profile(id)!;
+      return (await profile(id))!;
     }
     for (var attempt = 0; attempt < 8; attempt++) {
       final code = _generateCode(attempt);
@@ -457,28 +613,30 @@ class FriendStore {
           'VALUES (?, ?, ?, ?)',
           [id, nm, code, now],
         );
-        return profile(id)!;
+        return (await profile(id))!;
       } on SqliteException {
         // Unique clash on `code` — rare among ~500M possibilities, but a
         // retry is four lines. A concurrent registration of the same seat
         // has inserted the seat_id row already: the re-read then wins.
-        final raced = profile(id);
+        final raced = await profile(id);
         if (raced != null && raced.seatId == id) return raced;
       }
     }
     throw StateError('could not mint a unique friend code');
   }
 
-  FriendProfile? profile(String seatId) {
+  @override
+  Future<FriendProfile?> profile(String seatId) async {
     final rows = _db.select(
       'SELECT seat_id, name, code, seen_ms FROM friend_profiles '
       'WHERE seat_id = ?',
       [seatId.trim()],
     );
-    return rows.isEmpty ? null : FriendProfile._fromRow(rows.first);
+    return rows.isEmpty ? null : FriendProfile.fromRow(rows.first);
   }
 
-  FriendProfile? profileByCode(String code) {
+  @override
+  Future<FriendProfile?> profileByCode(String code) async {
     final c = code.trim().toUpperCase();
     if (c.length != 6) return null;
     final rows = _db.select(
@@ -486,12 +644,13 @@ class FriendStore {
       'WHERE code = ?',
       [c],
     );
-    return rows.isEmpty ? null : FriendProfile._fromRow(rows.first);
+    return rows.isEmpty ? null : FriendProfile.fromRow(rows.first);
   }
 
   /// Resolves an add-friend target: a 6-char uppercase token (the code
   /// alphabet only) is a friend code, anything else is a seat id.
-  FriendProfile? resolveTarget(String target) {
+  @override
+  Future<FriendProfile?> resolveTarget(String target) async {
     final t = target.trim();
     if (t.isEmpty) return null;
     final looksLikeCode =
@@ -514,13 +673,15 @@ class FriendStore {
 
   // -------------------------------------------------------- relationships
 
-  FriendProfile _requireProfile(String seatId) =>
-      profile(seatId) ?? (throw ArgumentError('unknown player $seatId'));
+  Future<FriendProfile> _requireProfile(String seatId) async =>
+      (await profile(seatId)) ??
+      (throw ArgumentError('unknown player $seatId'));
 
   (String lo, String hi) _pairOf(String a, String b) =>
       a.compareTo(b) <= 0 ? (a, b) : (b, a);
 
-  bool areFriends(String a, String b) {
+  @override
+  Future<bool> areFriends(String a, String b) async {
     final (lo, hi) = _pairOf(a.trim(), b.trim());
     return _db.select(
       'SELECT id FROM friendships WHERE seat_a = ? AND seat_b = ?',
@@ -528,7 +689,8 @@ class FriendStore {
     ).isNotEmpty;
   }
 
-  int friendCount(String seatId) {
+  @override
+  Future<int> friendCount(String seatId) async {
     final s = seatId.trim();
     return _db.select(
           'SELECT COUNT(*) AS n FROM friendships WHERE seat_a = ? OR seat_b = ?',
@@ -553,6 +715,7 @@ class FriendStore {
   /// Throws [ArgumentError] for malformed/unknown targets and [StateError]
   /// with a user-presentable reason for relationship states (self, already
   /// friends, blocked, list full, caps) — the handler maps both to 400s.
+  @override
   Future<String> sendRequest(
     String fromSeat,
     String fromName,
@@ -560,7 +723,7 @@ class FriendStore {
     String? targetName,
   }) async {
     final (from, nm) = _checkCaller(fromSeat, fromName);
-    var to = resolveTarget(target);
+    var to = await resolveTarget(target);
     if (to == null) {
       final mintName = (targetName ?? '').trim();
       final looksLikeCode =
@@ -576,19 +739,19 @@ class FriendStore {
       throw ArgumentError('no player matches "$target"');
     }
     if (from == to.seatId) throw StateError('you cannot friend yourself');
-    if (isBlocked(from, to.seatId)) {
+    if (await isBlocked(from, to.seatId)) {
       throw StateError('you blocked this player — unblock to add them');
     }
-    if (isBlocked(to.seatId, from)) {
+    if (await isBlocked(to.seatId, from)) {
       throw ArgumentError('that player is not accepting friend requests');
     }
-    if (areFriends(from, to.seatId)) throw StateError('already friends');
-    if (friendCount(from) >= FriendCaps.friendsPerSeat) {
+    if (await areFriends(from, to.seatId)) throw StateError('already friends');
+    if (await friendCount(from) >= FriendCaps.friendsPerSeat) {
       throw StateError(
         'your friend list is full (max ${FriendCaps.friendsPerSeat})',
       );
     }
-    if (friendCount(to.seatId) >= FriendCaps.friendsPerSeat) {
+    if (await friendCount(to.seatId) >= FriendCaps.friendsPerSeat) {
       throw StateError('${to.name} can accept no more friends');
     }
     final mine = _db.select(
@@ -625,7 +788,7 @@ class FriendStore {
       'INSERT INTO friend_requests '
       '(from_seat, from_name, from_code, to_seat, to_name, to_code, created_ms) '
       'VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [from, nm, profile(from)!.code, to.seatId, to.name, to.code, now],
+      [from, nm, (await profile(from))!.code, to.seatId, to.name, to.code, now],
     );
     return 'pending';
   }
@@ -656,6 +819,7 @@ class FriendStore {
   }
 
   /// Accepts or declines a pending request addressed to [seatId].
+  @override
   Future<bool> respond(
     String seatId,
     int requestId, {
@@ -670,6 +834,7 @@ class FriendStore {
   }
 
   /// Withdraws an outgoing request (the "Sent" side cancels).
+  @override
   Future<bool> cancel(String fromSeat, int requestId) {
     _db.execute('DELETE FROM friend_requests WHERE id = ? AND from_seat = ?', [
       requestId,
@@ -681,11 +846,13 @@ class FriendStore {
   /// Releases the database handle when this store owns it (in-memory and
   /// path-backed constructors); a shared-production connection is left to
   /// its owner, mirroring the report store.
+  @override
   void close() {
     if (_ownsDb) _db.close();
   }
 
   /// Deletes the friendship between [a] and [b], whichever side breaks it.
+  @override
   Future<bool> remove(String a, String b) {
     final (lo, hi) = _pairOf(a.trim(), b.trim());
     _db.execute('DELETE FROM friendships WHERE seat_a = ? AND seat_b = ?', [
@@ -696,6 +863,7 @@ class FriendStore {
   }
 
   /// All accepted friends of [seatId] (alphabetical by name).
+  @override
   Future<List<FriendEntry>> friends(String seatId) async {
     final s = seatId.trim();
     final mine = _db.select(
@@ -708,17 +876,16 @@ class FriendStore {
       'JOIN friend_profiles f ON f.seat_id = s.seat_b WHERE s.seat_a = ?',
       [s, s],
     );
-    final list = [for (final r in mine) FriendEntry._fromRow(r)]
+    final list = [for (final r in mine) FriendEntry.fromRow(r)]
       ..sort((x, y) => x.name.toLowerCase().compareTo(y.name.toLowerCase()));
     return list;
   }
 
   // -------------------------------------------------------------- blocking
 
-  static const blocksPerSeat = 200;
-
   /// True when [blocker] has blocked [about].
-  bool isBlocked(String blocker, String about) => _db.select(
+  @override
+  Future<bool> isBlocked(String blocker, String about) async => _db.select(
     'SELECT id FROM friend_blocks WHERE blocker = ? AND blocked = ?',
     [blocker.trim(), about.trim()],
   ).isNotEmpty;
@@ -727,8 +894,8 @@ class FriendStore {
   /// contact; being blocked by someone you never blocked reads identical
   /// to being blocked by someone you did, by design (the other side's
   /// action is never angled for).
-  bool _blockedBetween(String a, String b) =>
-      isBlocked(a, b) || isBlocked(b, a);
+  Future<bool> _blockedBetween(String a, String b) async =>
+      await isBlocked(a, b) || await isBlocked(b, a);
 
   /// Blocks [about] for [blocker]: severs the friendship (if any), drops
   /// every pending request or invite between them, and denies all future
@@ -739,6 +906,7 @@ class FriendStore {
   /// name the room shows — the block must not depend on the target having
   /// visited a menu. Codes still stay unmintable: only the owner mints a
   /// code. The minted name self-heals on the target's own next friends call.
+  @override
   Future<bool> block(String blocker, String about, {String? targetName}) async {
     final by = blocker.trim();
     final them = about.trim();
@@ -746,8 +914,8 @@ class FriendStore {
       throw ArgumentError('seat and target required');
     }
     if (by == them) throw StateError('you cannot block yourself');
-    _requireProfile(by);
-    if (profile(them) == null) {
+    await _requireProfile(by);
+    if (await profile(them) == null) {
       final mintName = (targetName ?? '').trim();
       final looksLikeCode =
           them.length == 6 && RegExp(r'^[2-9A-HJ-NP-Z]+$').hasMatch(them);
@@ -755,14 +923,14 @@ class FriendStore {
         await serve(them, mintName);
       }
     }
-    _requireProfile(them);
+    await _requireProfile(them);
     final n =
         _db.select(
               'SELECT COUNT(*) AS n FROM friend_blocks WHERE blocker = ?',
               [by],
             ).first['n']
             as int;
-    if (!isBlocked(by, them) && n >= blocksPerSeat) {
+    if (!await isBlocked(by, them) && n >= FriendCaps.blocksPerSeat) {
       throw StateError('too many blocked players');
     }
     final (lo, hi) = _pairOf(by, them);
@@ -780,8 +948,8 @@ class FriendStore {
       '((from_seat = ?1 AND to_seat = ?2) OR (from_seat = ?2 AND to_seat = ?1))',
       [by, them],
     );
-    if (!isBlocked(by, them)) {
-      final name = profile(them)?.name ?? '';
+    if (!await isBlocked(by, them)) {
+      final name = (await profile(them))?.name ?? '';
       _db.execute(
         'INSERT INTO friend_blocks (blocker, blocked, blocked_name, created_ms) '
         'VALUES (?, ?, ?, ?)',
@@ -792,6 +960,7 @@ class FriendStore {
   }
 
   /// Lifts a block. True when one actually existed.
+  @override
   Future<bool> unblock(String blocker, String about) async {
     _db.execute('DELETE FROM friend_blocks WHERE blocker = ? AND blocked = ?', [
       blocker.trim(),
@@ -801,21 +970,24 @@ class FriendStore {
   }
 
   /// Who [seatId] has blocked (with names as of the block moment).
+  @override
   Future<List<FriendBlock>> blocks(String seatId) async {
     final rows = _db.select(
       'SELECT blocker, blocked, blocked_name, created_ms FROM friend_blocks '
       'WHERE blocker = ? ORDER BY created_ms DESC',
       [seatId.trim()],
     );
-    return [for (final r in rows) FriendBlock._fromRow(r)];
+    return [for (final r in rows) FriendBlock.fromRow(r)];
   }
 
   /// Requests addressed TO [seatId], oldest first.
+  @override
   Future<List<FriendRequest>> incoming(String seatId) async => [
     for (final r in _requests('to_seat', seatId.trim())) r,
   ];
 
   /// Requests [seatId] sent which have not been answered.
+  @override
   Future<List<FriendRequest>> outgoing(String seatId) async => [
     for (final r in _requests('from_seat', seatId.trim())) r,
   ];
@@ -828,25 +1000,27 @@ class FriendStore {
       'ORDER BY created_ms ASC',
       [seatId],
     );
-    return [for (final r in rows) FriendRequest._fromRow(r)];
+    return [for (final r in rows) FriendRequest.fromRow(r)];
   }
 
   // ------------------------------------------------------------------ chat
 
-  FriendMessage? message(int id) {
+  @override
+  Future<FriendMessage?> message(int id) async {
     final rows = _db.select(
       'SELECT id, from_seat, to_seat, body, liked, reply_to, reply_from, '
       'reply_body, created_ms FROM friend_messages WHERE id = ?',
       [id],
     );
-    return rows.isEmpty ? null : FriendMessage._fromRow(rows.first);
+    return rows.isEmpty ? null : FriendMessage.fromRow(rows.first);
   }
 
-  FriendMessage _messageOrThrow(int id) =>
-      message(id) ?? (throw StateError("message '$id' vanished"));
+  Future<FriendMessage> _messageOrThrow(int id) async =>
+      (await message(id)) ?? (throw StateError("message '$id' vanished"));
 
   /// Sends a DM. Both parties must be friends; [replyTo], when present,
   /// must belong to the same pair and is quoted as a snapshot.
+  @override
   Future<FriendMessage> send(
     String fromSeat,
     String toSeat,
@@ -858,18 +1032,22 @@ class FriendStore {
     final text = body.trim();
     if (to.isEmpty) throw ArgumentError('recipient required');
     if (text.isEmpty) throw ArgumentError('message empty');
-    if (text.length > maxMessageLength) {
-      throw ArgumentError('message too long (max $maxMessageLength)');
+    if (text.length > FriendCaps.maxMessageLength) {
+      throw ArgumentError(
+        'message too long (max ${FriendCaps.maxMessageLength})',
+      );
     }
-    if (!areFriends(from, to)) throw StateError('you can message friends only');
-    if (_blockedBetween(from, to)) {
+    if (!await areFriends(from, to)) {
+      throw StateError('you can message friends only');
+    }
+    if (await _blockedBetween(from, to)) {
       throw StateError('you can no longer message this player');
     }
     int? replyId;
     String replyAuthor = '';
     String replyText = '';
     if (replyTo != null) {
-      final quoted = message(replyTo);
+      final quoted = await message(replyTo);
       if (quoted == null) throw ArgumentError('quoted message not found');
       final pair = {quoted.fromSeat, quoted.toSeat};
       if (!pair.contains(from) || !pair.contains(to)) {
@@ -909,6 +1087,7 @@ class FriendStore {
   /// History for the pair in send order. With [since] (a message id)
   /// only newer pages — polling clients pay bytes for the gap, nothing
   /// for the known past.
+  @override
   Future<FriendChatPage> chat(
     String seatId,
     String peer, {
@@ -928,8 +1107,8 @@ class FriendStore {
         [me, them, since],
       );
       return FriendChatPage(
-        messages: [for (final r in rows) FriendMessage._fromRow(r)],
-        latestId: latestMessageId(me, them),
+        messages: [for (final r in rows) FriendMessage.fromRow(r)],
+        latestId: await latestMessageId(me, them),
       );
     }
     final rows = _db.select(
@@ -937,7 +1116,7 @@ class FriendStore {
       [me, them],
     );
     // Newest-first from SQL; callers read and the UI renders oldest-first.
-    final list = [for (final r in rows) FriendMessage._fromRow(r)].reversed
+    final list = [for (final r in rows) FriendMessage.fromRow(r)].reversed
         .toList();
     return FriendChatPage(
       messages: list,
@@ -945,8 +1124,23 @@ class FriendStore {
     );
   }
 
+  /// Every peer's highest message id in one pass — the unread-marker
+  /// baseline for the whole friend list.
+  @override
+  Future<Map<String, int>> latestMessageIds(String seatId) async {
+    final s = seatId.trim();
+    final rows = _db.select(
+      'SELECT CASE WHEN from_seat = ?1 THEN to_seat ELSE from_seat END '
+      'AS peer, MAX(id) AS latest FROM friend_messages '
+      'WHERE from_seat = ?1 OR to_seat = ?1 GROUP BY peer',
+      [s],
+    );
+    return {for (final r in rows) r['peer'] as String: r['latest'] as int};
+  }
+
   /// The highest message id on the pair — the unread-marker baseline.
-  int latestMessageId(String seatId, String peer) {
+  @override
+  Future<int> latestMessageId(String seatId, String peer) async {
     final me = seatId.trim();
     final them = peer.trim();
     const pair =
@@ -960,6 +1154,7 @@ class FriendStore {
 
   /// Sets (or clears) the like on a message. Both the sender and the
   /// recipient may toggle it — in a pair, a like needs no identity.
+  @override
   Future<FriendMessage?> like(
     String seatId,
     int messageId, {
@@ -970,7 +1165,7 @@ class FriendStore {
       messageId,
     ]);
     if (rows.isEmpty) return null;
-    final target = message(messageId)!;
+    final target = (await message(messageId))!;
     if (target.fromSeat != me && target.toSeat != me) return null;
     _db.execute('UPDATE friend_messages SET liked = ? WHERE id = ?', [
       liked ? 1 : 0,
@@ -985,6 +1180,7 @@ class FriendStore {
   /// code [code] (null while still being claimed) is waiting. Any earlier
   /// pending invite between the same pair is superseded — one live
   /// invitation per pair.
+  @override
   Future<FriendInvite> sendInvite(
     String fromSeat,
     String fromName,
@@ -1004,8 +1200,10 @@ class FriendStore {
     if (code != null && !RegExp(r'^[a-zA-Z]{4}$').hasMatch(code.trim())) {
       throw ArgumentError('room code must be 4 letters');
     }
-    if (!areFriends(from, to)) throw StateError('you can invite friends only');
-    if (_blockedBetween(from, to)) {
+    if (!await areFriends(from, to)) {
+      throw StateError('you can invite friends only');
+    }
+    if (await _blockedBetween(from, to)) {
       throw StateError('you can no longer invite this player');
     }
     final now = _nowMs;
@@ -1017,7 +1215,8 @@ class FriendStore {
             ).first['n']
             as int;
     if (invitedNow >= FriendCaps.invitesPerSeat) {
-      throw StateError('${_requireProfile(to).name} has too many invites');
+      final target = await _requireProfile(to);
+      throw StateError('${target.name} has too many invites');
     }
     _db.execute(
       "DELETE FROM friend_invites WHERE from_seat = ? AND to_seat = ? "
@@ -1035,11 +1234,12 @@ class FriendStore {
 
   FriendInvite? _invite(int id) {
     final rows = _db.select('SELECT * FROM friend_invites WHERE id = ?', [id]);
-    return rows.isEmpty ? null : FriendInvite._fromRow(rows.first);
+    return rows.isEmpty ? null : FriendInvite.fromRow(rows.first);
   }
 
   /// The invitee answers. An accepted invite returns the room code to
   /// join (null while none was attached); a decline just closes the row.
+  @override
   Future<String?> respondInvite(
     String seatId,
     int inviteId, {
@@ -1061,6 +1261,7 @@ class FriendStore {
 
   /// Invites addressed to [seatId] (newest first), expiring stale pendings
   /// in place on read.
+  @override
   Future<List<FriendInvite>> invites(String seatId) async {
     final me = seatId.trim();
     final cutoff = _nowMs - FriendCaps.inviteLifetime.inMilliseconds;
@@ -1074,6 +1275,6 @@ class FriendStore {
       'CASE status WHEN ?2 THEN 0 ELSE 1 END ASC, id DESC LIMIT ?3',
       [me, 'pending', FriendCaps.invitesPerSeat * 2],
     );
-    return [for (final r in rows) FriendInvite._fromRow(r)];
+    return [for (final r in rows) FriendInvite.fromRow(r)];
   }
 }
