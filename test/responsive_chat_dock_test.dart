@@ -171,4 +171,48 @@ void main() {
     await tester.tap(find.byKey(const Key('table-chat-close')));
     await tester.pumpAndSettle();
   });
+
+  testWidgets('wide: the dock collapses to the launcher and keeps the draft', (
+    tester,
+  ) async {
+    final client = clientWith();
+    await pumpDock(tester, client, const Size(1440, 900));
+
+    expect(find.byTooltip('Collapse chat'), findsOneWidget);
+    final dockedContent = tester.getRect(find.byKey(content)).width;
+
+    await tester.enterText(find.byKey(composer), 'draft while docked');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('table-chat-collapse')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(launcher), findsOneWidget);
+    expect(find.byTooltip('Open table chat'), findsOneWidget);
+    expect(
+      find.byKey(composer).hitTestable(),
+      findsNothing,
+      reason: 'the collapsed panel slides off the right edge',
+    );
+    expect(
+      tester.getRect(find.byKey(content)).width,
+      1440,
+      reason: 'the board/lobby reclaims the reserved dock strip',
+    );
+    expect(
+      tester.getRect(find.byKey(content)).width,
+      greaterThan(dockedContent + 100),
+    );
+
+    await tester.tap(find.byKey(launcher));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(composer).hitTestable(), findsOneWidget);
+    expect(
+      find.text('draft while docked'),
+      findsOneWidget,
+      reason: 'collapsing folds the panel away; it does not rebuild its state',
+    );
+    expect(find.byKey(launcher), findsNothing);
+    expect(find.byTooltip('Collapse chat'), findsOneWidget);
+  });
 }
