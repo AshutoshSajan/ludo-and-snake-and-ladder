@@ -69,6 +69,23 @@ void main() {
       expect(find.textContaining('Could not reach'), findsNothing);
     });
 
+    testWidgets('a board with games but no players names the count, not null',
+        (tester) async {
+      // A result row exists for every player, so this is a data fault rather
+      // than a fresh server — but it still has to say what it found. The old
+      // copy interpolated a null game ("The null leaderboard is empty") and
+      // dropped the number entirely.
+      await show(
+          tester,
+          (_) async =>
+              LeaderboardData(games: 3, rows: const <LeaderboardRow>[]));
+      expect(find.textContaining('The combined leaderboard is empty.'),
+          findsOneWidget);
+      expect(find.textContaining('3 games finished'), findsOneWidget);
+      expect(find.textContaining('null'), findsNothing);
+      expect(find.textContaining('No games finished yet'), findsNothing);
+    });
+
     testWidgets('a full board renders the players', (tester) async {
       await show(
         tester,
