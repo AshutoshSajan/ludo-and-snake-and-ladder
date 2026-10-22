@@ -34,8 +34,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Server URL'), findsNothing);
-      expect(find.text('Your name'), findsOneWidget,
-          reason: 'the form still asks its one real question: the name');
+      expect(
+        find.text('Your name'),
+        findsOneWidget,
+        reason: 'the form still asks its one real question: the name',
+      );
     });
 
     testWidgets('the player id is tap-to-copy, with a corner confirmation', (
@@ -527,28 +530,6 @@ void main() {
       await tester.tap(find.text('+ Add'));
       await tester.pump();
       expect(added, isZero);
-    });
-  });
-
-  group('recentChatLines — the inline table talk', () {
-    ChatLine line(int at) =>
-        ChatLine(from: 'Ash', text: 'message $at', at: at, seatId: 'seat-$at');
-
-    test('history lists the newest at the bottom, replay order', () {
-      final chat = [for (var i = 1; i <= 9; i++) line(i)];
-      final shown = recentChatLines(chat);
-      expect(
-        shown.map((l) => l.at),
-        [4, 5, 6, 7, 8, 9],
-        reason:
-            'the newest of the window must render at the bottom, '
-            'not push everything older down past itself',
-      );
-    });
-
-    test('a short history shows entire in replay order', () {
-      final chat = [line(1), line(2), line(3)];
-      expect(recentChatLines(chat).map((l) => l.at), [1, 2, 3]);
     });
   });
 }

@@ -11,9 +11,9 @@ import '../theme.dart';
 /// any mix of the three. Own messages sit on the right and wear the
 /// table's gold; everyone else's sit left with their seat color.
 ///
-/// Shared by the lobby's inline feed and the in-game chat sheet so the
-/// two surfaces cannot drift: they used to render `from: text` by hand,
-/// which is how the plain look got stuck. [myName] decides alignment;
+/// Shared by the table chat panel, the mobile overlay and the 1:1 friends
+/// lane so the surfaces cannot drift: they used to render `from: text` by
+/// hand, which is how the plain look got stuck. [myName] decides alignment;
 /// '' (or an unknown sender) means "someone else's", the safe default
 /// for a spectator watching a table.
 class ChatLineView extends StatelessWidget {
@@ -34,8 +34,8 @@ class ChatLineView extends StatelessWidget {
   /// The reader's own name — right-aligns and tints gold.
   final String myName;
 
-  /// Lobby feed: tighter paddings and a smaller GIF, because up to six
-  /// bubbles share the column with the composer.
+  /// Compact transcript: tighter paddings and a smaller GIF, for surfaces
+  /// that show a short tail rather than a full-height history.
   final bool compact;
 
   /// Optional id-identicon for a private (non-table) lane: rendered
