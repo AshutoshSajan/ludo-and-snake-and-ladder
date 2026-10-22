@@ -72,6 +72,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          RESOLVE: ${{ steps.kind.outputs.resolve }}
         run: |
           set -euo pipefail
           data="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
@@ -83,11 +84,62 @@ jobs:
             echo "head_sha=$(jq -r '.head.sha' <<<"$data")"
             echo "base_sha=$(jq -r '.base.sha' <<<"$data")"
           } >> "$GITHUB_OUTPUT"
+
           if [ "$state" != "open" ] || [ "$same_repo" != "true" ]; then
             echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
             echo "::notice::OpenCode commands run only on open, same-repository pull requests; skipping."
+            exit 0
+          fi
+
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+          # Resolving a review thread does not read the pull request checkout,
+          # so a comment/head race does not matter for that command.
+          if [ "${RESOLVE:-false}" = "true" ]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          comment_at="$(jq -r '.comment.created_at // ""' "$GITHUB_EVENT_PATH")"
+          pushed_at="$(jq -r '.pushed_at // ""' <<<"$data")"
+          if [ -z "$comment_at" ] || [ -z "$pushed_at" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Could not verify when the head last changed; not reading unverified code."
+            exit 0
+          fi
+
+          # A command approves the head as it stood when the comment was
+          # written. If the head moved after that, do not answer from code the
+          # commenter did not see: that is the TOCTOU race CodeQL flags on a
+          # privileged issue_comment workflow. This comment/head date check is
+          # the guard CodeQL recognises for that event.
+          if [[ $(date -d "$pushed_at" +%s) -gt $(date -d "$comment_at" +%s) ]]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::The pull request head moved after this command was posted; comment again to run it on the current code."
           else
-            echo "eligible=true" >> "$GITHUB_OUTPUT"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Do not leave a stale command as a silent skip: tell the commenter why
+      # it did not run and what to do next.
+      - name: Explain a stale command
+        if: steps.pr.outputs.eligible == 'true' && steps.pr.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+          body="$(printf '%s\n\n%s' \
+            '**OpenCode did not run this command.** The pull request may have changed since you commented, so an answer could describe code you did not see. Comment again to run it on the current head.' \
+            '<!-- opencode-command -->')"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments/$COMMENT_ID/replies" \
+              -f body="$body" >/dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              -f body="$body" >/dev/null
           fi
 
       - name: Check out trusted scripts
@@ -101,7 +153,7 @@ jobs:
 
       - name: Check OpenCode scripts
         id: gate
-        if: steps.pr.outputs.eligible == 'true'
+        if: steps.pr.outputs.eligible == 'true' && steps.pr.outputs.stale != 'true'
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
@@ -118,6 +170,15 @@ jobs:
             # whole workflow here.
             echo "::notice::OPENCODE_API_KEY is not configured; questions will fail, but /opencode resolve still works."
           fi
+
+      - name: Check out pull request head
+        if: steps.gate.outputs.configured == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: workspace
 
       # Same pinned tarball as the review workflow. A command that needs the
       # model pays this install; a resolve does too, which is a few seconds of
