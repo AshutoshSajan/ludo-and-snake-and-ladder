@@ -28,11 +28,23 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  @override
-  void initState() {
-    super.initState();
-    // The first-run tutorial ask goes out once storage answers, after the
-    // first frame (the navigator must be live to host the dialog).
+  /// Whether the ask has already been handed to the frame scheduler. One
+  /// ask per home visit, never a second one from a rebuild.
+  bool _askScheduled = false;
+
+  /// Schedules the first-run ask the first time home is the route on top.
+  ///
+  /// Home is built underneath every deep link (`/join/ABCD`, `/friends/…`)
+  /// so back leaves the app only after the linked screen. Asking from
+  /// `initState` meant the dialog opened over that linked screen — a fresh
+  /// browser tab following an invite got the tour prompt instead of the
+  /// invite. [ModalRoute.of] is a dependency, so when the linked screen pops
+  /// back to home this build runs again and the ask is still owed then.
+  void _scheduleTutorialAsk(BuildContext context) {
+    if (_askScheduled) return;
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    _askScheduled = true;
+    // After the first frame: the navigator must be live to host the dialog.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAskForTutorial());
   }
 
@@ -43,6 +55,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Future<void> _maybeAskForTutorial() async {
     final asked = await ref.read(storageProvider).loadTutorialAsked();
     if (!mounted || asked) return;
+    // The player may have left home while storage answered (tapped Play
+    // Online, say). Don't cover that screen; the ask returns when home does.
+    if (ModalRoute.of(context)?.isCurrent != true) {
+      _askScheduled = false;
+      return;
+    }
     final tookTour = await showDialog<bool>(
       context: context,
       // Not dismissible: a stray outside tap is not an answer, it would
@@ -62,6 +80,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _scheduleTutorialAsk(context);
     final admin = ref.watch(adminSessionProvider);
     return Scaffold(
       body: Container(
