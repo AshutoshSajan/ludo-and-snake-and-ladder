@@ -50,6 +50,7 @@ class TableChatPanel extends StatefulWidget {
     super.key,
     required this.client,
     this.onClose,
+    this.onCollapse,
     this.sheet = false,
     this.showDragHandle = false,
     this.showFriends = true,
@@ -60,6 +61,11 @@ class TableChatPanel extends StatefulWidget {
   /// The mobile overlay's close control. Null on the docked panel, where the
   /// chat is a permanent part of the layout and has nothing to close.
   final VoidCallback? onClose;
+
+  /// The wide dock's collapse control: folds the panel back to the launcher
+  /// without destroying the composer or the transcript. Null on the overlay
+  /// and the bottom sheet, which already have their own dismissal.
+  final VoidCallback? onCollapse;
 
   /// Sheet mode sizes to its content (the bottom sheet's cap) instead of
   /// filling the dock. The transcript still scrolls inside the cap.
@@ -197,6 +203,7 @@ class _TableChatPanelState extends State<TableChatPanel> {
           pending: _pendingRequests,
           onFriends: widget.showFriends ? _openFriends : null,
           onClose: widget.onClose,
+          onCollapse: widget.onCollapse,
         ),
         _connectionNotice(widget.client),
         if (widget.sheet)
@@ -442,11 +449,13 @@ class _Header extends StatelessWidget {
     required this.pending,
     required this.onFriends,
     required this.onClose,
+    required this.onCollapse,
   });
 
   final int pending;
   final VoidCallback? onFriends;
   final VoidCallback? onClose;
+  final VoidCallback? onCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -486,6 +495,13 @@ class _Header extends StatelessWidget {
                   : 'Friends',
               onPressed: onFriends,
             ),
+          if (onCollapse != null)
+            IconButton(
+              key: const Key('table-chat-collapse'),
+              icon: const Icon(Icons.chevron_right),
+              tooltip: 'Collapse chat',
+              onPressed: onCollapse,
+            ),
           if (onClose != null)
             IconButton(
               key: const Key('table-chat-close'),
@@ -523,11 +539,13 @@ class _ChipIcon extends StatelessWidget {
 ///
 /// Wide windows dock the panel on the right and reserve its width on the
 /// layout edge, so the board/lobby is narrower, centred in what remains and
-/// never covered. Narrow windows keep the content full-bleed, hide the panel
-/// off the right edge behind a launcher, and slide it back in as an overlay
-/// with a tappable scrim and a labelled close control. The panel itself is
-/// the same subtree in both modes, so the draft and the transcript survive
-/// a breakpoint change.
+/// never covered. The dock's header carries a collapse control: the panel
+/// folds back to the same launcher the phone uses, the content reclaims the
+/// width, and the panel subtree keeps its draft and recording session. Narrow
+/// windows keep the content full-bleed and hide the panel off the right edge
+/// behind a launcher, sliding it back in as an overlay with a tappable scrim
+/// and a labelled close control. The panel itself is the same subtree in
+/// every mode, so the draft and the transcript survive a breakpoint change.
 class ResponsiveChatDock extends StatefulWidget {
   const ResponsiveChatDock({
     super.key,
@@ -550,9 +568,14 @@ class ResponsiveChatDock extends StatefulWidget {
 }
 
 class _ResponsiveChatDockState extends State<ResponsiveChatDock> {
-  /// Narrow only: the overlay is open. Wide ignores this — the dock is part
-  /// of the layout and has nothing to toggle.
+  /// Narrow only: the overlay is open. Wide uses [_collapsed] instead — the
+  /// dock is part of the layout until the player folds it away.
   bool _open = false;
+
+  /// Wide only: the dock is folded back to the launcher. Kept separate from
+  /// [_open] because the two layouts have different doors; crossing the
+  /// breakpoint with a collapsed dock must not pop the phone overlay open.
+  bool _collapsed = false;
 
   /// The last `chatOpen` value handed to the client. Kept here rather than
   /// read back from the client so a delayed post-frame callback cannot
@@ -592,6 +615,11 @@ class _ResponsiveChatDockState extends State<ResponsiveChatDock> {
     setState(() => _open = open);
   }
 
+  void _setCollapsed(bool collapsed) {
+    if (_collapsed == collapsed) return;
+    setState(() => _collapsed = collapsed);
+  }
+
   /// Whether the reader can see the transcript right now: always on the
   /// docked layout, only while the overlay is open on narrow windows. The
   /// client uses this for unread dots and message chimes.
@@ -612,16 +640,22 @@ class _ResponsiveChatDockState extends State<ResponsiveChatDock> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= kChatDockBreakpoint;
+        final docked = wide && !_collapsed;
+        final visible = docked || (!wide && _open);
         final overlayWidth = math.min(
           kChatOverlayMaxWidth,
           math.max(0.0, constraints.maxWidth - 24),
         );
-        _reportChatOpen(wide || _open);
+        _reportChatOpen(visible);
 
         return CallbackShortcuts(
           bindings: {
             const SingleActivator(LogicalKeyboardKey.escape): () {
-              if (!wide && _open) _setOpen(false);
+              if (wide && !_collapsed) {
+                _setCollapsed(true);
+              } else if (!wide && _open) {
+                _setOpen(false);
+              }
             },
           },
           child: Stack(
@@ -629,11 +663,15 @@ class _ResponsiveChatDockState extends State<ResponsiveChatDock> {
             children: [
               Positioned.fill(
                 key: const ValueKey('chat-dock-content-slot'),
-                child: Padding(
+                child: AnimatedPadding(
                   // The docked panel owns this strip; the content is laid
-                  // out beside it, never underneath it.
+                  // out beside it, never underneath it. Collapsing animates
+                  // the strip away so the board/lobby gets the whole window
+                  // back without a layout jump.
+                  duration: kChatDockMotion,
+                  curve: Curves.easeOutCubic,
                   padding: EdgeInsets.only(
-                    right: wide ? kChatDockWidth + kChatDockGutter : 0,
+                    right: docked ? kChatDockWidth + kChatDockGutter : 0,
                   ),
                   child: KeyedSubtree(
                     key: const Key('chat-dock-content'),
@@ -660,21 +698,23 @@ class _ResponsiveChatDockState extends State<ResponsiveChatDock> {
                     ),
                   ),
                 ),
-                if (!_open)
-                  Positioned(
-                    key: const ValueKey('chat-dock-launcher-slot'),
-                    right: 16,
-                    bottom: 16,
-                    child: SafeArea(
-                      top: false,
-                      left: false,
-                      child: _ChatLauncher(
-                        unread: widget.client.unreadChats,
-                        onPressed: () => _setOpen(true),
-                      ),
+              ],
+              if ((!wide && !_open) || (wide && _collapsed))
+                Positioned(
+                  key: const ValueKey('chat-dock-launcher-slot'),
+                  right: 16,
+                  bottom: 16,
+                  child: SafeArea(
+                    top: false,
+                    left: false,
+                    child: _ChatLauncher(
+                      unread: widget.client.unreadChats,
+                      onPressed: wide
+                          ? () => _setCollapsed(false)
+                          : () => _setOpen(true),
                     ),
                   ),
-              ],
+                ),
               Positioned(
                 // Keyed so the panel subtree is reparented, not rebuilt,
                 // when the conditional scrim/launcher siblings appear or
@@ -686,17 +726,17 @@ class _ResponsiveChatDockState extends State<ResponsiveChatDock> {
                 right: wide ? 0 : 12,
                 width: wide ? kChatDockWidth : overlayWidth,
                 child: AnimatedSlide(
-                  offset: wide || _open ? Offset.zero : const Offset(1.08, 0),
+                  offset: visible ? Offset.zero : const Offset(1.08, 0),
                   duration: kChatDockMotion,
                   curve: Curves.easeOutCubic,
                   child: IgnorePointer(
-                    ignoring: !wide && !_open,
+                    ignoring: !visible,
                     child: ExcludeFocus(
-                      excluding: !wide && !_open,
+                      excluding: !visible,
                       child: ExcludeSemantics(
-                        excluding: !wide && !_open,
+                        excluding: !visible,
                         child: TickerMode(
-                          enabled: wide || _open,
+                          enabled: visible,
                           child: Material(
                             key: const Key('table-chat-panel'),
                             color: AppColors.feltLight,
@@ -716,6 +756,9 @@ class _ResponsiveChatDockState extends State<ResponsiveChatDock> {
                               client: widget.client,
                               showFriends: widget.showFriends,
                               onClose: wide ? null : () => _setOpen(false),
+                              onCollapse: wide && !_collapsed
+                                  ? () => _setCollapsed(true)
+                                  : null,
                             ),
                           ),
                         ),
