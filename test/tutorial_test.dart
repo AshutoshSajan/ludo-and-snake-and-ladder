@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:game_club/main.dart';
 import 'package:game_club/screens/home_screen.dart';
 import 'package:game_club/screens/settings_screen.dart';
 import 'package:game_club/services/storage_service.dart';
@@ -85,6 +86,29 @@ void main() {
     // A later visit (fresh home, flags in storage) shows nothing.
     await pumpHome(tester, storage: {StorageService.kTutorialAskedKey: true});
     expect(find.text('First time here?'), findsNothing);
+  });
+
+  testWidgets('an invite link opens without the first-run ask', (tester) async {
+    // A private tab: no stored answers, and the URL is a friend's invite.
+    SharedPreferences.setMockInitialValues({});
+    tester.binding.platformDispatcher.defaultRouteNameTestValue =
+        '/join/ABCD';
+    addTearDown(
+      tester.binding.platformDispatcher.clearDefaultRouteNameTestValue,
+    );
+
+    await tester.pumpWidget(const ProviderScope(child: GameClubApp()));
+    await tester.pumpAndSettle();
+
+    // Home is built underneath the invite; the ask must belong to home being
+    // seen, not home merely existing, or it lands on top of the invite card.
+    expect(find.text('First time here?'), findsNothing);
+    expect(find.text("You're invited to room ABCD"), findsOneWidget);
+
+    // Back at home the ask is still owed, and only then goes out.
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('First time here?'), findsOneWidget);
   });
 
   testWidgets('"Not now" answers the ask and starts no walkthrough', (
