@@ -6,6 +6,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_router.dart';
+import '../../app_routes.dart';
 import '../../controllers/ludo_session.dart';
 import '../../controllers/snakes_session.dart';
 import '../../engine/core/player_profiles.dart';
@@ -160,10 +162,10 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
         rankedNames: names,
         onRematch: () {
           Navigator.of(context).pop();
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (_) => SnakesGameView(seats: widget.seats),
-            ),
+          replaceAppScreen<void>(
+            context,
+            name: AppRoutes.gameSnakes,
+            builder: (_) => SnakesGameView(seats: widget.seats),
           );
         },
         onHome: () {

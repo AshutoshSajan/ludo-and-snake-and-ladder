@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_router.dart';
+import '../../app_routes.dart';
 import '../../screens/friends_screen.dart';
 import '../../services/friend_client.dart';
 import '../../services/note_recorder.dart';
@@ -129,8 +131,11 @@ class _GameChatSheetState extends ConsumerState<GameChatSheet> {
   }
 
   void _openFriends() {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const FriendsScreen()));
+    pushAppScreen<void>(
+      context,
+      name: AppRoutes.friends,
+      builder: (_) => const FriendsScreen(),
+    );
   }
 
   void _onClient() {
