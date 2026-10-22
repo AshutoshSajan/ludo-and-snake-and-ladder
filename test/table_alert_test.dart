@@ -10,6 +10,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:game_club/ui/shared/table_alert.dart';
@@ -202,8 +203,9 @@ void main() {
   });
 
   group('the invite knock card', () {
-    testWidgets('sits top right under the app bar and carries its answers',
-        (tester) async {
+    testWidgets('sits top right under the app bar and carries its answers', (
+      tester,
+    ) async {
       final handle = await _pumpInvite(tester);
       await tester.tap(find.byKey(_invite));
       await tester.pump();
@@ -212,44 +214,91 @@ void main() {
       final box = tester.renderObject<RenderBox>(find.byKey(_knock));
       final origin = box.localToGlobal(Offset.zero);
       final rightGap = 1440 - (origin.dx + box.size.width);
-      expect(rightGap, inInclusiveRange(0, 16),
-          reason: 'the knock lives at the top-right corner like its family');
-      expect(origin.dy, lessThan(450),
-          reason: 'under the app bar, above the board midline');
+      expect(
+        rightGap,
+        inInclusiveRange(0, 16),
+        reason: 'the knock lives at the top-right corner like its family',
+      );
+      expect(
+        origin.dy,
+        lessThan(450),
+        reason: 'under the app bar, above the board midline',
+      );
       expect(find.text('Play invite'), findsOneWidget);
-      expect(find.textContaining('Swift Otter invites you to Ludo'),
-          findsOneWidget);
+      expect(
+        find.textContaining('Swift Otter invites you to Ludo'),
+        findsOneWidget,
+      );
       expect(find.text('Join game'), findsOneWidget);
       expect(find.text('Not now'), findsOneWidget);
       await tester.tap(find.text('Not now'));
       await handle.answer;
     });
 
-    testWidgets(
-        'Join answers true and leaves; Not now answers false, both 44-tall',
-        (tester) async {
+    testWidgets('the answers stay in the semantics tree', (tester) async {
+      final semantics = tester.ensureSemantics();
       final handle = await _pumpInvite(tester);
       await tester.tap(find.byKey(_invite));
       await tester.pump();
-      await tester.pump();
+      // The entrance fades the card in; semantics are excluded while it is
+      // fully transparent, so let the 220ms entrance settle before reading
+      // the answer nodes.
+      await tester.pump(const Duration(milliseconds: 250));
 
-      final joinBox = tester.renderObject<RenderBox>(
-        find.ancestor(
-          of: find.text('Join game'),
-          matching: find.byType(FilledButton),
-        ),
+      final join = tester
+          .getSemantics(find.byKey(const Key('invite-knock-join')))
+          .getSemanticsData();
+      final dismiss = tester
+          .getSemantics(find.byKey(const Key('invite-knock-dismiss')))
+          .getSemanticsData();
+      expect(
+        join.label,
+        'Join game',
+        reason: 'a live-region label must not swallow the card buttons',
       );
-      expect(joinBox.size.height, greaterThanOrEqualTo(44.0),
-          reason: 'the invite answer is a real decision, not a label');
+      expect(join.flagsCollection.isButton, isTrue);
+      expect(join.hasAction(SemanticsAction.tap), isTrue);
+      expect(dismiss.label, 'Not now');
+      expect(dismiss.flagsCollection.isButton, isTrue);
+      expect(dismiss.hasAction(SemanticsAction.tap), isTrue);
 
-      await tester.tap(find.text('Join game'));
-      final joined = await handle.answer;
-      await tester.pump();
-      expect(joined, isTrue);
-      await tester.pump();
-      expect(find.byKey(_knock), findsNothing,
-          reason: 'answered cards leave the corner');
+      await tester.tap(find.text('Not now'));
+      await handle.answer;
+      semantics.dispose();
     });
+
+    testWidgets(
+      'Join answers true and leaves; Not now answers false, both 44-tall',
+      (tester) async {
+        final handle = await _pumpInvite(tester);
+        await tester.tap(find.byKey(_invite));
+        await tester.pump();
+        await tester.pump();
+
+        final joinBox = tester.renderObject<RenderBox>(
+          find.ancestor(
+            of: find.text('Join game'),
+            matching: find.byType(FilledButton),
+          ),
+        );
+        expect(
+          joinBox.size.height,
+          greaterThanOrEqualTo(44.0),
+          reason: 'the invite answer is a real decision, not a label',
+        );
+
+        await tester.tap(find.text('Join game'));
+        final joined = await handle.answer;
+        await tester.pump();
+        expect(joined, isTrue);
+        await tester.pump();
+        expect(
+          find.byKey(_knock),
+          findsNothing,
+          reason: 'answered cards leave the corner',
+        );
+      },
+    );
 
     testWidgets('a table line yields while the knock is up', (tester) async {
       final handle = await _pumpInvite(tester);
@@ -260,38 +309,49 @@ void main() {
       showTableAlert(handle.context!, 'Ana left the game');
       await tester.pump();
       await tester.pump();
-      expect(find.text('Ana left the game'), findsNothing,
-          reason: 'a knock is the table\'s loudest event; five-second '
-              'lines wait until it is answered');
-      expect(find.byKey(_knock), findsOneWidget,
-          reason: 'the unanswered knock stays put');
+      expect(
+        find.text('Ana left the game'),
+        findsNothing,
+        reason:
+            'a knock is the table\'s loudest event; five-second '
+            'lines wait until it is answered',
+      );
+      expect(
+        find.byKey(_knock),
+        findsOneWidget,
+        reason: 'the unanswered knock stays put',
+      );
       await tester.tap(find.text('Not now'));
       await handle.answer;
     });
 
     testWidgets(
-        'a second knock replaces the first without stranding its asker',
-        (tester) async {
-      final handle = await _pumpInvite(tester, body: 'first knock');
-      await tester.tap(find.byKey(_invite));
-      await tester.pump();
-      await tester.pump();
-      final first = handle.answer;
+      'a second knock replaces the first without stranding its asker',
+      (tester) async {
+        final handle = await _pumpInvite(tester, body: 'first knock');
+        await tester.tap(find.byKey(_invite));
+        await tester.pump();
+        await tester.pump();
+        final first = handle.answer;
 
-      final secondHandle = await _pumpInvite(tester, body: 'second knock');
-      await tester.tap(find.byKey(_invite));
-      await tester.pump();
-      await tester.pump();
-      expect(find.textContaining('second knock'), findsOneWidget);
-      await tester.tap(find.text('Join game'));
-      final second = await secondHandle.answer;
-      await tester.pump();
-      expect(second, isTrue);
+        final secondHandle = await _pumpInvite(tester, body: 'second knock');
+        await tester.tap(find.byKey(_invite));
+        await tester.pump();
+        await tester.pump();
+        expect(find.textContaining('second knock'), findsOneWidget);
+        await tester.tap(find.text('Join game'));
+        final second = await secondHandle.answer;
+        await tester.pump();
+        expect(second, isTrue);
 
-      expect(await first, isFalse,
-          reason: 'a displaced knock answers not-joined, never hangs');
-      expect(find.byKey(_knock), findsNothing);
-    });
+        expect(
+          await first,
+          isFalse,
+          reason: 'a displaced knock answers not-joined, never hangs',
+        );
+        expect(find.byKey(_knock), findsNothing);
+      },
+    );
   });
 
   testWidgets('a long knock body caps at the family width', (tester) async {

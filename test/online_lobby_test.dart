@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/screens/online_lobby_screen.dart';
 import 'package:game_club/services/friend_client.dart';
+import 'package:game_club/services/friend_signals.dart';
 import 'package:game_club/services/online_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -77,6 +78,43 @@ void main() {
         reason: 'the same top-right card confirms the copy',
       );
     });
+  });
+
+  testWidgets('the lobby friends badge follows the shared watcher count', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'gc.onlinePlayerId': 'me',
+      'gc.onlineName': 'Me',
+    });
+    friendSignals.reset();
+    friendSignals.incomingRequests.value = 2;
+    addTearDown(friendSignals.reset);
+
+    final adopted = OnlineClient('ws://via.test/ws', seatId: 'me', name: 'Me');
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: OnlineLobbyScreen(
+            startup: OnlineStartup(adoptedClient: adopted),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final badge = find.byKey(const Key('lobby-friends-badge'));
+    expect(badge, findsOneWidget);
+    expect(
+      tester.widget<Badge>(badge).isLabelVisible,
+      isTrue,
+      reason: 'the app-level watcher read the request before the tray poll',
+    );
+    expect(find.byTooltip('Friends (2 requests waiting)'), findsOneWidget);
+
+    friendSignals.incomingRequests.value = 0;
+    await tester.pump();
+    expect(tester.widget<Badge>(badge).isLabelVisible, isFalse);
   });
 
   group('table size picker', () {

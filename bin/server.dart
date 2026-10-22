@@ -82,6 +82,21 @@ import 'package:sqlite3/sqlite3.dart';
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
 
+/// Tells a seat's live socket that its friends picture moved.
+///
+/// The friends store is HTTP, not the room protocol, so a waiting invitee
+/// in a room would otherwise learn about a new invite only on the next
+/// five-second poll. The payload is intentionally empty: the app's watcher
+/// reads `/friends/state` itself, keeping one source of truth. Players not
+/// in a room have no socket; their poll is the delivery path.
+void _pulseFriendSeat(String seatId) {
+  final id = seatId.trim();
+  if (id.isEmpty) return;
+  for (final room in authority.rooms.values) {
+    room.sendToSeat(id, <String, dynamic>{'type': 'friendPulse'});
+  }
+}
+
 /// Durable admin history (presence, bans, audit, room lifecycle). Tests
 /// swap in an in-memory store; main() points it at the same SQLite file
 /// as the leaderboard so one DB holds everything the dashboard shows.
@@ -1391,6 +1406,9 @@ Future<shelf.Response> friendsInviteHandler(shelf.Request req) async {
       burst: _friendActionsBurst,
       daily: _friendActionsDaily,
     );
+    // Real-time when the invitee is at a table; the app-level poll covers
+    // the home screen and the friends tray.
+    _pulseFriendSeat(invite.toSeat);
     return _friendJson({'ok': true, 'invite': invite.toJson()});
   } on ArgumentError catch (e) {
     return _friendBadRequest(e.message.toString());

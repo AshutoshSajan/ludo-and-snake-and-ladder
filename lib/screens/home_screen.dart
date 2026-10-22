@@ -5,6 +5,7 @@ import '../app_router.dart';
 import '../app_routes.dart';
 import '../engine/core/player_profiles.dart';
 import '../providers/app_providers.dart';
+import '../services/friend_signals.dart';
 import '../ui/admin_badge.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/ludo/ludo_board_painter.dart';
@@ -143,7 +144,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         name: AppRoutes.friends,
                         builder: (_) => const FriendsScreen(),
                       ),
-                      icon: const Icon(Icons.group_outlined),
+                      // The app-level watcher owns this count, so the dot is
+                      // already warm before the player opens the lobby or
+                      // the friends tray.
+                      icon: ValueListenableBuilder<int>(
+                        valueListenable: friendSignals.incomingRequests,
+                        builder: (context, pending, _) => Badge(
+                          key: const ValueKey('home-friends-badge'),
+                          isLabelVisible: pending > 0,
+                          backgroundColor: AppColors.danger,
+                          textColor: Colors.white,
+                          label: Text('$pending'),
+                          child: const Icon(Icons.group_outlined),
+                        ),
+                      ),
                       tooltip: 'Friends',
                     ),
                     const SizedBox(width: 10),

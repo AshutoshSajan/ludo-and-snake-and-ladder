@@ -408,7 +408,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                 e is FriendException
                     ? e.text
                     : 'The play request did not reach them — check your '
-                        'connection and try Play again.',
+                          'connection and try Play again.',
               );
             }
           });
@@ -442,6 +442,13 @@ class _FriendsScreenState extends State<FriendsScreen> {
       lobby.awaitRoomCode(),
       handoff.popped.then((_) => null),
     ]);
+    // `maybeInvite` is the listener path, but a `joined` frame that landed
+    // before the listener was attached would leave an open room with no
+    // invite in it. The awaited code is the same fact: if the room exists
+    // and nothing has been sent, send it now.
+    if (!sent && formed != null && formed.isNotEmpty) {
+      maybeInvite();
+    }
     lobby.removeListener(maybeInvite);
     if (!sent && (formed == null || formed.isEmpty)) {
       _abandonHandoff(handoff);

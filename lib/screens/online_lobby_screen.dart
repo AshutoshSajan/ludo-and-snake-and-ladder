@@ -13,6 +13,7 @@ import '../ui/shared/voice_button.dart';
 
 import '../engine/ludo/ludo_models.dart';
 import '../services/friend_client.dart';
+import '../services/friend_signals.dart';
 import '../services/join_link.dart';
 import '../services/online_client.dart';
 import '../services/share_link.dart';
@@ -20,6 +21,7 @@ import '../services/storage_service.dart';
 import '../ui/ludo/ludo_view.dart';
 import '../ui/snakes/online_snakes_view.dart';
 import 'friends_screen.dart';
+import 'invite_watcher.dart';
 import '../ui/theme.dart';
 
 /// Builds the client a connect or invite handoff uses. Production leaves
@@ -203,11 +205,20 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   @override
   void initState() {
     super.initState();
+    // The app-level watcher is the fastest reader of the friends state;
+    // its shared count paints this badge immediately instead of waiting
+    // for this screen's slower tray poll.
+    friendSignals.incomingRequests.addListener(_onFriendSignals);
+    _incomingRequests = friendSignals.incomingRequests.value;
     // The inviter's handoff: an already-live client is adopted before
     // the first build, so the lobby panel draws with it from frame one.
     final adopted = widget.startup?.adoptedClient;
     if (adopted != null) {
       adopted.addListener(() => setState(() {}));
+      // A server push is the real-time half of the friends lifecycle: the
+      // watcher still owns the poll, this just tells it there is something
+      // to read now instead of on the next five-second beat.
+      adopted.onFriendsPulse = inviteWatcher.poke;
       _client = adopted;
     }
     _restoreIdentity();
@@ -235,6 +246,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         name: client.name,
       );
       if (!mounted) return;
+      friendSignals.update(
+        requests: state.incoming.length,
+        invites: state.invites.where((i) => i.pending).length,
+      );
       if (state.incoming.length != _incomingRequests) {
         setState(() => _incomingRequests = state.incoming.length);
       }
@@ -407,8 +422,17 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     await StorageService().saveOnlineName(name);
   }
 
+  void _onFriendSignals() {
+    if (!mounted) return;
+    final pending = friendSignals.incomingRequests.value;
+    if (pending != _incomingRequests) {
+      setState(() => _incomingRequests = pending);
+    }
+  }
+
   @override
   void dispose() {
+    friendSignals.incomingRequests.removeListener(_onFriendSignals);
     _friendsPoll?.cancel();
     _friendClient?.close();
     _client?.dispose();
@@ -424,9 +448,11 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       return;
     }
     final code = normalizeJoinCode(codeOverride ?? _codeCtrl.text);
-    if (!createRoom && code.length != 4) {
+    if (!createRoom && !RegExp(r'^[A-Za-z0-9]{4}$').hasMatch(code)) {
       _showSnack(
-        _spectate ? 'Enter a room code to watch' : 'Room codes are 4 letters',
+        _spectate
+            ? 'Enter a 4-character room code to watch'
+            : 'Room codes are 4 letters or digits',
       );
       return;
     }
@@ -444,6 +470,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       // on the first lobby feed.
       capacity: createRoom ? _players : 4,
     )..addListener(() => setState(() {}));
+    client.onFriendsPulse = inviteWatcher.poke;
     setState(() {
       _inviteNeedsName = false;
       _client = client;
@@ -516,12 +543,14 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 if (client != null)
                   IconButton(
                     icon: Badge(
+                      key: const ValueKey('lobby-friends-badge'),
                       isLabelVisible: _incomingRequests > 0,
-                      backgroundColor: AppColors.gold,
+                      backgroundColor: AppColors.danger,
+                      textColor: Colors.white,
                       label: Text(
                         '$_incomingRequests',
                         style: const TextStyle(
-                          color: AppColors.ink,
+                          color: Colors.white,
                           fontSize: 9,
                           fontWeight: FontWeight.w900,
                         ),
@@ -760,7 +789,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 decoration: InputDecoration(
                   counterText: '',
                   labelText: 'Room code',
-                  hintText: 'ABCD',
+                  hintText: 'A2B3',
                   labelStyle: const TextStyle(color: AppColors.ivory),
                   hintStyle: TextStyle(color: AppColors.ivory.withAlpha(90)),
                   enabledBorder: _border(AppColors.ivory.withAlpha(90)),

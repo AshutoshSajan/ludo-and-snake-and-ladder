@@ -437,6 +437,21 @@ void _runFriendStoreContract(
         expect(list.where((i) => i.isPending).length, 1);
       });
 
+      test('accepts a generated room code that contains a digit', () async {
+        // GameServer mints room codes from letters *and* 2–9. The invite
+        // validator used to accept letters only, so a table with a digit
+        // in its code sent a 400 and the friend never heard the knock.
+        final invite = await store.sendInvite(
+          'p1',
+          'A',
+          'p2',
+          'ludo',
+          code: 'AB12',
+        );
+        expect(invite.code, 'AB12');
+        expect((await store.invites('p2')).single.code, 'AB12');
+      });
+
       test('invites only go to friends, for valid games', () async {
         await store.serve('p3', 'C');
         await expectLater(

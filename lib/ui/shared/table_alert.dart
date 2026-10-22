@@ -36,12 +36,16 @@ void showTableAlert(
   // the same canvas. An app-level listener holding the *navigator's*
   // context cannot use the lookup — the overlay is below that context,
   // not above it — so it passes the navigator's overlay directly.
-  final overlay =
-      onOverlay ?? Overlay.of(context, rootOverlay: true);
+  final overlay = onOverlay ?? Overlay.of(context, rootOverlay: true);
   // A live knock outranks a five-second line: paragraph below in
   // [showInviteKnock]. The line is dropped rather than queued — a table
   // line's moment is the moment it happens; held longer it would lie.
-  if (_showingKind == _CardKind.knock) return;
+  //
+  // Only a *live* knock outranks it. A card whose overlay was torn down
+  // (the screen changed, or a widget test moved to its next app) leaves
+  // the kind behind; checking mount state lets the next line take the
+  // corner instead of being dropped forever.
+  if (_showingKind == _CardKind.knock && _showing?.mounted == true) return;
   final generation = ++_generation;
   // A table event can be announced mid-frame (a listener reads its flag
   // and fires the moment it finds it), so the insert waits one frame —
@@ -52,7 +56,7 @@ void showTableAlert(
     if (generation != _generation) return;
     // Same yield, for the knock that climbed onto the corner while this
     // insert was quietly waiting for its frame.
-    if (_showingKind == _CardKind.knock) return;
+    if (_showingKind == _CardKind.knock && _showing?.mounted == true) return;
     _removeShowing();
     final entry = OverlayEntry(
       builder: (overlayContext) => Positioned(
@@ -348,67 +352,76 @@ class _KnockCardState extends State<_KnockCard> {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: AppColors.gold.withAlpha(160)),
         ),
-        child: Semantics(
-          liveRegion: true,
-          label: '${widget.title}. ${widget.body}',
-          excludeSemantics: true,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // One live announcement for the words; the answers stay
+            // outside it so screen readers (and semantic-click automation)
+            // keep Join game and Not now as separate buttons.
+            Semantics(
+              liveRegion: true,
+              label: '${widget.title}. ${widget.body}',
+              excludeSemantics: true,
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(widget.icon, size: 20, color: AppColors.gold),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      widget.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.ivory,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(widget.icon, size: 20, color: AppColors.gold),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          widget.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.ivory,
+                          ),
+                        ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    widget.body,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.ivory,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                widget.body,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.ivory,
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // The invite answer is a real decision: both targets
+                // stay at the 44px minimum the family asks for.
+                FilledButton(
+                  key: const Key('invite-knock-join'),
+                  style: confirm,
+                  onPressed: widget.onConfirm,
+                  child: Text(widget.confirmLabel),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // The invite answer is a real decision: both targets
-                  // stay at the 44px minimum the family asks for.
-                  FilledButton(
-                    key: const Key('invite-knock-join'),
-                    style: confirm,
-                    onPressed: widget.onConfirm,
-                    child: Text(widget.confirmLabel),
-                  ),
-                  const SizedBox(width: 8),
-                  TextButton(
-                    key: const Key('invite-knock-dismiss'),
-                    style: dismiss,
-                    onPressed: widget.onDismiss,
-                    child: Text(widget.dismissLabel),
-                  ),
-                ],
-              ),
-            ],
-          ),
+                const SizedBox(width: 8),
+                TextButton(
+                  key: const Key('invite-knock-dismiss'),
+                  style: dismiss,
+                  onPressed: widget.onDismiss,
+                  child: Text(widget.dismissLabel),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
       builder: (context, t, card) => Opacity(
