@@ -17,8 +17,8 @@ import '../shared/table_alert.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
 import 'snakes_stage.dart';
+import 'snakes_turn_hud.dart';
 import '../shared/sound_toggle_button.dart';
-import '../shared/turn_countdown.dart';
 import '../shared/pulse.dart';
 import '../shared/tablemates_sheet.dart';
 import '../shared/bug_report_sheet.dart';
@@ -478,6 +478,10 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                 seats: widget.client.lobbySeats,
                 mySeatId: widget.client.seatId,
               ),
+              // Whose turn and how long are the two things a player looks
+              // for, so they sit above the board instead of below it under
+              // the dice (the playtest could not find them there).
+              SnakesTurnHud(client: widget.client, state: s, status: status),
               // Voice's speaking state lives on the mic button itself (see the
               // ludo board) — nothing wedged between the seats and the board,
               // so talk never moves the board underneath the players.
@@ -507,15 +511,6 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
                   },
                 ),
               ),
-              Text(
-                status,
-                style: const TextStyle(fontSize: 14, color: Colors.white70),
-              ),
-              // The on-turn clock — snakes seats get the same standing
-              // instructions ludo does: roll within it, or the turn burns
-              // with you.
-              TurnCountdown(client: widget.client),
-              const SizedBox(height: 6),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                 child: Row(
