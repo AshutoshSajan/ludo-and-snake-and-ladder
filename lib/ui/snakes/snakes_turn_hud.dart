@@ -20,6 +20,7 @@ class SnakesTurnHud extends StatelessWidget {
     required this.client,
     required this.state,
     required this.status,
+    this.onCountdownWarn,
   });
 
   final OnlineClient client;
@@ -27,6 +28,9 @@ class SnakesTurnHud extends StatelessWidget {
 
   /// The phase line the view already derives ("Your roll!", "Moving…", …).
   final String status;
+
+  /// Sounds the ten-second warning; wired only when this seat owns the turn.
+  final VoidCallback? onCountdownWarn;
 
   @override
   Widget build(BuildContext context) {
@@ -100,7 +104,7 @@ class SnakesTurnHud extends StatelessWidget {
             ),
             if (client.turnMs != null) ...[
               const SizedBox(width: 6),
-              TurnCountdown(client: client),
+              TurnCountdown(client: client, onTenSeconds: onCountdownWarn),
             ],
           ],
         ),

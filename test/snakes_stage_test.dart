@@ -7,13 +7,17 @@
 /// desktop window the board was height-starved and narrower than the header
 /// column. The stage now picks the orientation that gives the larger board,
 /// moves the rail to the left when it does, and caps the board at the 720px
-/// reading column. A phone, where a 96px rail would shrink the board, keeps
-/// the strip.
+/// reading column. A phone, where the rail would shrink the board, keeps the
+/// strip.
 ///
 /// A second playtest (781x768 browser window) found the board alone centred:
 /// the rail hung outside the page column while an equal band of felt sat
 /// unused on the right. The rail, gap and board now centre as one group, so
 /// the two side margins match and the rail stays inside the reading width.
+///
+/// A third playtest (phone-width window) found the 96px rail too wide for a
+/// phone column; it is 64 now, so a short window that prefers the rail still
+/// gets a board wider than the strip would have given it.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -91,6 +95,24 @@ void main() {
     expect(m.boardSize, closeTo(390, 0.5));
     expect(m.homeRect.top, greaterThanOrEqualTo(m.boardRect.bottom - 0.5));
     expect(m.homeRect.width, closeTo(m.boardRect.width, 0.5));
+  });
+
+  test('the side rail is 64px wide, not a quarter of a phone column', () {
+    // A short window where the rail yields the larger board. At 96px it was
+    // 316px of board; the narrow rail returns 32px to the square.
+    final m = SnakesStageMetrics.layout(
+      available: const Size(390, 380),
+      players: 4,
+    );
+
+    expect(m.homeOnLeft, isTrue);
+    expect(m.homeRect.width, SnakesStageMetrics.homeRailWidth);
+    expect(SnakesStageMetrics.homeRailWidth, 64);
+    expect(
+      m.boardSize,
+      greaterThan(390 - SnakesStageMetrics.homeStripH),
+      reason: 'the rail must earn its place by growing the board',
+    );
   });
 
   test('four chips sit in one column inside the rail, not one row', () {

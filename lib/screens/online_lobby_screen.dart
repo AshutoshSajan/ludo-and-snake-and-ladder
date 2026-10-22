@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app_router.dart';
 import '../app_routes.dart';
+import '../providers/app_providers.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/shared/player_actions_sheet.dart';
 import '../ui/shared/responsive_chat_dock.dart';
@@ -17,6 +19,7 @@ import '../services/friend_signals.dart';
 import '../services/join_link.dart';
 import '../services/online_client.dart';
 import '../services/share_link.dart';
+import '../services/sound_service.dart';
 import '../services/storage_service.dart';
 import '../ui/ludo/ludo_view.dart';
 import '../ui/snakes/online_snakes_view.dart';
@@ -192,6 +195,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   /// today's open four-seat table.
   int _players = 4;
 
+  /// Seat ids on the previous roster. The first roster primes the set — the
+  /// people already in the room must not chime on arrival — and every id that
+  /// appears afterwards is a player taking a seat.
+  Set<String> _knownSeatIds = {};
+  bool _seatsPrimed = false;
+
   /// The persisted online identity: a stable player id plus a display name.
   ///
   /// Both used to be asked for, or invented, every time. The id in particular
@@ -220,6 +229,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       // to read now instead of on the next five-second beat.
       adopted.onFriendsPulse = inviteWatcher.poke;
       _client = adopted;
+      _watchSeats(adopted);
     }
     _restoreIdentity();
     // The friends badge lives as long as the lobby does: 8s polls from
@@ -430,6 +440,38 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     }
   }
 
+  /// Announces a player taking a seat with the join chime.
+  ///
+  /// The roster repeats on every change and after a reconnect, so the new-id
+  /// set difference is the join event. The first roster only primes the set
+  /// (walking into a room must not chime at the people already there), our
+  /// own seat never chimes, and a reconnecting seat keeps its id so it stays
+  /// silent — the sound means "someone new sat down", not "the roster moved".
+  void _watchSeats(OnlineClient client) {
+    client.onSeats = () {
+      if (!mounted || !identical(client, _client)) return;
+      final ids = {
+        for (final s in client.lobbySeats)
+          if (s.seatId.isNotEmpty) s.seatId,
+      };
+      if (!_seatsPrimed) {
+        _seatsPrimed = true;
+        _knownSeatIds = ids;
+        return;
+      }
+      final joined = ids
+          .difference(_knownSeatIds)
+          .where((id) => id != client.seatId);
+      _knownSeatIds = ids;
+      if (joined.isEmpty) return;
+      ProviderScope.containerOf(
+        context,
+        listen: false,
+      ).read(soundServiceProvider).join();
+      Haptics.light();
+    };
+  }
+
   @override
   void dispose() {
     friendSignals.incomingRequests.removeListener(_onFriendSignals);
@@ -471,6 +513,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       capacity: createRoom ? _players : 4,
     )..addListener(() => setState(() {}));
     client.onFriendsPulse = inviteWatcher.poke;
+    _seatsPrimed = false;
+    _knownSeatIds = {};
+    _watchSeats(client);
     setState(() {
       _inviteNeedsName = false;
       _client = client;
@@ -511,6 +556,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   Future<void> _disconnect() async {
     await _client?.disconnect();
+    _seatsPrimed = false;
+    _knownSeatIds = {};
     if (mounted) setState(() => _client = null);
   }
 

@@ -24,6 +24,11 @@ import '../theme.dart';
 /// are equal. The rail orientation is unchanged; only its horizontal anchor
 /// moved.
 ///
+/// Third playtest round, on a phone-width window: the rail was 96px of a
+/// 368px content column — a quarter of the screen for a column of 34px
+/// chips. The rail is 64 now, so the board gains the difference wherever the
+/// side layout is the one that yields the larger square.
+///
 /// Both the offline and online views use this one class. Their home panels,
 /// pawn positions and (offline) ghost all read the same centres, so the two
 /// modes cannot drift apart again.
@@ -56,7 +61,7 @@ class SnakesStageMetrics {
   /// [SnakesBoardPainter.squareCenter] result.
   Offset get boardOrigin => boardRect.topLeft;
 
-  static const double homeRailWidth = 96;
+  static const double homeRailWidth = 64;
   static const double homeRailGap = 10;
   static const double homePad = 8;
   static const double homeCaptionH = 20;
@@ -272,24 +277,30 @@ class SnakesHomePanel extends StatelessWidget {
               top: SnakesStageMetrics.homePad,
               child: Column(
                 children: [
-                  const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.home_rounded,
-                        size: 15,
-                        color: AppColors.gold,
-                      ),
-                      SizedBox(width: 5),
-                      Text(
-                        'Home',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.ivory,
+                  // A 64px rail leaves 56px inside the panel, and the word
+                  // plus the house glyph can exceed that at large text scales.
+                  // Scale the lockup down rather than clipping "Home".
+                  const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.home_rounded,
+                          size: 15,
+                          color: AppColors.gold,
                         ),
-                      ),
-                    ],
+                        SizedBox(width: 5),
+                        Text(
+                          'Home',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.ivory,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(

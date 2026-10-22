@@ -122,6 +122,16 @@ class SoundService {
   Future<void> win() => _play('win');
   Future<void> champion() => _play('champion');
 
+  /// The on-turn seat's ten-second warning: two falling beeps, short enough
+  /// to sit under the clock ticking and deliberately unlike the chat chime so
+  /// a warning is never mistaken for a message.
+  Future<void> countdown() => _play('countdown');
+
+  /// Someone took a seat at the table: two rising notes, the room's version
+  /// of "you are no longer waiting alone". Distinct from the falling warning
+  /// and from the chat chime.
+  Future<void> join() => _play('join');
+
   /// The chat notification: a rising two-note chime, deliberately unlike the
   /// single low blips the game sounds use, so a message is never mistaken for
   /// a dice roll or a capture.
