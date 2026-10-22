@@ -820,7 +820,8 @@ class OnlineClient extends ChangeNotifier {
     _openAndHello();
   }
 
-  void _onClosed() {    if (_userClosed) {
+  void _onClosed() {
+    if (_userClosed) {
       status = OnlineStatus.idle;
       notifyListeners();
       return;
@@ -1045,6 +1046,11 @@ class OnlineClient extends ChangeNotifier {
         // Re-baselining the client chip here is the point — the deadline is
         // the seat's full window from right now.
         turnMs = (msg['turnMs'] as num?)?.toInt();
+      case 'friendPulse':
+        // The payload is deliberately empty: the watcher reads the state
+        // bundle itself, so the socket never becomes a second source of
+        // truth for requests or invites.
+        onFriendsPulse?.call();
       case 'chat':
         final line = ChatLine.fromJson(msg, serverUrl: serverUrl);
         chat.add(line);
@@ -1126,6 +1132,11 @@ class OnlineClient extends ChangeNotifier {
   /// can play the notification. Separate from [onChat] on purpose: [onChat]
   /// fires for every line, and only the unread ones should make a noise.
   void Function(ChatLine message)? onMessageArrived;
+
+  /// A server push that the friends picture moved — a new request or play
+  /// invite. The app-level [InviteWatcher] owns the poll; this hook lets a
+  /// live socket turn the next five-second beat into an immediate read.
+  void Function()? onFriendsPulse;
 
   // ------------------------------------------------------- voice chat
   //

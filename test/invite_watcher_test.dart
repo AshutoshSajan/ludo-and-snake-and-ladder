@@ -31,9 +31,11 @@ import 'package:http/testing.dart';
 
 import 'package:game_club/screens/invite_watcher.dart';
 import 'package:game_club/services/friend_client.dart';
+import 'package:game_club/services/friend_signals.dart';
 
 void main() {
   const interval = Duration(milliseconds: 50);
+  setUp(friendSignals.reset);
   const inviteRow = {
     'id': 7,
     'from': {'seatId': 'buddy', 'name': 'Swift Otter', 'code': 'JKXQWB'},
@@ -46,29 +48,28 @@ void main() {
 
   Future<InviteWatcher> watcherWith(
     MockClient mock, {
-    ({String seatId, String name}) identity = const (
-      seatId: 'p2',
-      name: 'Bo',
-    ),
+    ({String seatId, String name}) identity = const (seatId: 'p2', name: 'Bo'),
     Duration? every,
+    Future<void> Function()? chime,
   }) async {
     final watcher = InviteWatcher(
       interval: every ?? interval,
-      clientFactory: () => FriendClient(
-        serverUrl: 'wss://test/ws',
-        httpClient: mock,
-      ),
+      clientFactory: () =>
+          FriendClient(serverUrl: 'wss://test/ws', httpClient: mock),
       identityOverride: Future.value(identity),
+      // Tests must not touch platform audio channels; the production
+      // chime is covered by the service's own test.
+      chime: chime ?? () async {},
     );
     return watcher;
   }
 
   Widget shell() => ProviderScope(
-        child: MaterialApp(
-          navigatorKey: InviteWatcher.navigatorKey,
-          home: Scaffold(body: const Center(child: Text('home'))),
-        ),
-      );
+    child: MaterialApp(
+      navigatorKey: InviteWatcher.navigatorKey,
+      home: Scaffold(body: const Center(child: Text('home'))),
+    ),
+  );
 
   testWidgets('a pending invite knocks and Join takes them to the room', (
     tester,
@@ -109,12 +110,17 @@ void main() {
     await tester.pump();
     // The card slides in over 220ms like its family — settle the entrance.
     await tester.pump(const Duration(milliseconds: 260));
-    expect(find.text('Play invite'), findsOneWidget,
-        reason:
-            'the invitation request shows up wherever the invitee is, not '
-            'only inside the friends tray');
-    expect(find.textContaining('Swift Otter invites you to Ludo'),
-        findsOneWidget);
+    expect(
+      find.text('Play invite'),
+      findsOneWidget,
+      reason:
+          'the invitation request shows up wherever the invitee is, not '
+          'only inside the friends tray',
+    );
+    expect(
+      find.textContaining('Swift Otter invites you to Ludo'),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('Join game'));
     await tester.pumpAndSettle();
@@ -123,15 +129,17 @@ void main() {
       (r) => r.url.path == '/friends/invite/respond',
       orElse: () => throw StateError('no respond call'),
     );
-    final answered =
-        jsonDecode(respond.body) as Map<String, dynamic>;
+    final answered = jsonDecode(respond.body) as Map<String, dynamic>;
     expect(answered['accept'], isTrue);
     expect(answered['id'], 7);
     // And the app is no longer on 'home': the lobby — which lists the
     // room it just joined — owns the screen.
     expect(find.text('home'), findsNothing);
-    expect(find.textContaining('Ludo'), findsWidgets,
-        reason: 'the room screen came up ahead of everything else');
+    expect(
+      find.textContaining('Ludo'),
+      findsWidgets,
+      reason: 'the room screen came up ahead of everything else',
+    );
     watcher.stop();
   });
 
@@ -168,13 +176,91 @@ void main() {
       await tester.pump(); // the immediate pulse — no interval was awaited
       await tester.pump(const Duration(milliseconds: 260)); // entrance frame
 
-      expect(find.text('Play invite'), findsOneWidget,
-          reason: 'start() polls before the periodic cadence, the same trip '
-              'an app-refocus pulse drives');
+      expect(
+        find.text('Play invite'),
+        findsOneWidget,
+        reason:
+            'start() polls before the periodic cadence, the same trip '
+            'an app-refocus pulse drives',
+      );
       expect(posts.where((r) => r.url.path == '/friends/state'), isNotEmpty);
       watcher.stop();
     },
   );
+
+  testWidgets('a new friend request lights the Friends count and speaks once', (
+    tester,
+  ) async {
+    var deliverRequest = false;
+    var chimes = 0;
+    final watcher = await watcherWith(
+      MockClient((req) async {
+        if (req.url.path == '/friends/state') {
+          return http.Response(
+            jsonEncode({
+              'ok': true,
+              'me': {'seatId': 'p2', 'name': 'Bo', 'code': 'PRK7VW'},
+              'friends': [],
+              'incoming': [
+                if (deliverRequest)
+                  {
+                    'id': 12,
+                    'from': {
+                      'seatId': 'buddy',
+                      'name': 'Swift Otter',
+                      'code': 'JKXQWB',
+                    },
+                    'to': {'seatId': 'p2', 'name': 'Bo', 'code': 'PRK7VW'},
+                    'createdAt': 20,
+                  },
+              ],
+              'outgoing': [],
+              'blocked': [],
+              'table': [],
+              'invites': [],
+            }),
+            200,
+          );
+        }
+        return http.Response('{}', 200);
+      }),
+      chime: () async {
+        chimes++;
+      },
+    );
+    await tester.pumpWidget(shell());
+    watcher.start();
+    await tester.pump(interval); // first poll primes the request set
+    await tester.pump();
+    expect(friendSignals.incomingRequests.value, 0);
+
+    deliverRequest = true;
+    await tester.pump(interval);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 260));
+
+    expect(
+      friendSignals.incomingRequests.value,
+      1,
+      reason: 'the home and lobby badges read this one shared count',
+    );
+    expect(
+      find.textContaining('Swift Otter sent you a friend request'),
+      findsOneWidget,
+    );
+    expect(chimes, 1, reason: 'one arrival speaks once');
+
+    // A repeated read of the same request must stay quiet.
+    await tester.pump(interval);
+    await tester.pump();
+    expect(chimes, 1);
+    expect(
+      find.textContaining('Swift Otter sent you a friend request'),
+      findsOneWidget,
+      reason: 'the card stays readable, it is not raised again',
+    );
+    watcher.stop();
+  });
 
   testWidgets(
     'a failed answer toasts where to try again and re-knocks next poll',
@@ -218,11 +304,16 @@ void main() {
       // frame and then slides in, so settle that surface before reading it.
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Could not reach their table'),
-          findsOneWidget,
-          reason: 'the failed answer must say itself, not fail silently');
-      expect(find.text('home'), findsOneWidget,
-          reason: 'nothing was pushed on a dead table answer');
+      expect(
+        find.textContaining('Could not reach their table'),
+        findsOneWidget,
+        reason: 'the failed answer must say itself, not fail silently',
+      );
+      expect(
+        find.text('home'),
+        findsOneWidget,
+        reason: 'nothing was pushed on a dead table answer',
+      );
 
       // The invite is back on the next poll — one dead answer must not
       // strand the player with a knock they can never press again.
@@ -233,8 +324,11 @@ void main() {
 
       await tester.tap(find.text('Join game'));
       await tester.pumpAndSettle();
-      expect(find.text('home'), findsNothing,
-          reason: 'the retry walks them into the room');
+      expect(
+        find.text('home'),
+        findsNothing,
+        reason: 'the retry walks them into the room',
+      );
       watcher.stop();
     },
   );
@@ -277,8 +371,11 @@ void main() {
     // Polls keep happening; the same invite must not knock again.
     await tester.pump(interval * 3);
     await tester.pump();
-    expect(find.text('Join game'), findsNothing,
-        reason: 'one knock per invite per session');
+    expect(
+      find.text('Join game'),
+      findsNothing,
+      reason: 'one knock per invite per session',
+    );
     watcher.stop();
   });
 
@@ -334,8 +431,11 @@ void main() {
     watcher.start();
     await tester.pump(interval);
     await tester.pump(interval * 3);
-    expect(posts, isEmpty,
-        reason: 'a guest has nobody to invite them anywhere');
+    expect(
+      posts,
+      isEmpty,
+      reason: 'a guest has nobody to invite them anywhere',
+    );
     watcher.stop();
   });
 }

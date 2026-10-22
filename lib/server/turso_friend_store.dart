@@ -958,8 +958,12 @@ class TursoFriendStore implements FriendStore {
         'game must be one of ${friendInviteGames.join(', ')}',
       );
     }
-    if (code != null && !RegExp(r'^[a-zA-Z]{4}$').hasMatch(code.trim())) {
-      throw ArgumentError('room code must be 4 letters');
+    // Room codes are generated from letters *and digits* (see
+    // GameServer's alphabet), so an invite must accept the same shape.
+    // A letters-only check rejected every table whose code happened to
+    // contain a digit — the invite never reached the friend.
+    if (code != null && !RegExp(r'^[a-zA-Z0-9]{4}$').hasMatch(code.trim())) {
+      throw ArgumentError('room code must be 4 letters or digits');
     }
     await _ensureSchema();
     if (!await areFriends(from, to)) {

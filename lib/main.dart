@@ -8,11 +8,6 @@ import 'providers/app_providers.dart';
 import 'screens/invite_watcher.dart';
 import 'ui/theme.dart';
 
-/// The app-wide play-invite listener. One instance for the whole app —
-/// it picks a fresh identity from storage each poll, so a guest who goes
-/// online later starts hearing knocks without a restart.
-final InviteWatcher inviteWatcher = InviteWatcher();
-
 void main() {
   // Path URLs (…/admin) instead of hash URLs (…/#/admin) on web, so the
   // server's SPA fallback and deep links resolve to real routes. No-op
