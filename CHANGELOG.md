@@ -7,6 +7,20 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(ui): redesign the club around a green-room identity
+- Feat(lobby): chime when a player takes an online seat
+- Feat(snakes): show seat strikes, warn the clock, and slim the home rail
+- Feat(friends): deliver live requests and play invites
+- Feat(settings): redesign the settings surface
+- Feat(chat): collapse the docked table chat
+- Feat(web): real URL routes, back/forward and direct-join links
+- Feat(leaderboard): rebuild the club standings as a podium and field table
+- Feat(chat): dock table chat beside the table on wide windows
+- Feat(invite): the knock joins the table family as its own top-right card
+- Feat(tutorial): a one-time ask and a guided walkthrough
+- Feat(alerts): the table's necessary lines are spoken top right
+- Feat(rules): a How to play page in Settings
+- Feat(online): players at this table — add a friend from the board
 - Feat(friends): play invites knock wherever the invitee is
 - Feat(friends): the players seated at your table list themselves
 - Feat(lobby): one-tap friend requests on each room seat row
@@ -29,6 +43,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Feat(admin): custom dashboard with DB-backed rooms, auth and stats
 - Add CodeQL analysis workflow configuration
 ### Documentation
+- Docs: no hook writes the changelog — CI release-prep at the promotion only
+- Docs(conventions): changelog is written by CI at the promotion, never on dev PRs
 - Docs(roadmap): graduate shipped in-flight items
 - Docs(ux): make the player experience part of every feature
 - Docs: redesign banner and restructure README
@@ -36,6 +52,23 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ci): always regenerate the changelog on release prep
+- Fix(ci): guard OpenCode commands against PR head changes
+- Fix(home): keep the first-run ask off deep-linked screens
+- Fix(game-ui): hug the board with the play HUD
+- Fix(audio): play effects through a preloaded pool
+- Fix(friends): keep friendships and DMs on Turso across redeploys
+- Fix(ludo): ignore a late tap after the forced move is in flight
+- Fix(ludo): auto-play the only legal move online too
+- Fix(snakes): home rail on the left, board sized to the page column
+- Fix(playtest): ladder foot, local lamps, corner toasts and the invite handoff
+- Fix(ludo): the corner turn clock survives its slab instead of clipping
+- Fix(friends): a play handoff that cannot open a table says so
+- Fix(ludo): the corner lamp loses its words
+- Fix(online): the strip drops its miss chip — dots own the miss story
+- Fix(friends): the invite knock pulses at start and on every refocus
+- Fix(online): the win and removal cards share one card shape
+- Fix(ludo): the roll prompt rides the on-turn corner lamp
 - Fix(ui): the home cards sit in the column every screen uses
 - Fix(web): revalidate the build-derived assets so new icons ship
 - Fix(ui): toasts and popups keep the column, the podium keeps a card
@@ -81,6 +114,11 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(online): spend the cold-start budget on refused first connections
 - Fix(extension): grant wss:// so online play can reach the game server
 ### Other
+- Potential fix for pull request finding 'CodeQL / Untrusted Checkout TOCTOU'
+- Ci(review): add the OpenCode pull request reviewer
+- Ci(changelog): the dev-PR changelog guard, in its own pull_request-only workflow
+- Revert "ci(changelog): a dev PR that touches CHANGELOG.md fails the guard"
+- Ci(changelog): a dev PR that touches CHANGELOG.md fails the guard
 - Ci(deploy): only main deploys to Netlify, and superseded action runs cancel
 - Refactor(friends): the room's own rows replace the all-users directory
 - Ci(web): build web on every push, not only before main
@@ -92,6 +130,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Ci: make release prep open a PR and run before the changelog check
 ### Performance
 - Perf(board): smooth mobile web play and reachable pawn taps
+### Testing
+- Test(ludo): pin the manual-tap race against the forced move
 ## [v1.2.1] - 2026-10-02
 ### Fixed
 - Fix three things that each blocked the Firefox release on their own
