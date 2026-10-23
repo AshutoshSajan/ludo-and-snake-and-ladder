@@ -240,7 +240,7 @@ class _OnlineDoor extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClubCard(
       background: AppColors.gold,
-      borderColor: AppColors.brassDeep.withValues(alpha: 0.55),
+      borderColor: AppColors.darkInkSoft.withValues(alpha: 0.35),
       padding: const EdgeInsets.fromLTRB(16, 15, 14, 15),
       onTap: onTap,
       child: Row(
@@ -249,7 +249,7 @@ class _OnlineDoor extends StatelessWidget {
             width: 46,
             height: 46,
             decoration: const BoxDecoration(
-              color: AppColors.ink,
+              color: AppColors.feltDeep,
               shape: BoxShape.circle,
             ),
             child: const Icon(Icons.wifi, color: AppColors.gold, size: 22),
@@ -261,17 +261,20 @@ class _OnlineDoor extends StatelessWidget {
               children: [
                 Text(
                   'Play Online',
-                  style: Theme.of(context).textTheme.headlineSmall
-                      ?.copyWith(color: AppColors.ink, fontSize: 23, height: 1),
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    color: AppColors.darkInk,
+                    fontSize: 23,
+                    height: 1,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 const Text(
                   'Rooms, table chat, voice and the club leaderboard.',
                   style: TextStyle(
                     fontFamily: AppFonts.body,
-                    color: AppColors.inkSoft,
+                    color: AppColors.darkInkSoft,
                     fontSize: 11.5,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -282,13 +285,13 @@ class _OnlineDoor extends StatelessWidget {
             width: 34,
             height: 34,
             decoration: BoxDecoration(
-              color: AppColors.ink.withValues(alpha: 0.10),
+              color: AppColors.darkInk.withValues(alpha: 0.10),
               shape: BoxShape.circle,
             ),
             child: const Icon(
               Icons.arrow_forward,
               size: 17,
-              color: AppColors.ink,
+              color: AppColors.darkInk,
             ),
           ),
         ],

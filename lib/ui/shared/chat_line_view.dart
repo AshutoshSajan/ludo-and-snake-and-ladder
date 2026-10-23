@@ -187,7 +187,7 @@ class _Header extends StatelessWidget {
                 style: TextStyle(
                   // The yellow seat's ink is dark for legibility on yellow.
                   color: line.color == LudoColor.yellow
-                      ? AppColors.ink
+                      ? AppColors.darkInk
                       : AppColors.ivory,
                   fontSize: (fontSize - 3).clamp(9, 12),
                   fontWeight: FontWeight.w900,
@@ -455,7 +455,7 @@ class _VoicePillState extends State<VoicePill> {
   Widget build(BuildContext context) {
     final trailColor = widget.accent;
     final buttonFg = widget.accent == AppColors.ludoYellow
-        ? AppColors.ink
+        ? AppColors.darkInk
         : AppColors.ivory;
     return SizedBox(
       width: widget.width,

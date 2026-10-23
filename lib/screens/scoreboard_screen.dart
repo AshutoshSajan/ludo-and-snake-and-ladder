@@ -108,7 +108,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               // the same words so one habit covers both.
               return _statePanel(
                 icon: Icons.emoji_events_outlined,
-                iconColor: AppColors.brassDeep,
+                iconColor: AppColors.gold,
                 spinner: true,
                 lines: const [
                   'Starting the leaderboard server…',
@@ -330,10 +330,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: AppColors.paperDeep.withValues(alpha: 0.72),
+                        color: AppColors.surfaceRaised,
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(
-                          color: AppColors.brass.withValues(alpha: 0.45),
+                          color: AppColors.gold.withValues(alpha: 0.45),
                         ),
                       ),
                       child: const Row(
@@ -342,14 +342,14 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                           Icon(
                             Icons.workspace_premium,
                             size: 14,
-                            color: AppColors.brassDeep,
+                            color: AppColors.gold,
                           ),
                           SizedBox(width: 5),
                           Text(
                             'CHAMPION',
                             style: TextStyle(
                               fontFamily: AppFonts.body,
-                              color: AppColors.brassDeep,
+                              color: AppColors.gold,
                               fontSize: 10,
                               fontWeight: FontWeight.w800,
                               letterSpacing: 1.1,
@@ -363,7 +363,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                       '1st',
                       style: TextStyle(
                         fontFamily: AppFonts.display,
-                        color: AppColors.brassDeep,
+                        color: AppColors.gold,
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
@@ -394,7 +394,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontFamily: AppFonts.display,
-                              color: AppColors.ink,
+                              color: AppColors.textPrimary,
                               fontSize: 24,
                               fontWeight: FontWeight.w600,
                               height: 1.05,
@@ -406,7 +406,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                             '${r.games} ${r.games == 1 ? 'game' : 'games'}',
                             style: const TextStyle(
                               fontFamily: AppFonts.body,
-                              color: AppColors.inkSoft,
+                              color: AppColors.textSecondary,
                               fontSize: 12,
                             ),
                           ),
@@ -419,7 +419,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   decoration: BoxDecoration(
-                    color: AppColors.paperDeep.withValues(alpha: 0.62),
+                    color: AppColors.surfaceDeep,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppColors.paperEdge),
                   ),
@@ -428,7 +428,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                       _StatCell(
                         value: '${r.wins}',
                         label: 'WINS',
-                        color: AppColors.brassDeep,
+                        color: AppColors.gold,
                       ),
                       _statDivider(),
                       _StatCell(value: '${r.games}', label: 'GAMES'),
@@ -475,7 +475,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     return ClubCard(
       radius: 16,
       padding: const EdgeInsets.all(12),
-      background: AppColors.paperLight,
+      background: AppColors.surfaceRaised,
       borderColor: accent.withValues(alpha: 0.45),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -521,7 +521,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontFamily: AppFonts.display,
-                    color: AppColors.ink,
+                    color: AppColors.textPrimary,
                     fontSize: 17,
                     fontWeight: FontWeight.w600,
                   ),
@@ -536,7 +536,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkSoft,
+              color: AppColors.textSecondary,
               fontSize: 10.5,
               fontWeight: FontWeight.w600,
             ),
@@ -564,7 +564,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 const Icon(
                   Icons.format_list_numbered,
                   size: 15,
-                  color: AppColors.brassDeep,
+                  color: AppColors.gold,
                 ),
                 const SizedBox(width: 8),
                 const Expanded(
@@ -574,7 +574,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontFamily: AppFonts.body,
-                      color: AppColors.inkSoft,
+                      color: AppColors.textSecondary,
                       fontSize: 10.5,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.0,
@@ -586,7 +586,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                   '${rows.length} ${rows.length == 1 ? 'player' : 'players'}',
                   style: const TextStyle(
                     fontFamily: AppFonts.body,
-                    color: AppColors.inkFaint,
+                    color: AppColors.textMuted,
                     fontSize: 10.5,
                   ),
                 ),
@@ -623,7 +623,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             'PLAYER',
             style: TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
@@ -637,7 +637,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             textAlign: TextAlign.right,
             style: TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
             ),
@@ -650,7 +650,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             textAlign: TextAlign.right,
             style: TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
             ),
@@ -663,7 +663,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             textAlign: TextAlign.right,
             style: TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
             ),
@@ -685,7 +685,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontFamily: AppFonts.body,
-                color: AppColors.inkFaint,
+                color: AppColors.textMuted,
                 fontSize: 12.5,
               ),
             ),
@@ -700,7 +700,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 fontFamily: AppFonts.body,
-                color: AppColors.ink,
+                color: AppColors.textPrimary,
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
@@ -713,7 +713,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               textAlign: TextAlign.right,
               style: const TextStyle(
                 fontFamily: AppFonts.body,
-                color: AppColors.brassDeep,
+                color: AppColors.gold,
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
               ),
@@ -726,7 +726,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               textAlign: TextAlign.right,
               style: const TextStyle(
                 fontFamily: AppFonts.body,
-                color: AppColors.inkSoft,
+                color: AppColors.textSecondary,
                 fontSize: 12,
               ),
             ),
@@ -738,7 +738,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               textAlign: TextAlign.right,
               style: const TextStyle(
                 fontFamily: AppFonts.body,
-                color: AppColors.inkFaint,
+                color: AppColors.textMuted,
                 fontSize: 11.5,
               ),
             ),
@@ -768,7 +768,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               'minute. Tap refresh to try again.';
     return _statePanel(
       icon: Icons.cloud_off,
-      iconColor: AppColors.brassDeep,
+      iconColor: AppColors.gold,
       lines: [detail],
       action: OutlinedButton.icon(
         icon: const Icon(Icons.refresh, size: 18),
@@ -797,7 +797,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               '$count finished, but nobody has been recorded in it.';
     return _statePanel(
       icon: Icons.emoji_events_outlined,
-      iconColor: AppColors.brassDeep,
+      iconColor: AppColors.gold,
       lines: [message],
     );
   }
@@ -826,9 +826,9 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 height: 64,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.paperDeep.withValues(alpha: 0.62),
+                  color: AppColors.surfaceRaised,
                   border: Border.all(
-                    color: AppColors.brass.withValues(alpha: 0.45),
+                    color: AppColors.gold.withValues(alpha: 0.45),
                   ),
                 ),
                 child: spinner
@@ -836,7 +836,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                         padding: EdgeInsets.all(20),
                         child: CircularProgressIndicator(
                           strokeWidth: 2.5,
-                          color: AppColors.brassDeep,
+                          color: AppColors.gold,
                         ),
                       )
                     : Icon(icon, color: iconColor, size: 30),
@@ -849,7 +849,9 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontFamily: AppFonts.body,
-                    color: i == 0 ? AppColors.ink : AppColors.inkSoft,
+                    color: i == 0
+                        ? AppColors.textPrimary
+                        : AppColors.textSecondary,
                     fontSize: i == 0 ? 14 : 12,
                     height: 1.5,
                     fontWeight: i == 0 ? FontWeight.w600 : FontWeight.w400,
@@ -888,7 +890,11 @@ class _GameTab extends StatelessWidget {
             : AppColors.feltLight.withValues(alpha: 0.8),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(999),
-          side: BorderSide(color: selected ? AppColors.gold : Colors.white12),
+          side: BorderSide(
+            color: selected
+                ? AppColors.gold
+                : AppColors.gold.withValues(alpha: 0.22),
+          ),
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -901,7 +907,7 @@ class _GameTab extends StatelessWidget {
                 label,
                 style: TextStyle(
                   fontFamily: AppFonts.body,
-                  color: selected ? AppColors.ink : AppColors.ivoryDark,
+                  color: selected ? AppColors.darkInk : AppColors.ivoryDark,
                   fontSize: 12.5,
                   fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                 ),
@@ -919,7 +925,7 @@ class _StatCell extends StatelessWidget {
   const _StatCell({
     required this.value,
     required this.label,
-    this.color = AppColors.ink,
+    this.color = AppColors.textPrimary,
   });
 
   final String value;
@@ -945,7 +951,7 @@ class _StatCell extends StatelessWidget {
             label,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 1.0,

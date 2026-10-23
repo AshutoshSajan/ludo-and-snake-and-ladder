@@ -81,13 +81,12 @@ class _FeltPainter extends CustomPainter {
       oldDelegate.vignette != vignette;
 }
 
-/// A sheet of club paper laid on the felt.
+/// A raised green card laid on the felt.
 ///
-/// Every menu surface is one of these: a warm ground, a hairline brass edge
-/// and a soft drop shadow. Wrapping its subtree in [AppTheme.paper] is what
-/// makes ordinary Material widgets — switches, fields, segmented controls —
-/// inherit ink-on-paper rather than cream-on-felt, so a screen can be assembled
-/// from stock parts and still belong in the room.
+/// Every menu surface is one of these: a slightly lighter green than the room,
+/// a hairline brass edge and a soft drop shadow. Stock Material widgets inherit
+/// the room's ivory-on-green theme, so a screen can be assembled from ordinary
+/// parts and still belong at the table.
 class ClubCard extends StatelessWidget {
   const ClubCard({
     super.key,
@@ -96,7 +95,7 @@ class ClubCard extends StatelessWidget {
     this.onTap,
     this.accent = false,
     this.radius = 20,
-    this.background = AppColors.paper,
+    this.background = AppColors.surface,
     this.borderColor,
   });
 
@@ -141,37 +140,32 @@ class ClubCard extends StatelessWidget {
       ],
     );
 
-    // A real [Card] rather than a decorated box: it keeps the club's paper
-    // surfaces in the same widget family as every older card in the app, and
-    // it gives the Material layer that an InkWell needs for its ripple.
-    final paper = Theme(
-      data: AppTheme.paper(),
-      child: DefaultTextStyle.merge(
-        style: const TextStyle(
-          fontFamily: AppFonts.body,
-          color: AppColors.ink,
-          fontSize: 14,
-          height: 1.45,
-        ),
-        child: Card(
-          color: background,
-          surfaceTintColor: Colors.transparent,
-          elevation: 8,
-          shadowColor: AppColors.feltDeep.withValues(alpha: 0.45),
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: shape,
-            side: BorderSide(
-              color: borderColor ?? AppColors.paperEdge.withValues(alpha: 0.9),
-            ),
+    // A real [Card] rather than a decorated box: it gives the Material layer
+    // that an InkWell needs for its ripple and keeps every menu surface in the
+    // same widget family.
+    return DefaultTextStyle.merge(
+      style: const TextStyle(
+        fontFamily: AppFonts.body,
+        color: AppColors.ivory,
+        fontSize: 14,
+        height: 1.45,
+      ),
+      child: Card(
+        color: background,
+        surfaceTintColor: Colors.transparent,
+        elevation: 8,
+        shadowColor: AppColors.feltDeep.withValues(alpha: 0.55),
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: shape,
+          side: BorderSide(
+            color: borderColor ?? AppColors.gold.withValues(alpha: 0.24),
           ),
-          child: body,
         ),
+        child: body,
       ),
     );
-
-    return paper;
   }
 }
 
@@ -195,24 +189,18 @@ class ClubSeal extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: onPaper
-            ? AppColors.paperDeep.withValues(alpha: 0.72)
-            : AppColors.gold.withValues(alpha: 0.12),
+        color: AppColors.gold.withValues(alpha: onPaper ? 0.12 : 0.18),
         border: Border.all(
-          color: AppColors.brass.withValues(alpha: 0.55),
+          color: AppColors.gold.withValues(alpha: 0.55),
           width: 1.2,
         ),
       ),
-      child: Icon(
-        icon,
-        size: size * 0.48,
-        color: onPaper ? AppColors.brassDeep : AppColors.gold,
-      ),
+      child: Icon(icon, size: size * 0.48, color: AppColors.gold),
     );
   }
 }
 
-/// The eyebrow, title and one-line invitation at the top of a paper page.
+/// The eyebrow, title and one-line invitation at the top of a page.
 class ClubPageHeader extends StatelessWidget {
   const ClubPageHeader({
     super.key,

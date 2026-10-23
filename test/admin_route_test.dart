@@ -7,6 +7,7 @@ import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/screens/admin/admin_login_screen.dart';
 import 'package:game_club/ui/admin_badge_web.dart';
 import 'package:game_club/ui/page_app_bar.dart';
+import 'package:game_club/ui/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -158,6 +159,37 @@ void main() {
     await tester.tap(find.byTooltip('Show').first);
     await tester.pumpAndSettle();
     expect(find.text('s3cr3t-pass'), findsOneWidget);
+  });
+
+  testWidgets('admin fields sit on the dark input fill with ivory type', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.dark(),
+          home: const AdminLoginScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The screen is normally mounted under AppTheme.dark(); mount it with
+    // the real theme here so the contrast assertion covers the shipped
+    // input decoration rather than Material's light default.
+    final field = find.widgetWithText(TextField, 'Password');
+    expect(field, findsOneWidget);
+    final editable = tester.widget<EditableText>(
+      find.descendant(of: field, matching: find.byType(EditableText)),
+    );
+    final theme = Theme.of(tester.element(field));
+    final fill = theme.inputDecorationTheme.fillColor;
+    final ink = editable.style.color;
+    expect(fill, AppColors.input);
+    expect(ink, isNotNull);
+    expect(fill!.computeLuminance(), lessThan(0.05));
+    expect(ink!.computeLuminance(), greaterThan(0.5));
   });
 
   testWidgets('page bar content honors the 16px body inset', (tester) async {

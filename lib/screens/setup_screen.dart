@@ -167,7 +167,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                               'Players at the table',
                               style: Theme.of(context).textTheme.titleSmall
                                   ?.copyWith(
-                                    color: AppColors.ink,
+                                    color: AppColors.textPrimary,
                                     fontWeight: FontWeight.w800,
                                   ),
                             ),
@@ -177,7 +177,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                             '${_seats.length} of $_maxPlayers',
                             style: const TextStyle(
                               fontFamily: AppFonts.body,
-                              color: AppColors.inkFaint,
+                              color: AppColors.textMuted,
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
@@ -317,7 +317,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                     color: seatColor,
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: AppColors.paperLight.withValues(alpha: 0.85),
+                      color: AppColors.gold.withValues(alpha: 0.85),
                       width: 2,
                     ),
                     boxShadow: [
@@ -347,7 +347,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                         'Seat ${i + 1}',
                         style: const TextStyle(
                           fontFamily: AppFonts.body,
-                          color: AppColors.ink,
+                          color: AppColors.textPrimary,
                           fontSize: 14,
                           fontWeight: FontWeight.w800,
                         ),
@@ -356,7 +356,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                         seat.isAI ? 'House bot' : 'Human player',
                         style: const TextStyle(
                           fontFamily: AppFonts.body,
-                          color: AppColors.inkFaint,
+                          color: AppColors.textMuted,
                           fontSize: 10.5,
                           fontWeight: FontWeight.w500,
                         ),
@@ -391,7 +391,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       fontSize: 9,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.2,
-                      color: AppColors.inkFaint,
+                      color: AppColors.textMuted,
                     ),
                   ),
                   const SizedBox(width: 9),
@@ -406,7 +406,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       style: TextStyle(
                         fontFamily: AppFonts.body,
                         fontSize: 10.5,
-                        color: AppColors.inkFaint,
+                        color: AppColors.textMuted,
                       ),
                     ),
                 ],
@@ -433,14 +433,14 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       borderRadius: BorderRadius.circular(14),
                       style: const TextStyle(
                         fontFamily: AppFonts.body,
-                        color: AppColors.ink,
+                        color: AppColors.textPrimary,
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
                       ),
                       icon: const Icon(
                         Icons.keyboard_arrow_down,
                         size: 18,
-                        color: AppColors.inkSoft,
+                        color: AppColors.textSecondary,
                       ),
                       items: const [
                         DropdownMenuItem(
@@ -519,7 +519,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: selected ? AppColors.ink : Colors.transparent,
+              color: selected ? AppColors.darkInk : Colors.transparent,
               width: 1.6,
             ),
           ),

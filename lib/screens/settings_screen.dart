@@ -175,7 +175,7 @@ class _ClubHero extends StatelessWidget {
             child: Icon(
               Icons.casino_outlined,
               size: 132,
-              color: AppColors.ink.withValues(alpha: 0.045),
+              color: AppColors.textPrimary.withValues(alpha: 0.045),
             ),
           ),
           Row(
@@ -213,7 +213,7 @@ class _ClubHero extends StatelessWidget {
                       'LOCAL TABLE SETTINGS',
                       style: TextStyle(
                         fontFamily: AppFonts.body,
-                        color: AppColors.brassDeep,
+                        color: AppColors.gold,
                         fontSize: 9.5,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 1.7,
@@ -224,7 +224,7 @@ class _ClubHero extends StatelessWidget {
                       'Game Club',
                       style: TextStyle(
                         fontFamily: AppFonts.display,
-                        color: AppColors.ink,
+                        color: AppColors.textPrimary,
                         fontSize: 26,
                         fontWeight: FontWeight.w600,
                         height: 1.05,
@@ -236,7 +236,7 @@ class _ClubHero extends StatelessWidget {
                       'device.',
                       style: TextStyle(
                         fontFamily: AppFonts.body,
-                        color: AppColors.inkSoft,
+                        color: AppColors.textSecondary,
                         fontSize: 12.5,
                         height: 1.4,
                       ),
@@ -308,7 +308,7 @@ class _SurfaceCard extends StatelessWidget {
                 thickness: 1,
                 indent: 66,
                 endIndent: 14,
-                color: AppColors.ink.withValues(alpha: 0.09),
+                color: AppColors.textPrimary.withValues(alpha: 0.09),
               ),
             children[i],
           ],
@@ -366,7 +366,7 @@ class _ToggleRow extends StatelessWidget {
                           title,
                           style: const TextStyle(
                             fontFamily: AppFonts.body,
-                            color: AppColors.ink,
+                            color: AppColors.textPrimary,
                             fontSize: 15,
                             fontWeight: FontWeight.w800,
                           ),
@@ -376,7 +376,7 @@ class _ToggleRow extends StatelessWidget {
                           description,
                           style: const TextStyle(
                             fontFamily: AppFonts.body,
-                            color: AppColors.inkSoft,
+                            color: AppColors.textSecondary,
                             fontSize: 12,
                             height: 1.35,
                           ),
@@ -391,12 +391,12 @@ class _ToggleRow extends StatelessWidget {
                         key: switchKey,
                         value: value,
                         onChanged: (_) => onToggle(),
-                        activeThumbColor: AppColors.brassDeep,
+                        activeThumbColor: AppColors.darkInk,
                         activeTrackColor: AppColors.gold.withValues(
-                          alpha: 0.55,
+                          alpha: 0.75,
                         ),
                         inactiveThumbColor: AppColors.paperLight,
-                        inactiveTrackColor: AppColors.ink.withValues(
+                        inactiveTrackColor: AppColors.textPrimary.withValues(
                           alpha: 0.12,
                         ),
                       ),
@@ -451,7 +451,7 @@ class _LinkRow extends StatelessWidget {
                           title,
                           style: const TextStyle(
                             fontFamily: AppFonts.body,
-                            color: AppColors.ink,
+                            color: AppColors.textPrimary,
                             fontSize: 15,
                             fontWeight: FontWeight.w800,
                           ),
@@ -461,7 +461,7 @@ class _LinkRow extends StatelessWidget {
                           description,
                           style: const TextStyle(
                             fontFamily: AppFonts.body,
-                            color: AppColors.inkSoft,
+                            color: AppColors.textSecondary,
                             fontSize: 12,
                             height: 1.35,
                           ),
@@ -473,7 +473,7 @@ class _LinkRow extends StatelessWidget {
                   Icon(
                     Icons.chevron_right,
                     size: 20,
-                    color: AppColors.ink.withValues(alpha: 0.30),
+                    color: AppColors.textPrimary.withValues(alpha: 0.30),
                   ),
                 ],
               ),
@@ -501,20 +501,20 @@ class _RowIcon extends StatelessWidget {
       decoration: BoxDecoration(
         color: active
             ? AppColors.gold.withValues(alpha: 0.20)
-            : AppColors.ink.withValues(alpha: 0.06),
+            : AppColors.textPrimary.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: active
               ? AppColors.brass.withValues(alpha: 0.38)
-              : AppColors.ink.withValues(alpha: 0.08),
+              : AppColors.textPrimary.withValues(alpha: 0.08),
         ),
       ),
       child: Icon(
         icon,
         size: 20,
         color: active
-            ? AppColors.brassDeep
-            : AppColors.ink.withValues(alpha: 0.58),
+            ? AppColors.gold
+            : AppColors.textPrimary.withValues(alpha: 0.58),
       ),
     );
   }
@@ -528,7 +528,7 @@ class _AboutCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final body = TextStyle(
       fontFamily: AppFonts.body,
-      color: AppColors.inkSoft,
+      color: AppColors.textSecondary,
       fontSize: 13,
       height: 1.45,
     );
@@ -544,14 +544,14 @@ class _AboutCard extends StatelessWidget {
                   const Icon(
                     Icons.info_outline,
                     size: 18,
-                    color: AppColors.brassDeep,
+                    color: AppColors.gold,
                   ),
                   const SizedBox(width: 8),
                   Text(
                     'About the club',
                     style: const TextStyle(
                       fontFamily: AppFonts.body,
-                      color: AppColors.ink,
+                      color: AppColors.textPrimary,
                       fontSize: 15,
                       fontWeight: FontWeight.w800,
                     ),
@@ -568,7 +568,7 @@ class _AboutCard extends StatelessWidget {
               const SizedBox(height: 14),
               Container(
                 height: 1,
-                color: AppColors.ink.withValues(alpha: 0.10),
+                color: AppColors.textPrimary.withValues(alpha: 0.10),
               ),
               const SizedBox(height: 12),
               Row(
