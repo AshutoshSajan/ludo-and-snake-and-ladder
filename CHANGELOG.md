@@ -52,6 +52,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(ui): restore gold-and-green theme and repair admin screens
 - Fix(ci): always regenerate the changelog on release prep
 - Fix(ci): guard OpenCode commands against PR head changes
 - Fix(home): keep the first-run ask off deep-linked screens
