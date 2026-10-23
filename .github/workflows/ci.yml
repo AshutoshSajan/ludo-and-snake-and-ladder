@@ -170,10 +170,14 @@ jobs:
       # main is not one — so the automated version has to arrive by merge, the
       # same way a person's does.
       #
-      # Changelog and version move together in ONE commit. Two commits could land
-      # in either order, and a changelog describing 1.1.0 sitting next to a
-      # pubspec claiming 1.2.0 is exactly the drift that made the declared version
-      # untrustworthy in the first place.
+      # The changelog is regenerated on every qualifying run. When a bump is
+      # due, the version moves in the SAME commit: two commits could land in
+      # either order, and a changelog describing 1.1.0 sitting next to a
+      # pubspec claiming 1.2.0 is exactly the drift that made the declared
+      # version untrustworthy in the first place. When main already declares
+      # the next version (for example 1.3.0 merged before a v1.3.0 tag exists),
+      # only the changelog is committed — the version still moves with it in
+      # that run, never backwards.
       #
       # `chore:` matters: cliff.toml skips chore subjects, so this commit adds no
       # changelog entry of its own. Without that, the bot's commit would make the
@@ -195,36 +199,45 @@ jobs:
           base=$(tool/version.sh)
           echo "declared version: $base"
           if ! git diff --quiet origin/main HEAD; then
-            echo "::warning::main moved while this run started; skipping the bump"
+            echo "::warning::main moved while this run started; skipping release preparation"
             exit 0
           fi
           next=$(tool/version.sh --bump)
-          if [ "$next" = "$base" ]; then
-            echo "no release-worthy commits since the last tag; nothing to bump"
-            exit 0
+          # `next` comes from the highest v* tag, while `base` is what main
+          # declares. They can be equal before a release is tagged (main has
+          # already merged a 1.3.0 bump, but the newest tag is still v1.2.1),
+          # and `next` can be older than `base` when history lags the tag.
+          # `next == base` is not "nothing to do": the changelog can still be
+          # stale, and the old early exit here is exactly how main ended up
+          # failing `changelog.sh --check` forever. Choose the target, then
+          # always regenerate.
+          target=$(tool/release_target.sh "$base" "$next")
+          if [ "$target" = "$base" ]; then
+            echo "declaring $base (no version bump); regenerating the changelog"
+          else
+            echo "next version: $target"
+            tool/version.sh --set "$target"
           fi
-          echo "next version: $next"
-          tool/version.sh --set "$next"
           tool/changelog.sh
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "chore/release-prep-$next"
+          git switch -c "chore/release-prep-$target"
           git add CHANGELOG.md pubspec.yaml extension/manifest.chrome.json \
             extension/manifest.firefox.json
           if git diff --quiet --cached; then
             echo "nothing changed; not opening a PR"
             exit 0
           fi
-          git commit -m "chore: release prep $next - regenerate changelog, bump version"
-          git push -u origin "chore/release-prep-$next"
+          git commit -m "chore: release prep $target - regenerate changelog"
+          git push -u origin "chore/release-prep-$target"
 
           # A PR, not a push, because guard-main forbids the alternative. Skipped
           # rather than left failing if one is already open for this version: two
           # would race, and the second push would be rejected anyway.
-          if gh pr list --head "chore/release-prep-$next" --state open \
+          if gh pr list --head "chore/release-prep-$target" --state open \
                --json number | grep -q number; then
-            echo "a PR for $next is already open; leaving it alone"
+            echo "a PR for $target is already open; leaving it alone"
             exit 0
           fi
           # The body is built with bash $'...' rather than a heredoc or a plain
@@ -232,11 +245,11 @@ jobs:
           # YAML block scalar an unindented continuation is parsed as a new key
           # - which silently corrupts the workflow file instead of failing loudly.
           # One line, \n escapes, no indentation to get wrong.
-          body=$'Automated: regenerates `CHANGELOG.md` and bumps the declared version to '"$next"'.\n\nOpened by the `release-prep` job. It commits through a PR because `guard-main` requires the head of main to be a merge commit, and a bot push is not one.\n\nMerge to apply. `verify-release` and `publish-firefox` run on the merge, not on this PR.'
-          if ! gh pr create --base main --head "chore/release-prep-$next" \
-               --title "chore: release prep $next" \
+          body=$'Automated: regenerates `CHANGELOG.md` for the current history. The release version is '"$target"$'.\n\nOpened by the `release-prep` job. It commits through a PR because `guard-main` requires the head of main to be a merge commit, and a bot push is not one.\n\nMerge to apply. `verify-release` and `publish-firefox` run on the merge, not on this PR.'
+          if ! gh pr create --base main --head "chore/release-prep-$target" \
+               --title "chore: release prep $target" \
                --body "$body"; then
-            echo "::warning::could not open the release-prep PR; the version stays at $base"
+            echo "::warning::could not open the release-prep PR; the changelog stays stale"
           fi
 
       # After the regenerate, not before it. On a main push this asserts that what
