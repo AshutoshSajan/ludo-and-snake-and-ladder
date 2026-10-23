@@ -343,7 +343,7 @@ class _TableChatPanelState extends State<TableChatPanel> {
             ? AppColors.gold
             : Colors.white.withValues(alpha: 0.1),
         foregroundColor: enabled
-            ? AppColors.ink
+            ? AppColors.textPrimary
             : AppColors.ivory.withValues(alpha: 0.4),
       ),
     );
@@ -483,7 +483,7 @@ class _Header extends StatelessWidget {
                 label: Text(
                   '$pending',
                   style: const TextStyle(
-                    color: AppColors.ink,
+                    color: AppColors.darkInk,
                     fontSize: 9,
                     fontWeight: FontWeight.w900,
                   ),
@@ -805,7 +805,7 @@ class _ChatLauncher extends StatelessWidget {
           label: Text(
             unread > 9 ? '9+' : '$unread',
             style: const TextStyle(
-              color: Colors.white,
+              color: AppColors.darkInk,
               fontSize: 9,
               fontWeight: FontWeight.w900,
             ),
@@ -818,7 +818,7 @@ class _ChatLauncher extends StatelessWidget {
         constraints: const BoxConstraints.tightFor(width: 52, height: 52),
         style: IconButton.styleFrom(
           backgroundColor: AppColors.gold,
-          foregroundColor: AppColors.ink,
+          foregroundColor: AppColors.darkInk,
         ),
         onPressed: onPressed,
       ),

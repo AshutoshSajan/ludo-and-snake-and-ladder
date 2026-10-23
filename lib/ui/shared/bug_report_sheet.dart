@@ -167,7 +167,7 @@ class _BugReportSheetState extends State<BugReportSheet> {
                     backgroundColor: AppColors.felt,
                     labelStyle: TextStyle(
                       color: _category == value
-                          ? AppColors.ink
+                          ? AppColors.darkInk
                           : AppColors.ivory,
                     ),
                     onSelected: (_) => setState(() => _category = value),

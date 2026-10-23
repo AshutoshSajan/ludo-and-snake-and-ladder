@@ -26,7 +26,7 @@ class ClubHeader extends StatelessWidget {
               height: 64,
               padding: const EdgeInsets.all(11),
               decoration: BoxDecoration(
-                color: AppColors.paper,
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
                   color: AppColors.gold.withValues(alpha: 0.72),
@@ -110,7 +110,7 @@ class ClubHeader extends StatelessWidget {
 ///
 /// Drawn rather than typed, because a glyph needs a font and the packaged
 /// add-on bundles only Roboto, which has no die. Same shape as the CSS die in
-/// `extension/popup.html`: an ivory rounded square with a gold border and four
+/// `extension/popup.html`: a brass rounded square with a dark rule and four
 /// pips, two red and two blue, so the header and the popup read as one mark.
 class _DiePainter extends CustomPainter {
   const _DiePainter();
@@ -123,11 +123,11 @@ class _DiePainter extends CustomPainter {
       Offset.zero & size,
       Radius.circular(w * 0.22),
     );
-    canvas.drawRRect(body, Paint()..color = AppColors.paperLight);
+    canvas.drawRRect(body, Paint()..color = AppColors.gold);
     canvas.drawRRect(
       body,
       Paint()
-        ..color = AppColors.gold
+        ..color = AppColors.darkInk
         ..style = PaintingStyle.stroke
         ..strokeWidth = w * 0.055,
     );
@@ -223,7 +223,7 @@ class GameCard extends StatelessWidget {
                           eyebrow!.toUpperCase(),
                           style: TextStyle(
                             fontFamily: AppFonts.body,
-                            color: AppColors.brassDeep,
+                            color: AppColors.gold,
                             fontSize: 9,
                             fontWeight: FontWeight.w800,
                             letterSpacing: 1.4,
@@ -233,7 +233,7 @@ class GameCard extends StatelessWidget {
                       Icon(
                         Icons.north_east,
                         size: 15,
-                        color: AppColors.ink.withValues(alpha: 0.34),
+                        color: AppColors.textPrimary.withValues(alpha: 0.34),
                       ),
                     ],
                   ),
@@ -241,7 +241,7 @@ class GameCard extends StatelessWidget {
                   Text(
                     title,
                     style: theme.textTheme.headlineSmall?.copyWith(
-                      color: AppColors.ink,
+                      color: AppColors.textPrimary,
                       fontSize: 24,
                       height: 1.05,
                     ),
@@ -250,7 +250,7 @@ class GameCard extends StatelessWidget {
                   Text(
                     subtitle,
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: AppColors.inkSoft,
+                      color: AppColors.textSecondary,
                       height: 1.4,
                       fontSize: 12,
                     ),
@@ -268,17 +268,19 @@ class GameCard extends StatelessWidget {
                               vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: AppColors.paperDeep.withValues(alpha: 0.7),
+                              color: AppColors.surfaceDeep,
                               borderRadius: BorderRadius.circular(999),
                               border: Border.all(
-                                color: AppColors.ink.withValues(alpha: 0.08),
+                                color: AppColors.textPrimary.withValues(
+                                  alpha: 0.08,
+                                ),
                               ),
                             ),
                             child: Text(
                               m,
                               style: const TextStyle(
                                 fontFamily: AppFonts.body,
-                                color: AppColors.inkSoft,
+                                color: AppColors.textSecondary,
                                 fontSize: 10,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -297,8 +299,8 @@ class GameCard extends StatelessWidget {
   }
 }
 
-/// One of the club's side doors: a paper tile with a brass seal, a name and a
-/// one-line reason to open it.
+/// One of the club's side doors: a green felt tile with a brass seal, a name
+/// and a one-line reason to open it.
 class ClubDoor extends StatelessWidget {
   const ClubDoor({
     super.key,
@@ -342,7 +344,7 @@ class ClubDoor extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.titleSmall?.copyWith(
-              color: AppColors.ink,
+              color: AppColors.textPrimary,
               fontSize: 13.5,
               fontWeight: FontWeight.w800,
             ),
@@ -354,7 +356,7 @@ class ClubDoor extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 10.5,
               fontWeight: FontWeight.w500,
             ),

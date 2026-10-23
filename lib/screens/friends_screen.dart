@@ -181,7 +181,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
   Future<void> _addFriendFlow() async {
     final target = await _prompt(
       title: 'Add a friend',
-      hint: 'Friend code (e.g. PRK7VW) or player id',
+      hint: 'Friend code or player ID',
     );
     if (target == null || target.isEmpty) return;
     try {
@@ -581,6 +581,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                       children: [
                         _meCode(state.me),
+                        const SizedBox(height: 14),
                         // Discovery at the table: everyone seated in the
                         // room the caller is in, who no other section
                         // already shows. The row opens the same actions
@@ -620,7 +621,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontFamily: AppFonts.body,
-                                    color: AppColors.inkSoft,
+                                    color: AppColors.textSecondary,
                                     fontSize: 13,
                                     height: 1.6,
                                   ),
@@ -661,7 +662,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   me.name.isEmpty ? 'You' : me.name,
                   style: const TextStyle(
                     fontFamily: AppFonts.body,
-                    color: AppColors.ink,
+                    color: AppColors.textPrimary,
                     fontSize: 15,
                     fontWeight: FontWeight.w800,
                   ),
@@ -671,7 +672,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   'Your friend code: ${me.code}',
                   style: const TextStyle(
                     fontFamily: AppFonts.body,
-                    color: AppColors.inkSoft,
+                    color: AppColors.textSecondary,
                     fontSize: 11.5,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 1.2,
@@ -682,7 +683,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.copy, size: 18),
-            color: AppColors.brassDeep,
+            color: AppColors.gold,
             tooltip: 'Copy friend code',
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: me.code));
@@ -696,7 +697,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   Widget _tableTile(TableMate t) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.only(bottom: 10),
       child: ClubCard(
         padding: EdgeInsets.zero,
         radius: 15,
@@ -711,7 +712,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             t.name,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.ink,
+              color: AppColors.textPrimary,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -746,7 +747,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   Widget _sectionTitle(String text) => Padding(
-    padding: const EdgeInsets.only(top: 20, bottom: 8, left: 2),
+    padding: const EdgeInsets.only(top: 14, bottom: 8, left: 2),
     child: Row(
       children: [
         Text(
@@ -775,7 +776,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   Widget _requestTile(FriendRequestView r, {required bool incoming}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.only(bottom: 10),
       child: ClubCard(
         padding: EdgeInsets.zero,
         radius: 15,
@@ -785,7 +786,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             r.name,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.ink,
+              color: AppColors.textPrimary,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -793,7 +794,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             incoming ? 'wants to be your friend' : 'asking them',
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkSoft,
+              color: AppColors.textSecondary,
               fontSize: 12,
             ),
           ),
@@ -803,7 +804,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.check_circle_outline),
-                      color: AppColors.brassDeep,
+                      color: AppColors.gold,
                       tooltip: 'Accept',
                       onPressed: () => _respond(r, true),
                     ),
@@ -825,7 +826,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   Widget _inviteTile(FriendInviteView i) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.only(bottom: 10),
       child: ClubCard(
         padding: EdgeInsets.zero,
         radius: 15,
@@ -835,7 +836,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             i.name,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.ink,
+              color: AppColors.textPrimary,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -845,7 +846,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             ' · room ${i.code.isEmpty ? '(starting)' : i.code}',
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkSoft,
+              color: AppColors.textSecondary,
               fontSize: 12,
             ),
           ),
@@ -918,7 +919,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final read = _read[f.seatId] ?? 0;
     final unread = latest > 0 && latest > read;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.only(bottom: 10),
       child: ClubCard(
         padding: EdgeInsets.zero,
         radius: 15,
@@ -936,7 +937,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             f.name,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.ink,
+              color: AppColors.textPrimary,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -946,11 +947,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
               if (unread)
                 const Padding(
                   padding: EdgeInsets.only(right: 8),
-                  child: Icon(
-                    Icons.circle,
-                    size: 11,
-                    color: AppColors.brassDeep,
-                  ),
+                  child: Icon(Icons.circle, size: 11, color: AppColors.gold),
                 ),
               TextButton.icon(
                 onPressed: () => _playWithFriend(f),
@@ -966,9 +963,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   Widget _blockedTile(FriendBlockView b) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.only(bottom: 10),
       child: ClubCard(
-        background: AppColors.paperDeep.withValues(alpha: 0.72),
+        background: AppColors.surfaceDeep,
         padding: EdgeInsets.zero,
         radius: 15,
         child: ListTile(
@@ -977,7 +974,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             b.name.isEmpty ? b.seatId : b.name,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkSoft,
+              color: AppColors.textSecondary,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -985,7 +982,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             'cannot contact you',
             style: TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 12,
             ),
           ),

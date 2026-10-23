@@ -8,6 +8,7 @@ import '../../app_router.dart';
 import '../../app_routes.dart';
 import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
+import '../../ui/club_widgets.dart';
 import '../../ui/theme.dart';
 import '../online_lobby_screen.dart';
 import 'admin_dashboard_screen.dart';
@@ -76,9 +77,8 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
         buttonItems: [
           if (!secret && selecting)
             ContextMenuButtonItem(
-              onPressed: () => editableTextState.cutSelection(
-                SelectionChangedCause.toolbar,
-              ),
+              onPressed: () =>
+                  editableTextState.cutSelection(SelectionChangedCause.toolbar),
               type: ContextMenuButtonType.cut,
             ),
           if (!secret && selecting)
@@ -89,15 +89,13 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
               type: ContextMenuButtonType.copy,
             ),
           ContextMenuButtonItem(
-            onPressed: () => editableTextState.pasteText(
-              SelectionChangedCause.toolbar,
-            ),
+            onPressed: () =>
+                editableTextState.pasteText(SelectionChangedCause.toolbar),
             type: ContextMenuButtonType.paste,
           ),
           ContextMenuButtonItem(
-            onPressed: () => editableTextState.selectAll(
-              SelectionChangedCause.toolbar,
-            ),
+            onPressed: () =>
+                editableTextState.selectAll(SelectionChangedCause.toolbar),
             type: ContextMenuButtonType.selectAll,
           ),
         ],
@@ -109,7 +107,9 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     try {
       final status = await _client.status();
       if (!mounted) return;
-      setState(() => _setupRequired = status['setupRequired'] as bool? ?? false);
+      setState(
+        () => _setupRequired = status['setupRequired'] as bool? ?? false,
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = 'Could not reach admin API: $e');
@@ -206,143 +206,393 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
   @override
   Widget build(BuildContext context) {
     final setup = _setupRequired ?? false;
+    final checking = _setupRequired == null && _error == null;
     return Scaffold(
       backgroundColor: AppColors.felt,
       appBar: AppBar(
-        title: Text(setup ? 'Admin setup' : 'Admin sign in'),
-        backgroundColor: AppColors.feltLight,
+        title: const Text('Back office'),
+        backgroundColor: AppColors.felt,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Check server again',
+            onPressed: _checkStatus,
+          ),
+        ],
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          // One AutofillGroup so password managers offer to fill (and save)
-          // the email+password pair instead of fighting the form.
-          child: AutofillGroup(
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              shrinkWrap: true,
-              children: [
-                if (_setupRequired == null && _error == null)
-                  const Center(child: CircularProgressIndicator())
-                else ...[
-                  if (setup)
-                    const Text(
-                      'No admin account exists yet — create the first one. '
-                      'Paste the server\'s ADMIN_TOKEN below (required).',
-                      style: TextStyle(
-                        color: AppColors.ivoryDark,
-                        fontSize: 13,
-                      ),
-                    ),
-                  TextField(
-                    controller: _serverCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Server WS URL',
-                    ),
-                    onChanged: (_) => _checkStatus(),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _emailCtrl,
-                    keyboardType: TextInputType.emailAddress,
-                    autofillHints: const [AutofillHints.username],
-                    contextMenuBuilder: _menuBuilder(secret: false),
-                    decoration: const InputDecoration(labelText: 'Email'),
-                    onSubmitted: (_) => _submit(),
-                  ),
-                  if (setup) ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _nameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Name (optional)',
-                      ),
-                      onSubmitted: (_) => _submit(),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _passCtrl,
-                    obscureText: !_showPassword,
-                    enableInteractiveSelection: true,
-                    enableSuggestions: false,
-                    autocorrect: false,
-                    keyboardType: TextInputType.visiblePassword,
-                    // A first-time setup creates the credential; a sign-in
-                    // presents an existing one. The hint tells password
-                    // managers which is which — the wrong hint invites them
-                    // to fight the field (autofill-over-paste).
-                    autofillHints: setup
-                        ? const [AutofillHints.newPassword]
-                        : const [AutofillHints.password],
-                    contextMenuBuilder: _menuBuilder(secret: true),
-                    onEditingComplete: TextInput.finishAutofillContext,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      suffixIcon: IconButton(
-                        tooltip: _showPassword ? 'Hide' : 'Show',
-                        icon: Icon(
-                          _showPassword
-                              ? Icons.visibility_off
-                              : Icons.visibility,
-                        ),
-                        onPressed: () => setState(
-                          () => _showPassword = !_showPassword,
-                        ),
-                      ),
-                    ),
-                    onSubmitted: (_) => _submit(),
-                  ),
-                  if (setup) ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _setupTokenCtrl,
-                      obscureText: !_showSetupToken,
-                      enableInteractiveSelection: true,
-                      enableSuggestions: false,
-                      autocorrect: false,
-                      keyboardType: TextInputType.visiblePassword,
-                      contextMenuBuilder: _menuBuilder(secret: true),
-                      decoration: InputDecoration(
-                        labelText: 'Setup token (server ADMIN_TOKEN)',
-                        suffixIcon: IconButton(
-                          tooltip: _showSetupToken ? 'Hide' : 'Show',
-                          icon: Icon(
-                            _showSetupToken
-                                ? Icons.visibility_off
-                                : Icons.visibility,
-                          ),
-                          onPressed: () => setState(
-                            () => _showSetupToken = !_showSetupToken,
-                          ),
-                        ),
-                      ),
-                      onSubmitted: (_) => _submit(),
-                    ),
-                  ],
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
+      body: ClubBackground(
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 470),
+              // One AutofillGroup so password managers offer to fill (and save)
+              // the email+password pair instead of fighting the form.
+              child: AutofillGroup(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 28, 20, 40),
+                  shrinkWrap: true,
+                  children: [
+                    const _AdminEyebrow('Game Club · Back office'),
+                    const SizedBox(height: 8),
                     Text(
-                      _error!,
-                      style: const TextStyle(color: AppColors.danger),
+                      setup ? 'Open the first table' : 'Admin sign in',
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(color: AppColors.ivory, height: 1.05),
                     ),
+                    const SizedBox(height: 8),
+                    Text(
+                      setup
+                          ? 'No admin account exists yet. Create the first one '
+                                'with the server’s ADMIN_TOKEN.'
+                          : 'Sign in with the account that keeps this club '
+                                'running.',
+                      style: const TextStyle(
+                        fontFamily: AppFonts.body,
+                        color: AppColors.textSecondary,
+                        fontSize: 13.5,
+                        height: 1.55,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    if (checking)
+                      const ClubCard(
+                        padding: EdgeInsets.fromLTRB(18, 22, 18, 22),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.4,
+                                color: AppColors.gold,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Checking the admin API…',
+                                style: TextStyle(
+                                  fontFamily: AppFonts.body,
+                                  color: AppColors.textSecondary,
+                                  fontSize: 13.5,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      ClubCard(
+                        accent: true,
+                        padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (setup) ...[
+                              _AdminNote(
+                                icon: Icons.shield_outlined,
+                                title: 'First-run setup',
+                                body:
+                                    'The setup token is the server’s '
+                                    'ADMIN_TOKEN. It is required and is never '
+                                    'stored by this screen.',
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+                            TextField(
+                              controller: _serverCtrl,
+                              enabled: !_busy,
+                              decoration: const InputDecoration(
+                                labelText: 'Server WS URL',
+                                helperText:
+                                    'The server that issues this '
+                                    'admin session.',
+                                prefixIcon: Icon(Icons.dns_outlined, size: 20),
+                              ),
+                              onChanged: (_) => _checkStatus(),
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _emailCtrl,
+                              enabled: !_busy,
+                              keyboardType: TextInputType.emailAddress,
+                              autofillHints: const [AutofillHints.username],
+                              contextMenuBuilder: _menuBuilder(secret: false),
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Email',
+                                prefixIcon: Icon(
+                                  Icons.alternate_email,
+                                  size: 20,
+                                ),
+                              ),
+                              onSubmitted: (_) => _submit(),
+                            ),
+                            if (setup) ...[
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: _nameCtrl,
+                                enabled: !_busy,
+                                textInputAction: TextInputAction.next,
+                                decoration: const InputDecoration(
+                                  labelText: 'Name (optional)',
+                                  prefixIcon: Icon(
+                                    Icons.badge_outlined,
+                                    size: 20,
+                                  ),
+                                ),
+                                onSubmitted: (_) => _submit(),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _passCtrl,
+                              enabled: !_busy,
+                              obscureText: !_showPassword,
+                              enableInteractiveSelection: true,
+                              enableSuggestions: false,
+                              autocorrect: false,
+                              keyboardType: TextInputType.visiblePassword,
+                              // A first-time setup creates the credential; a
+                              // sign-in presents an existing one. The hint tells
+                              // password managers which is which — the wrong hint
+                              // invites them to fight the field
+                              // (autofill-over-paste).
+                              autofillHints: setup
+                                  ? const [AutofillHints.newPassword]
+                                  : const [AutofillHints.password],
+                              contextMenuBuilder: _menuBuilder(secret: true),
+                              onEditingComplete:
+                                  TextInput.finishAutofillContext,
+                              textInputAction: setup
+                                  ? TextInputAction.next
+                                  : TextInputAction.done,
+                              decoration: InputDecoration(
+                                labelText: 'Password',
+                                prefixIcon: const Icon(
+                                  Icons.lock_outline,
+                                  size: 20,
+                                ),
+                                suffixIcon: IconButton(
+                                  tooltip: _showPassword ? 'Hide' : 'Show',
+                                  icon: Icon(
+                                    _showPassword
+                                        ? Icons.visibility_off
+                                        : Icons.visibility,
+                                  ),
+                                  onPressed: () => setState(
+                                    () => _showPassword = !_showPassword,
+                                  ),
+                                ),
+                              ),
+                              onSubmitted: (_) => _submit(),
+                            ),
+                            if (setup) ...[
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: _setupTokenCtrl,
+                                enabled: !_busy,
+                                obscureText: !_showSetupToken,
+                                enableInteractiveSelection: true,
+                                enableSuggestions: false,
+                                autocorrect: false,
+                                keyboardType: TextInputType.visiblePassword,
+                                contextMenuBuilder: _menuBuilder(secret: true),
+                                textInputAction: TextInputAction.done,
+                                decoration: InputDecoration(
+                                  labelText: 'Setup token (server ADMIN_TOKEN)',
+                                  prefixIcon: const Icon(
+                                    Icons.key_outlined,
+                                    size: 20,
+                                  ),
+                                  suffixIcon: IconButton(
+                                    tooltip: _showSetupToken ? 'Hide' : 'Show',
+                                    icon: Icon(
+                                      _showSetupToken
+                                          ? Icons.visibility_off
+                                          : Icons.visibility,
+                                    ),
+                                    onPressed: () => setState(
+                                      () => _showSetupToken = !_showSetupToken,
+                                    ),
+                                  ),
+                                ),
+                                onSubmitted: (_) => _submit(),
+                              ),
+                            ],
+                            if (_error != null) ...[
+                              const SizedBox(height: 16),
+                              _AdminErrorNote(message: _error!),
+                            ],
+                            const SizedBox(height: 18),
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton(
+                                onPressed: _busy ? null : _submit,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    if (_busy) ...[
+                                      const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: AppColors.darkInk,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 9),
+                                    ],
+                                    Text(
+                                      _busy
+                                          ? 'Checking…'
+                                          : setup
+                                          ? 'Create admin account'
+                                          : 'Sign in',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Sessions stay in memory. Closing this tab signs '
+                              'you out.',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontFamily: AppFonts.body,
+                                color: AppColors.textMuted,
+                                fontSize: 11.5,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    onPressed: _busy ? null : _submit,
-                    child: Text(
-                      _busy
-                          ? 'Checking…'
-                          : setup
-                              ? 'Create admin account'
-                              : 'Sign in',
-                    ),
-                  ),
-                ],
-              ],
+                ),
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Small gold eyebrow shared by the two admin screens.
+class _AdminEyebrow extends StatelessWidget {
+  const _AdminEyebrow(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text.toUpperCase(),
+      style: const TextStyle(
+        fontFamily: AppFonts.body,
+        color: AppColors.gold,
+        fontSize: 10,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 1.8,
+      ),
+    );
+  }
+}
+
+/// A brass-tinted note for setup instructions.
+class _AdminNote extends StatelessWidget {
+  const _AdminNote({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+      decoration: BoxDecoration(
+        color: AppColors.gold.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.gold.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: AppColors.gold),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.ivory,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  body,
+                  style: const TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A red-tinted, high-contrast error note with the fix implied by its text.
+class _AdminErrorNote extends StatelessWidget {
+  const _AdminErrorNote({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+      decoration: BoxDecoration(
+        color: AppColors.danger.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.danger.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_outline, size: 18, color: AppColors.danger),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                fontFamily: AppFonts.body,
+                color: AppColors.ivory,
+                fontSize: 12.5,
+                height: 1.45,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
