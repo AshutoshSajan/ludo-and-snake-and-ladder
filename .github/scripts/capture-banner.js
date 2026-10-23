@@ -5,7 +5,12 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 (async () => {
-  const browser = await chromium.launch({ args: ['--allow-file-access-from-files'] });
+  // Local runs can point at an installed Chrome; CI keeps using the bundle.
+  const launchOptions = { args: ['--allow-file-access-from-files'] };
+  if (process.env.CHROME_PATH) {
+    launchOptions.executablePath = process.env.CHROME_PATH;
+  }
+  const browser = await chromium.launch(launchOptions);
   const page = await browser.newPage({
     viewport: { width: 1200, height: 400 },
     deviceScaleFactor: 2,

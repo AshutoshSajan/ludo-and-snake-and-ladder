@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/online_client.dart';
+import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/shared/player_avatar.dart';
 import '../ui/theme.dart';
@@ -83,8 +84,6 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
       backgroundColor: AppColors.felt,
       appBar: PageAppBar(
         title: 'Leaderboard',
-        backgroundColor: AppColors.feltLight,
-        foregroundColor: AppColors.ivory,
         actions: [
           // Inside the content column, so the refresh button lines up with the
           // right edge of the rows it reloads rather than floating at the far
@@ -96,14 +95,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           ),
         ],
       ),
-      body: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.55),
-            radius: 1.35,
-            colors: [Color(0xFF1D4E36), AppColors.felt],
-          ),
-        ),
+      body: ClubBackground(
         child: FutureBuilder<LeaderboardData>(
           future: _future,
           builder: (context, snap) {
@@ -116,7 +108,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               // the same words so one habit covers both.
               return _statePanel(
                 icon: Icons.emoji_events_outlined,
-                iconColor: AppColors.gold,
+                iconColor: AppColors.brassDeep,
                 spinner: true,
                 lines: const [
                   'Starting the leaderboard server…',
@@ -150,12 +142,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                             color: AppColors.gold,
                             backgroundColor: AppColors.feltLight,
                             child: ListView(
-                              padding: const EdgeInsets.fromLTRB(
-                                16,
-                                2,
-                                16,
-                                28,
-                              ),
+                              padding: const EdgeInsets.fromLTRB(16, 2, 16, 28),
                               children: [
                                 _champion(data.rows.first),
                                 if (data.rows.length > 1) ...[
@@ -191,86 +178,83 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   Widget _standingsHeader(LeaderboardData data) {
     final games = data.games;
     final players = data.rows.length;
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.gold.withValues(alpha: 0.12),
-                border: Border.all(
-                  color: AppColors.gold.withValues(alpha: 0.38),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const ClubSeal(
+                icon: Icons.emoji_events,
+                size: 46,
+                onPaper: false,
+              ),
+              const SizedBox(width: 12),
+              // Flexible: the title and its subtitle are non-flex children of
+              // this Row otherwise, so a narrow phone (or a wide accessibility
+              // font) overflows the page instead of wrapping the subtitle.
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Club standings',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: AppFonts.display,
+                        color: AppColors.paper,
+                        fontSize: 25,
+                        fontWeight: FontWeight.w600,
+                        height: 1.05,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _game == null
+                          ? 'Career results across both games'
+                          : _game == 'ludo'
+                          ? 'Career results at the Ludo table'
+                          : 'Career results on the Snakes board',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontFamily: AppFonts.body,
+                        color: AppColors.paperDeep,
+                        fontSize: 11.5,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              child: const Icon(
-                Icons.emoji_events,
-                size: 23,
-                color: AppColors.gold,
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+              color: AppColors.paper.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: AppColors.brass.withValues(alpha: 0.4)),
+            ),
+            child: Text(
+              '$games ${games == 1 ? 'game' : 'games'} · '
+              '$players ${players == 1 ? 'player' : 'players'}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: AppFonts.body,
+                color: AppColors.paper,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.2,
               ),
             ),
-            const SizedBox(width: 12),
-            // Flexible: the title and its subtitle are non-flex children of
-            // this Row otherwise, so a narrow phone (or a wide accessibility
-            // font) overflows the page instead of wrapping the subtitle.
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'Club standings',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.ivory,
-                      fontSize: 19,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _game == null
-                        ? 'Career results across both games'
-                        : _game == 'ludo'
-                        ? 'Career results at the Ludo table'
-                        : 'Career results on the Snakes board',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: AppColors.feltLight.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: Colors.white12),
           ),
-          child: Text(
-            '$games ${games == 1 ? 'game' : 'games'} · '
-            '$players ${players == 1 ? 'player' : 'players'}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: AppColors.ivoryDark,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -317,23 +301,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
 
   /// First place: the one card that is allowed to feel like a trophy.
   Widget _champion(LeaderboardRow r) {
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF2B5A3C), Color(0xFF193D2A)],
-        ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: AppColors.gold.withValues(alpha: 0.55),
-          width: 1.5,
-        ),
-        boxShadow: const [
-          BoxShadow(color: Colors.black26, blurRadius: 18, offset: Offset(0, 8)),
-        ],
-      ),
+    return ClubCard(
+      accent: true,
+      radius: 20,
+      padding: EdgeInsets.zero,
       child: Stack(
         children: [
           // A washed-out trophy behind the name, so the card reads as the
@@ -344,11 +315,11 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             child: Icon(
               Icons.emoji_events,
               size: 132,
-              color: AppColors.gold.withValues(alpha: 0.055),
+              color: AppColors.brass.withValues(alpha: 0.1),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 19, 16, 16),
             child: Column(
               children: [
                 Row(
@@ -359,10 +330,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: AppColors.gold.withValues(alpha: 0.14),
+                        color: AppColors.paperDeep.withValues(alpha: 0.72),
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(
-                          color: AppColors.gold.withValues(alpha: 0.34),
+                          color: AppColors.brass.withValues(alpha: 0.45),
                         ),
                       ),
                       child: const Row(
@@ -371,15 +342,16 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                           Icon(
                             Icons.workspace_premium,
                             size: 14,
-                            color: AppColors.gold,
+                            color: AppColors.brassDeep,
                           ),
                           SizedBox(width: 5),
                           Text(
                             'CHAMPION',
                             style: TextStyle(
-                              color: AppColors.gold,
+                              fontFamily: AppFonts.body,
+                              color: AppColors.brassDeep,
                               fontSize: 10,
-                              fontWeight: FontWeight.w900,
+                              fontWeight: FontWeight.w800,
                               letterSpacing: 1.1,
                             ),
                           ),
@@ -390,9 +362,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                     const Text(
                       '1st',
                       style: TextStyle(
-                        color: AppColors.gold,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
+                        fontFamily: AppFonts.display,
+                        color: AppColors.brassDeep,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
@@ -404,7 +377,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                       padding: const EdgeInsets.all(3),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: AppColors.gold, width: 2),
+                        border: Border.all(color: AppColors.brass, width: 2),
                       ),
                       child: ClipOval(
                         child: PlayerAvatar(seed: r.seatId, size: 52),
@@ -420,9 +393,11 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: AppColors.ivory,
-                              fontSize: 21,
-                              fontWeight: FontWeight.w800,
+                              fontFamily: AppFonts.display,
+                              color: AppColors.ink,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w600,
+                              height: 1.05,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -430,7 +405,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                             '${r.wins} ${r.wins == 1 ? 'win' : 'wins'} in '
                             '${r.games} ${r.games == 1 ? 'game' : 'games'}',
                             style: const TextStyle(
-                              color: Colors.white60,
+                              fontFamily: AppFonts.body,
+                              color: AppColors.inkSoft,
                               fontSize: 12,
                             ),
                           ),
@@ -443,16 +419,16 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.16),
+                    color: AppColors.paperDeep.withValues(alpha: 0.62),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white10),
+                    border: Border.all(color: AppColors.paperEdge),
                   ),
                   child: Row(
                     children: [
                       _StatCell(
                         value: '${r.wins}',
                         label: 'WINS',
-                        color: AppColors.gold,
+                        color: AppColors.brassDeep,
                       ),
                       _statDivider(),
                       _StatCell(value: '${r.games}', label: 'GAMES'),
@@ -472,42 +448,35 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     );
   }
 
-  Widget _statDivider() => Container(
-    width: 1,
-    height: 30,
-    color: Colors.white.withValues(alpha: 0.12),
-  );
+  Widget _statDivider() =>
+      Container(width: 1, height: 30, color: AppColors.paperEdge);
 
   /// Second and third beside each other. With only two players the second card
   /// takes the full width, which reads fine because there is no third to
   /// compare it with.
   Widget _runnersUp(List<LeaderboardRow> rows) {
-    const silver = Color(0xFFB7C0C9);
-    const bronze = Color(0xFFC08552);
+    // Darker silver and bronze than the felt versions: these now sit on warm
+    // paper, where the usual pale medal tints would disappear.
+    const silver = Color(0xFF6F7B88);
+    const bronze = Color(0xFF9A5B2D);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: _runnerCard(2, rows[1], silver),
-        ),
+        Expanded(child: _runnerCard(2, rows[1], silver)),
         if (rows.length > 2) ...[
           const SizedBox(width: 12),
-          Expanded(
-            child: _runnerCard(3, rows[2], bronze),
-          ),
+          Expanded(child: _runnerCard(3, rows[2], bronze)),
         ],
       ],
     );
   }
 
   Widget _runnerCard(int place, LeaderboardRow r, Color accent) {
-    return Container(
+    return ClubCard(
+      radius: 16,
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.feltLight.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: accent.withValues(alpha: 0.42), width: 1.2),
-      ),
+      background: AppColors.paperLight,
+      borderColor: accent.withValues(alpha: 0.45),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -519,15 +488,16 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: accent.withValues(alpha: 0.16),
+                  color: accent.withValues(alpha: 0.12),
                   border: Border.all(color: accent.withValues(alpha: 0.5)),
                 ),
                 child: Text(
                   '$place',
                   style: TextStyle(
+                    fontFamily: AppFonts.body,
                     color: accent,
                     fontSize: 12,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
@@ -535,7 +505,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               Icon(
                 Icons.emoji_events,
                 size: 15,
-                color: accent.withValues(alpha: 0.75),
+                color: accent.withValues(alpha: 0.8),
               ),
             ],
           ),
@@ -550,9 +520,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: AppColors.ivory,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                    fontFamily: AppFonts.display,
+                    color: AppColors.ink,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -563,7 +534,12 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             '${r.wins}W · ${r.games}G · avg ${r.avgRank.toStringAsFixed(1)}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: AppColors.ivoryDark, fontSize: 10.5),
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.inkSoft,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -576,23 +552,19 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   /// players. This is the part that has to fit ten people on a phone, so it
   /// stays a table rather than becoming ten more cards.
   Widget _restTable(List<LeaderboardRow> rows) {
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: AppColors.feltLight.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white10),
-      ),
+    return ClubCard(
+      radius: 18,
+      padding: EdgeInsets.zero,
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 8),
             child: Row(
               children: [
                 const Icon(
                   Icons.format_list_numbered,
                   size: 15,
-                  color: AppColors.gold,
+                  color: AppColors.brassDeep,
                 ),
                 const SizedBox(width: 8),
                 const Expanded(
@@ -601,7 +573,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: Colors.white60,
+                      fontFamily: AppFonts.body,
+                      color: AppColors.inkSoft,
                       fontSize: 10.5,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.0,
@@ -611,7 +584,11 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 const SizedBox(width: 8),
                 Text(
                   '${rows.length} ${rows.length == 1 ? 'player' : 'players'}',
-                  style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+                  style: const TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.inkFaint,
+                    fontSize: 10.5,
+                  ),
                 ),
               ],
             ),
@@ -622,7 +599,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               const Divider(
                 height: 1,
                 thickness: 1,
-                color: Colors.white10,
+                color: AppColors.paperEdge,
                 indent: 14,
                 endIndent: 14,
               ),
@@ -645,7 +622,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           child: Text(
             'PLAYER',
             style: TextStyle(
-              color: Colors.white38,
+              fontFamily: AppFonts.body,
+              color: AppColors.inkFaint,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
@@ -658,7 +636,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             'W',
             textAlign: TextAlign.right,
             style: TextStyle(
-              color: Colors.white38,
+              fontFamily: AppFonts.body,
+              color: AppColors.inkFaint,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
             ),
@@ -670,7 +649,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             'G',
             textAlign: TextAlign.right,
             style: TextStyle(
-              color: Colors.white38,
+              fontFamily: AppFonts.body,
+              color: AppColors.inkFaint,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
             ),
@@ -682,7 +662,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             'AVG',
             textAlign: TextAlign.right,
             style: TextStyle(
-              color: Colors.white38,
+              fontFamily: AppFonts.body,
+              color: AppColors.inkFaint,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
             ),
@@ -702,7 +683,11 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             child: Text(
               '$place',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white38, fontSize: 12.5),
+              style: const TextStyle(
+                fontFamily: AppFonts.body,
+                color: AppColors.inkFaint,
+                fontSize: 12.5,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -714,7 +699,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: AppColors.ivory,
+                fontFamily: AppFonts.body,
+                color: AppColors.ink,
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
@@ -726,7 +712,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               '${r.wins}W',
               textAlign: TextAlign.right,
               style: const TextStyle(
-                color: AppColors.gold,
+                fontFamily: AppFonts.body,
+                color: AppColors.brassDeep,
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
               ),
@@ -738,7 +725,8 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               '${r.games}G',
               textAlign: TextAlign.right,
               style: const TextStyle(
-                color: AppColors.ivoryDark,
+                fontFamily: AppFonts.body,
+                color: AppColors.inkSoft,
                 fontSize: 12,
               ),
             ),
@@ -748,7 +736,11 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
             child: Text(
               'avg ${r.avgRank.toStringAsFixed(1)}',
               textAlign: TextAlign.right,
-              style: const TextStyle(color: Colors.white54, fontSize: 11.5),
+              style: const TextStyle(
+                fontFamily: AppFonts.body,
+                color: AppColors.inkFaint,
+                fontSize: 11.5,
+              ),
             ),
           ),
         ],
@@ -776,7 +768,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               'minute. Tap refresh to try again.';
     return _statePanel(
       icon: Icons.cloud_off,
-      iconColor: AppColors.ivoryDark,
+      iconColor: AppColors.brassDeep,
       lines: [detail],
       action: OutlinedButton.icon(
         icon: const Icon(Icons.refresh, size: 18),
@@ -805,7 +797,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
               '$count finished, but nobody has been recorded in it.';
     return _statePanel(
       icon: Icons.emoji_events_outlined,
-      iconColor: AppColors.gold,
+      iconColor: AppColors.brassDeep,
       lines: [message],
     );
   }
@@ -822,13 +814,10 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     return ContentColumn(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Container(
+        child: ClubCard(
+          accent: true,
+          radius: 22,
           padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
-          decoration: BoxDecoration(
-            color: AppColors.feltLight.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: Colors.white12),
-          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -837,13 +826,18 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 height: 64,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: iconColor.withValues(alpha: 0.12),
-                  border: Border.all(color: iconColor.withValues(alpha: 0.35)),
+                  color: AppColors.paperDeep.withValues(alpha: 0.62),
+                  border: Border.all(
+                    color: AppColors.brass.withValues(alpha: 0.45),
+                  ),
                 ),
                 child: spinner
                     ? const Padding(
                         padding: EdgeInsets.all(20),
-                        child: CircularProgressIndicator(strokeWidth: 2.5),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: AppColors.brassDeep,
+                        ),
                       )
                     : Icon(icon, color: iconColor, size: 30),
               ),
@@ -854,17 +848,15 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                   lines[i],
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: i == 0 ? AppColors.ivory : Colors.white54,
-                    fontSize: i == 0 ? 14.5 : 12,
+                    fontFamily: AppFonts.body,
+                    color: i == 0 ? AppColors.ink : AppColors.inkSoft,
+                    fontSize: i == 0 ? 14 : 12,
                     height: 1.5,
                     fontWeight: i == 0 ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
               ],
-              if (action != null) ...[
-                const SizedBox(height: 18),
-                action,
-              ],
+              if (action != null) ...[const SizedBox(height: 18), action],
             ],
           ),
         ),
@@ -896,9 +888,7 @@ class _GameTab extends StatelessWidget {
             : AppColors.feltLight.withValues(alpha: 0.8),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(999),
-          side: BorderSide(
-            color: selected ? AppColors.gold : Colors.white12,
-          ),
+          side: BorderSide(color: selected ? AppColors.gold : Colors.white12),
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -910,6 +900,7 @@ class _GameTab extends StatelessWidget {
               child: Text(
                 label,
                 style: TextStyle(
+                  fontFamily: AppFonts.body,
                   color: selected ? AppColors.ink : AppColors.ivoryDark,
                   fontSize: 12.5,
                   fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
@@ -928,7 +919,7 @@ class _StatCell extends StatelessWidget {
   const _StatCell({
     required this.value,
     required this.label,
-    this.color = AppColors.ivory,
+    this.color = AppColors.ink,
   });
 
   final String value;
@@ -943,16 +934,18 @@ class _StatCell extends StatelessWidget {
           Text(
             value,
             style: TextStyle(
+              fontFamily: AppFonts.display,
               color: color,
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
+              fontSize: 19,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 2),
           Text(
             label,
             style: const TextStyle(
-              color: Colors.white54,
+              fontFamily: AppFonts.body,
+              color: AppColors.inkFaint,
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 1.0,

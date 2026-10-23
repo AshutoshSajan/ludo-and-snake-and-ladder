@@ -7,6 +7,7 @@ import '../engine/core/player_profiles.dart';
 import '../providers/app_providers.dart';
 import '../services/friend_signals.dart';
 import '../ui/admin_badge.dart';
+import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/ludo/ludo_board_painter.dart';
 import '../ui/snakes/snakes_board_painter.dart';
@@ -83,127 +84,135 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _scheduleTutorialAsk(context);
     final admin = ref.watch(adminSessionProvider);
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.4),
-            radius: 1.4,
-            colors: [AppColors.feltLight, AppColors.felt],
-          ),
-        ),
+      body: ClubBackground(
         child: SafeArea(
           // Rule 11: the home cards sit in the same reading column the room
           // creation form uses, so the two screens read as one family instead
           // of a wide menu and a narrow form trading widths underneath you.
           // The gradient stays full-bleed: a page background wants the window.
           child: ContentColumn(
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              shrinkWrap: true,
-              children: [
-                const SizedBox(height: 12),
-                const ClubHeader(),
-                // Signed-in admins get a visible identity chip (and a way
-                // back to the dashboard). Nobody else sees anything: there
-                // is deliberately no admin entry point for signed-out users.
-                if (admin != null) ...[
-                  const SizedBox(height: 12),
-                  Center(child: AdminBadge(session: admin)),
-                ],
-                const SizedBox(height: 28),
-                // The `tour-…` keys are the tutorial's targets: the
-                // walkthrough finds these widgets by key and spots them.
-                GameCard(
-                  key: const ValueKey('tour-ludo'),
-                  title: 'Ludo',
-                  subtitle: 'Classic race home · 2–4 players · friends or bots',
-                  preview: CustomPaint(
-                    size: const Size(120, 120),
-                    painter: LudoBoardPainter(),
-                  ),
-                  onTap: () => _openSetup(context, GameKind.ludo),
-                ),
-                const SizedBox(height: 16),
-                GameCard(
-                  key: const ValueKey('tour-snakes'),
-                  title: 'Snakes & Ladders',
-                  subtitle: 'Snakes, ladders & luck · 2–10 players',
-                  preview: CustomPaint(
-                    size: const Size(120, 120),
-                    painter: SnakesBoardPainter(),
-                  ),
-                  onTap: () => _openSetup(context, GameKind.snakes),
-                ),
-                const SizedBox(height: 16),
-                // Leaderboard, online play and settings on one line. They were
-                // stacked over two rows, which pushed the last one below the
-                // fold on a phone and made the home screen taller than the
-                // two game cards it exists to launch. "Play Online" keeps the
-                // width because it is the one people come for; the other two
-                // are icon buttons with tooltips.
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        key: const ValueKey('tour-online'),
-                        icon: const Icon(Icons.wifi, size: 18),
-                        label: const Text('Play Online'),
-                        onPressed: () => pushAppScreen<void>(
-                          context,
-                          name: AppRoutes.online,
-                          builder: (_) => const OnlineLobbyScreen(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    IconButton.outlined(
-                      key: const ValueKey('tour-friends'),
-                      onPressed: () => pushAppScreen<void>(
-                        context,
-                        name: AppRoutes.friends,
-                        builder: (_) => const FriendsScreen(),
-                      ),
-                      // The app-level watcher owns this count, so the dot is
-                      // already warm before the player opens the lobby or
-                      // the friends tray.
-                      icon: ValueListenableBuilder<int>(
-                        valueListenable: friendSignals.incomingRequests,
-                        builder: (context, pending, _) => Badge(
-                          key: const ValueKey('home-friends-badge'),
-                          isLabelVisible: pending > 0,
-                          backgroundColor: AppColors.danger,
-                          textColor: Colors.white,
-                          label: Text('$pending'),
-                          child: const Icon(Icons.group_outlined),
-                        ),
-                      ),
-                      tooltip: 'Friends',
-                    ),
-                    const SizedBox(width: 10),
-                    IconButton.outlined(
-                      key: const ValueKey('tour-leaderboard'),
-                      onPressed: () => pushAppScreen<void>(
-                        context,
-                        name: AppRoutes.leaderboard,
-                        builder: (_) => const ScoreboardScreen(),
-                      ),
-                      icon: const Icon(Icons.emoji_events),
-                      tooltip: 'Leaderboard',
-                    ),
-                    const SizedBox(width: 10),
-                    IconButton.outlined(
-                      key: const ValueKey('tour-settings'),
-                      onPressed: () => pushAppScreen<void>(
-                        context,
-                        name: AppRoutes.settings,
-                        builder: (_) => const SettingsScreen(),
-                      ),
-                      icon: const Icon(Icons.settings_outlined),
-                      tooltip: 'Settings',
-                    ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const ClubHeader(),
+                  // Signed-in admins get a visible identity chip (and a way
+                  // back to the dashboard). Nobody else sees anything: there
+                  // is deliberately no admin entry point for signed-out users.
+                  if (admin != null) ...[
+                    const SizedBox(height: 14),
+                    Center(child: AdminBadge(session: admin)),
                   ],
-                ),
-              ],
+                  const SizedBox(height: 22),
+                  // The `tour-…` keys are the tutorial's targets: the
+                  // walkthrough finds these widgets by key and spots them.
+                  GameCard(
+                    key: const ValueKey('tour-ludo'),
+                    eyebrow: 'The classic',
+                    title: 'Ludo',
+                    subtitle:
+                        'Race four pieces home. Capture, block, and take the '
+                        'long way only when you must.',
+                    meta: const ['2–4 players', 'Friends or bots'],
+                    preview: CustomPaint(
+                      size: const Size(120, 120),
+                      painter: LudoBoardPainter(),
+                    ),
+                    onTap: () => _openSetup(context, GameKind.ludo),
+                  ),
+                  const SizedBox(height: 14),
+                  GameCard(
+                    key: const ValueKey('tour-snakes'),
+                    eyebrow: 'The family favourite',
+                    title: 'Snakes & Ladders',
+                    subtitle:
+                        'Roll, climb and slide. A hundred squares, nine ladders '
+                        'and ten snakes between you and the top.',
+                    meta: const ['2–10 players', 'Hot-seat or bots'],
+                    preview: CustomPaint(
+                      size: const Size(120, 120),
+                      painter: SnakesBoardPainter(),
+                    ),
+                    onTap: () => _openSetup(context, GameKind.snakes),
+                  ),
+                  const SizedBox(height: 20),
+                  _OnlineDoor(
+                    key: const ValueKey('tour-online'),
+                    onTap: () => pushAppScreen<void>(
+                      context,
+                      name: AppRoutes.online,
+                      builder: (_) => const OnlineLobbyScreen(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: ClubDoor(
+                          key: const ValueKey('tour-friends'),
+                          icon: Icons.group_outlined,
+                          label: 'Friends',
+                          detail: 'Your circle',
+                          badge: ValueListenableBuilder<int>(
+                            valueListenable: friendSignals.incomingRequests,
+                            builder: (context, pending, _) => Badge(
+                              key: const ValueKey('home-friends-badge'),
+                              isLabelVisible: pending > 0,
+                              backgroundColor: AppColors.danger,
+                              textColor: Colors.white,
+                              label: Text(
+                                '$pending',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              child: const SizedBox(width: 22, height: 22),
+                            ),
+                          ),
+                          onTap: () => pushAppScreen<void>(
+                            context,
+                            name: AppRoutes.friends,
+                            builder: (_) => const FriendsScreen(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ClubDoor(
+                          key: const ValueKey('tour-leaderboard'),
+                          icon: Icons.emoji_events,
+                          label: 'Leaderboard',
+                          detail: 'Club standings',
+                          onTap: () => pushAppScreen<void>(
+                            context,
+                            name: AppRoutes.leaderboard,
+                            builder: (_) => const ScoreboardScreen(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ClubDoor(
+                          key: const ValueKey('tour-settings'),
+                          icon: Icons.settings_outlined,
+                          label: 'Settings',
+                          detail: 'Set the table',
+                          onTap: () => pushAppScreen<void>(
+                            context,
+                            name: AppRoutes.settings,
+                            builder: (_) => const SettingsScreen(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 22),
+                  const _HomeFooter(),
+                ],
+              ),
             ),
           ),
         ),
@@ -216,6 +225,116 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       context,
       name: game == GameKind.ludo ? AppRoutes.playLudo : AppRoutes.playSnakes,
       builder: (_) => SetupScreen(game: game),
+    );
+  }
+}
+
+/// Online is the one door that leads outside the room, so it gets a brass
+/// ticket of its own rather than sharing the little side-door tiles.
+class _OnlineDoor extends StatelessWidget {
+  const _OnlineDoor({super.key, required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClubCard(
+      background: AppColors.gold,
+      borderColor: AppColors.brassDeep.withValues(alpha: 0.55),
+      padding: const EdgeInsets.fromLTRB(16, 15, 14, 15),
+      onTap: onTap,
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: const BoxDecoration(
+              color: AppColors.ink,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.wifi, color: AppColors.gold, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Play Online',
+                  style: Theme.of(context).textTheme.headlineSmall
+                      ?.copyWith(color: AppColors.ink, fontSize: 23, height: 1),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Rooms, table chat, voice and the club leaderboard.',
+                  style: TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.inkSoft,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: AppColors.ink.withValues(alpha: 0.10),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.arrow_forward,
+              size: 17,
+              color: AppColors.ink,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeFooter extends StatelessWidget {
+  const _HomeFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 20,
+              height: 1,
+              color: AppColors.gold.withValues(alpha: 0.35),
+            ),
+            const SizedBox(width: 10),
+            const Flexible(
+              child: Text(
+                'NO ACCOUNT · NO ADS · JUST THE TABLE',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: AppFonts.body,
+                  color: AppColors.paperDeep,
+                  fontSize: 8.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              width: 20,
+              height: 1,
+              color: AppColors.gold.withValues(alpha: 0.35),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -236,7 +355,7 @@ class _TutorialAskDialog extends StatelessWidget {
           Text(
             'First time here?',
             style: Theme.of(context).textTheme.headlineSmall
-                ?.copyWith(fontWeight: FontWeight.w800, color: AppColors.gold),
+                ?.copyWith(color: AppColors.gold),
           ),
           const SizedBox(height: 10),
           const Text(

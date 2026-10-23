@@ -21,6 +21,7 @@ import '../services/online_client.dart';
 import '../services/share_link.dart';
 import '../services/sound_service.dart';
 import '../services/storage_service.dart';
+import '../ui/club_widgets.dart';
 import '../ui/ludo/ludo_view.dart';
 import '../ui/snakes/online_snakes_view.dart';
 import 'friends_screen.dart';
@@ -638,14 +639,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   ),
               ],
             ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.4),
-            radius: 1.4,
-            colors: [AppColors.feltLight, AppColors.felt],
-          ),
-        ),
+      body: ClubBackground(
         child: SafeArea(
           child: switch (client) {
             // Rule 11: the lobby and the join form are reading-width
@@ -653,12 +647,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
             // so on a desktop window the room code card can no longer
             // read wider than anything around it. The board branches
             // stay full-bleed: a game board wants every pixel.
-            null => ContentColumn(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: _connectForm(),
-              ),
-            ),
+            null => ContentColumn(child: _connectForm()),
             OnlineClient c
                 when c.gameType == 'snakes' && c.snakesState != null =>
               ResponsiveChatDock(
@@ -701,200 +690,220 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
 
   Widget _connectForm() {
     return ListView(
-      shrinkWrap: true,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
       children: [
-        const Icon(Icons.wifi, size: 48, color: AppColors.gold),
-        const SizedBox(height: 8),
-        Center(
-          child: Text(
-            // Names the game the Ludo/Snakes toggle below has selected, so the
-            // pitch matches what this room will actually be. It used to say
-            // "Ludo" unconditionally, which made the whole screen read as
-            // Ludo-only to anyone looking for online Snakes.
-            'Play ${_gameType == 'snakes' ? 'Snakes & Ladders' : 'Ludo'} '
-            'online against friends',
-            style: const TextStyle(color: AppColors.ivory, fontSize: 16),
+        ClubCard(
+          accent: true,
+          padding: const EdgeInsets.fromLTRB(17, 18, 17, 16),
+          child: ClubPageHeader(
+            eyebrow: 'Online table',
+            title:
+                'Play ${_gameType == 'snakes' ? 'Snakes & Ladders' : 'Ludo'} '
+                'online against friends',
+            icon: Icons.wifi,
+            subtitle:
+                'Create a room and share its code, or join a friend with the '
+                'four letters they sent you.',
           ),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 14),
         if (_inviteNeedsName && _inviteCode != null) ...[
           _inviteCard(_inviteCode!),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
         ],
-        _field(
-          _nameCtrl,
-          'Your name',
-          _name.isEmpty ? 'e.g. Asha' : 'saved \u2014 tap to change',
-          fieldKey: const Key('online-name-field'),
-        ),
-        // The id is shown rather than hidden: it is what the leaderboard
-        // records, so a player can see which identity their wins belong to.
-        // Tapping copies it — the playtest wanted to hand it to a friend
-        // without selecting a 14-character string on a phone.
-        if (_seatId.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 8, left: 4, right: 4),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Tooltip(
-                message: 'Copy your player ID',
-                child: InkWell(
-                  key: const Key('copy-player-id'),
-                  onTap: _copyPlayerId,
-                  borderRadius: BorderRadius.circular(10),
-                  child: Container(
-                    constraints: const BoxConstraints(minHeight: 44),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.22),
+        ClubCard(
+          padding: const EdgeInsets.fromLTRB(17, 16, 17, 17),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _field(
+                _nameCtrl,
+                'Your name',
+                _name.isEmpty ? 'e.g. Asha' : 'saved — tap to change',
+                fieldKey: const Key('online-name-field'),
+              ),
+              // The id is shown rather than hidden: it is what the leaderboard
+              // records, so a player can see which identity their wins belong
+              // to. Tapping copies it — the playtest wanted to hand it to a
+              // friend without selecting a 14-character string on a phone.
+              if (_seatId.isNotEmpty) ...[
+                const SizedBox(height: 9),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Tooltip(
+                    message: 'Copy your player ID',
+                    child: InkWell(
+                      key: const Key('copy-player-id'),
+                      onTap: _copyPlayerId,
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.gold.withAlpha(90)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.badge_outlined,
-                          size: 16,
-                          color: AppColors.gold,
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 44),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 11,
+                          vertical: 8,
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Player ID $_seatId \u00b7 tap to copy',
-                          style: const TextStyle(
-                            fontSize: 11.5,
-                            color: AppColors.ivoryDark,
+                        decoration: BoxDecoration(
+                          color: AppColors.paperDeep.withValues(alpha: 0.65),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: AppColors.brass.withValues(alpha: 0.34),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.copy, size: 15, color: AppColors.gold),
-                      ],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.badge_outlined,
+                              size: 16,
+                              color: AppColors.brassDeep,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Player ID $_seatId · tap to copy',
+                              style: const TextStyle(
+                                fontFamily: AppFonts.body,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.inkSoft,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Icon(
+                              Icons.copy,
+                              size: 15,
+                              color: AppColors.brassDeep,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
+              ],
+              const SizedBox(height: 19),
+              const ClubSectionLabel('The game'),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(
+                    value: 'ludo',
+                    label: Text('Ludo'),
+                    icon: Icon(Icons.casino_outlined),
+                  ),
+                  ButtonSegment(
+                    value: 'snakes',
+                    label: Text('Snakes'),
+                    icon: Icon(Icons.grid_on_outlined),
+                  ),
+                ],
+                selected: {_gameType},
+                onSelectionChanged: (sel) =>
+                    setState(() => _gameType = sel.first),
               ),
-            ),
-          ),
-        const SizedBox(height: 24),
-        SegmentedButton<String>(
-          segments: const [
-            ButtonSegment(
-              value: 'ludo',
-              label: Text('Ludo'),
-              icon: Icon(Icons.casino_outlined),
-            ),
-            ButtonSegment(
-              value: 'snakes',
-              label: Text('Snakes'),
-              icon: Icon(Icons.grid_on_outlined),
-            ),
-          ],
-          selected: {_gameType},
-          onSelectionChanged: (sel) => setState(() => _gameType = sel.first),
-        ),
-        const SizedBox(height: 16),
-        // The table size the room closes at — the same "chip row" the
-        // offline setup screen uses, for one shared visual language. It
-        // applies to the Create path: a join submits a code and inherits
-        // the room's size, so a two-seat room stays a two-seat room no
-        // matter who fills the second chair.
-        const Text(
-          'Players at the table',
-          style: TextStyle(color: AppColors.ivory, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
-          children: [
-            for (var n = 2; n <= 4; n++)
-              ChoiceChip(
-                label: Text('$n'),
-                selected: _players == n,
-                onSelected: (_) => setState(() => _players = n),
-              ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        FilledButton.icon(
-          icon: const Icon(Icons.add_circle_outline),
-          label: const Text('Create a room'),
-          onPressed: () => _connect(createRoom: true),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                key: const Key('room-code-field'),
-                controller: _codeCtrl,
-                textCapitalization: TextCapitalization.characters,
-                maxLength: 4,
-                style: const TextStyle(color: AppColors.ivory),
-                decoration: InputDecoration(
-                  counterText: '',
-                  labelText: 'Room code',
-                  hintText: 'A2B3',
-                  labelStyle: const TextStyle(color: AppColors.ivory),
-                  hintStyle: TextStyle(color: AppColors.ivory.withAlpha(90)),
-                  enabledBorder: _border(AppColors.ivory.withAlpha(90)),
-                  focusedBorder: _border(AppColors.gold),
+              const SizedBox(height: 18),
+              // The table size the room closes at — the same "chip row" the
+              // offline setup screen uses, for one shared visual language. It
+              // applies to the Create path: a join submits a code and inherits
+              // the room's size, so a two-seat room stays a two-seat room no
+              // matter who fills the second chair.
+              const Text(
+                'Players at the table',
+                style: TextStyle(
+                  fontFamily: AppFonts.body,
+                  color: AppColors.ink,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton.tonalIcon(
-                icon: const Icon(Icons.login),
-                label: const Text('Join'),
-                onPressed: () {
-                  setState(() => _spectate = false);
-                  _connect(createRoom: false);
-                },
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (var n = 2; n <= 4; n++)
+                    ChoiceChip(
+                      label: Text('$n'),
+                      selected: _players == n,
+                      onSelected: (_) => setState(() => _players = n),
+                    ),
+                ],
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Center(
-          child: TextButton.icon(
-            icon: Icon(
-              _spectate ? Icons.visibility : Icons.visibility_outlined,
-              size: 18,
-            ),
-            label: Text(
-              _spectate
-                  ? 'Spectating — tap again to cancel'
-                  : 'Just want to watch? Spectate a room',
-            ),
-            style: TextButton.styleFrom(
-              foregroundColor: _spectate
-                  ? AppColors.gold
-                  : AppColors.ivory.withAlpha(150),
-            ),
-            onPressed: () {
-              setState(() => _spectate = !_spectate);
-              if (!_spectate) return;
-              final code = _codeCtrl.text.trim();
-              final name = _nameCtrl.text.trim();
-              if (name.isEmpty) {
-                _showSnack('Pick a display name first');
-              } else if (code.length == 4) {
-                _connect(createRoom: false);
-              }
-            },
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.add_circle_outline, size: 19),
+                  label: const Text('Create a room'),
+                  onPressed: () => _connect(createRoom: true),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const Key('room-code-field'),
+                      controller: _codeCtrl,
+                      textCapitalization: TextCapitalization.characters,
+                      maxLength: 4,
+                      decoration: const InputDecoration(
+                        counterText: '',
+                        labelText: 'Room code',
+                        hintText: 'A2B3',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    height: 50,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.login, size: 18),
+                      label: const Text('Join'),
+                      onPressed: () {
+                        setState(() => _spectate = false);
+                        _connect(createRoom: false);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton.icon(
+                  icon: Icon(
+                    _spectate ? Icons.visibility : Icons.visibility_outlined,
+                    size: 18,
+                  ),
+                  label: Text(
+                    _spectate
+                        ? 'Spectating — tap again to cancel'
+                        : 'Just want to watch? Spectate a room',
+                  ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: _spectate
+                        ? AppColors.brassDeep
+                        : AppColors.inkSoft,
+                  ),
+                  onPressed: () {
+                    setState(() => _spectate = !_spectate);
+                    if (!_spectate) return;
+                    final code = _codeCtrl.text.trim();
+                    final name = _nameCtrl.text.trim();
+                    if (name.isEmpty) {
+                      _showSnack('Pick a display name first');
+                    } else if (code.length == 4) {
+                      _connect(createRoom: false);
+                    }
+                  },
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
   }
-
-  OutlineInputBorder _border(Color c) => OutlineInputBorder(
-    borderSide: BorderSide(color: c),
-    borderRadius: BorderRadius.circular(10),
-  );
 
   /// The first-time invitee's landing: the room code is already in the
   /// field below, and this card names whose table it is and gives the one
@@ -902,45 +911,51 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   /// default name; the card waits so a player can choose their own first
   /// (and so the `Join` button next to the code still works on its own).
   Widget _inviteCard(String code) {
-    return Card(
+    final watching = _spectate;
+    return ClubCard(
       key: const Key('invite-card'),
-      color: AppColors.feltLight,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              _spectate
-                  ? "You're invited to watch room $code"
-                  : "You're invited to room $code",
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: AppColors.gold,
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-              ),
+      accent: true,
+      padding: const EdgeInsets.all(17),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            watching
+                ? "You're invited to watch room $code"
+                : "You're invited to room $code",
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontFamily: AppFonts.display,
+              color: AppColors.ink,
+              fontSize: 21,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
             ),
-            const SizedBox(height: 6),
-            Text(
-              _spectate
-                  ? 'Choose a name, then watch the table.'
-                  : 'Choose a name, then join your friend at the table.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppColors.ivory.withAlpha(170),
-                fontSize: 12.5,
-              ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            watching
+                ? 'Choose a name, then watch the table.'
+                : 'Choose a name, then join your friend at the table.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.inkSoft,
+              fontSize: 12.5,
+              height: 1.45,
             ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
+          ),
+          const SizedBox(height: 13),
+          SizedBox(
+            height: 48,
+            child: FilledButton.icon(
               key: const Key('join-invited-room'),
-              icon: const Icon(Icons.login),
+              icon: const Icon(Icons.login, size: 18),
               label: Text('Join room $code'),
               onPressed: () => _connect(createRoom: false, codeOverride: code),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -954,15 +969,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     return TextField(
       key: fieldKey,
       controller: ctrl,
-      style: const TextStyle(color: AppColors.ivory),
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        labelStyle: const TextStyle(color: AppColors.ivory),
-        hintStyle: TextStyle(color: AppColors.ivory.withAlpha(90)),
-        enabledBorder: _border(AppColors.ivory.withAlpha(90)),
-        focusedBorder: _border(AppColors.gold),
-      ),
+      decoration: InputDecoration(labelText: label, hintText: hint),
     );
   }
 
@@ -988,7 +995,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   : back
                   ? 'Connection lost — reconnecting…'
                   : 'Connecting…',
-              style: const TextStyle(color: AppColors.ivory, fontSize: 14),
+              style: const TextStyle(
+                fontFamily: AppFonts.body,
+                color: AppColors.paper,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             if (waking) ...[
               const SizedBox(height: 8),
@@ -998,7 +1010,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   'Free hosting sleeps when idle, so the first game of a '
                   'session can take up to a minute to wake up.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.ivoryDark, fontSize: 12),
+                  style: TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.paperDeep,
+                    fontSize: 12,
+                    height: 1.5,
+                  ),
                 ),
               ),
             ],
@@ -1008,21 +1025,36 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     }
     if (client.status == OnlineStatus.error) {
       return ListView(
-        shrinkWrap: true,
+        padding: const EdgeInsets.all(16),
         children: [
-          const Icon(Icons.cloud_off, size: 44, color: AppColors.danger),
-          const SizedBox(height: 8),
-          Center(
-            child: Text(
-              client.errorText ?? 'Something went wrong',
-              style: const TextStyle(color: AppColors.ivory),
+          ClubCard(
+            padding: const EdgeInsets.fromLTRB(18, 22, 18, 20),
+            child: Column(
+              children: [
+                const Icon(Icons.cloud_off, size: 42, color: AppColors.danger),
+                const SizedBox(height: 10),
+                Text(
+                  client.errorText ?? 'Something went wrong',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.ink,
+                    fontSize: 14,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('Try again'),
+                    onPressed: _disconnect,
+                  ),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            icon: const Icon(Icons.refresh),
-            label: const Text('Try again'),
-            onPressed: _disconnect,
           ),
         ],
       );
@@ -1042,16 +1074,18 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     ];
     final iAmHost = seats.isNotEmpty && client.myColor == seats.first.color;
     final spectating = client.isSpectator;
-    final muted = TextStyle(
-      color: AppColors.ivory.withAlpha(150),
+    const muted = TextStyle(
+      fontFamily: AppFonts.body,
+      color: AppColors.inkSoft,
       fontSize: 12,
+      height: 1.35,
     );
     return ListView(
-      shrinkWrap: true,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
       children: [
         if (spectating)
           const Padding(
-            padding: EdgeInsets.only(bottom: 8),
+            padding: EdgeInsets.only(bottom: 10),
             child: Center(
               child: Chip(
                 avatar: Icon(Icons.visibility, size: 16),
@@ -1064,122 +1098,174 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         const SizedBox(height: 12),
         if (client.errorText != null)
           Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.only(bottom: 10),
             child: Text(
               client.errorText!,
-              style: const TextStyle(color: AppColors.danger),
+              style: const TextStyle(
+                fontFamily: AppFonts.body,
+                color: AppColors.danger,
+                fontSize: 12.5,
+              ),
             ),
           ),
-        for (final seat in seats)
-          ListTile(
-            leading: CircleAvatar(
-              backgroundColor: _colorOf(seat.color),
-              child: Text(
-                seat.name.isNotEmpty ? seat.name[0].toUpperCase() : '?',
-                style: const TextStyle(color: Colors.white),
-              ),
-            ),
-            title: Text(
-              seat.name,
-              style: const TextStyle(color: AppColors.ivory),
-            ),
-            subtitle: switch ((seat.status, seat.live)) {
-              (SeatStatus.auto, _) => Text(
-                seat.color == client.myColor
-                    ? 'Autoplay — the table will play your turns'
-                    : 'Autoplay — the table will play for them',
-                style: muted,
-              ),
-              (_, false) => Text(
-                seat.color == client.myColor
-                    ? 'Your connection to this room has dropped'
-                    : 'Connection lost — waiting for them',
-                style: muted,
-              ),
-              _ => null,
-            },
-            trailing: seat.seatId == client.seatId
-                ? const Chip(
-                    label: Text('You'),
-                    visualDensity: VisualDensity.compact,
-                  )
-                : seat.seatId.isEmpty
-                // A bare name-and-color row (the light lobby feed) cannot
-                // be addressed by id — no menu rather than a menu that
-                // fails at tap time.
-                ? null
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SeatFriendControl(
-                        state: _friendState,
-                        peerSeatId: seat.seatId,
-                        peerName: seat.name,
-                        busy: _workingSeat == seat.seatId,
-                        onAdd: () => _addFriend(seat),
-                        onAccept: () => _acceptFriendFromRow(seat),
+        ClubCard(
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Column(
+            children: [
+              for (final seat in seats)
+                ListTile(
+                  contentPadding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
+                  leading: CircleAvatar(
+                    backgroundColor: _colorOf(seat.color),
+                    foregroundColor: Colors.white,
+                    child: Text(
+                      seat.name.isNotEmpty ? seat.name[0].toUpperCase() : '?',
+                      style: const TextStyle(
+                        fontFamily: AppFonts.body,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.more_vert),
-                        tooltip: 'Friend, block or report',
-                        onPressed: () => _playerMenu(seat),
-                      ),
-                    ],
+                    ),
                   ),
+                  title: Text(
+                    seat.name,
+                    style: const TextStyle(
+                      fontFamily: AppFonts.body,
+                      color: AppColors.ink,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: switch ((seat.status, seat.live)) {
+                    (SeatStatus.auto, _) => Text(
+                      seat.color == client.myColor
+                          ? 'Autoplay — the table will play your turns'
+                          : 'Autoplay — the table will play for them',
+                      style: muted,
+                    ),
+                    (_, false) => Text(
+                      seat.color == client.myColor
+                          ? 'Your connection to this room has dropped'
+                          : 'Connection lost — waiting for them',
+                      style: muted,
+                    ),
+                    _ => null,
+                  },
+                  trailing: seat.seatId == client.seatId
+                      ? const Chip(
+                          label: Text('You'),
+                          visualDensity: VisualDensity.compact,
+                        )
+                      : seat.seatId.isEmpty
+                      // A bare name-and-color row (the light lobby feed)
+                      // cannot be addressed by id — no menu rather than a
+                      // menu that fails at tap time.
+                      ? null
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SeatFriendControl(
+                              state: _friendState,
+                              peerSeatId: seat.seatId,
+                              peerName: seat.name,
+                              busy: _workingSeat == seat.seatId,
+                              onAdd: () => _addFriend(seat),
+                              onAccept: () => _acceptFriendFromRow(seat),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.more_vert),
+                              tooltip: 'Friend, block or report',
+                              onPressed: () => _playerMenu(seat),
+                            ),
+                          ],
+                        ),
+                ),
+              for (final seat in gone)
+                ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.fromLTRB(12, 0, 4, 0),
+                  leading: CircleAvatar(
+                    backgroundColor: _colorOf(seat.color).withAlpha(50),
+                    foregroundColor: AppColors.inkSoft,
+                    child: const Icon(Icons.person_off, size: 18),
+                  ),
+                  title: Text('${seat.name} left the room', style: muted),
+                  trailing: seat.seatId != client.seatId
+                      ? IconButton(
+                          icon: const Icon(Icons.more_vert, size: 20),
+                          tooltip: 'Friend, block or report',
+                          onPressed: () => _playerMenu(seat),
+                        )
+                      : null,
+                ),
+              // Seating stops at the room's table size, so the wait line
+              // tracks the host's chosen size — (1/3) for a three-seat room,
+              // and gone entirely once the room is full.
+              if (seats.length < client.capacity && !spectating)
+                ListTile(
+                  contentPadding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.paperDeep.withValues(alpha: 0.55),
+                      border: Border.all(
+                        color: AppColors.brass.withValues(alpha: 0.24),
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.person_add_alt,
+                      size: 18,
+                      color: AppColors.brassDeep,
+                    ),
+                  ),
+                  title: Text(
+                    'Waiting for players… (${seats.length}/${client.capacity})',
+                    style: muted,
+                  ),
+                ),
+              if (client.spectatorNames.isNotEmpty)
+                ListTile(
+                  contentPadding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.paperDeep.withValues(alpha: 0.55),
+                    ),
+                    child: const Icon(
+                      Icons.visibility,
+                      size: 18,
+                      color: AppColors.brassDeep,
+                    ),
+                  ),
+                  title: Text(
+                    'Watching: ${client.spectatorNames.join(', ')}',
+                    style: muted,
+                  ),
+                ),
+            ],
           ),
-        for (final seat in gone)
-          ListTile(
-            dense: true,
-            leading: CircleAvatar(
-              backgroundColor: _colorOf(seat.color).withAlpha(80),
-              child: const Icon(Icons.person_off, size: 18),
-            ),
-            title: Text('${seat.name} left the room', style: muted),
-            trailing: seat.seatId != client.seatId
-                ? IconButton(
-                    icon: const Icon(Icons.more_vert, size: 20),
-                    tooltip: 'Friend, block or report',
-                    onPressed: () => _playerMenu(seat),
-                  )
-                : null,
-          ),
-        // Seating stops at the room's table size, so the wait line tracks
-        // the host's chosen size — (1/3) for a three-seat room, and gone
-        // entirely once the room is full.
-        if (seats.length < client.capacity && !spectating)
-          ListTile(
-            leading: const CircleAvatar(
-              child: Icon(Icons.person_add_alt, size: 18),
-            ),
-            title: Text(
-              'Waiting for players… (${seats.length}/${client.capacity})',
-              style: TextStyle(color: AppColors.ivory.withAlpha(150)),
-            ),
-          ),
-        if (client.spectatorNames.isNotEmpty)
-          ListTile(
-            leading: const CircleAvatar(
-              child: Icon(Icons.visibility, size: 18),
-            ),
-            title: Text(
-              'Watching: ${client.spectatorNames.join(', ')}',
-              style: TextStyle(color: AppColors.ivory.withAlpha(150)),
-            ),
-          ),
-        const SizedBox(height: 12),
+        ),
+        const SizedBox(height: 14),
         if (!spectating)
-          FilledButton.icon(
-            icon: const Icon(Icons.play_arrow),
-            label: Text(
-              client.started
-                  ? 'Game starting…'
-                  : iAmHost
-                  ? 'Start game'
-                  : 'Waiting for the host to start',
+          SizedBox(
+            height: 52,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.play_arrow, size: 20),
+              label: Text(
+                client.started
+                    ? 'Game starting…'
+                    : iAmHost
+                    ? 'Start game'
+                    : 'Waiting for the host to start',
+              ),
+              onPressed: client.started || !iAmHost || seats.length < 2
+                  ? null
+                  : client.sendStart,
             ),
-            onPressed: client.started || !iAmHost || seats.length < 2
-                ? null
-                : client.sendStart,
           ),
         const SizedBox(height: 16),
         // Table voice: peer-to-peer audio through the room's WebSocket
@@ -1197,9 +1283,11 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 client.voiceJoined
                     ? (client.voiceMuted ? 'Voice — muted' : 'Table voice on')
                     : 'Voice',
-                style: TextStyle(
-                  color: AppColors.ivory.withAlpha(150),
+                style: const TextStyle(
+                  fontFamily: AppFonts.body,
+                  color: AppColors.paperDeep,
                   fontSize: 12,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
               const SizedBox(width: 4),
@@ -1401,74 +1489,92 @@ class RoomCodeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final value = _value;
     final link = _link;
-    return Card(
-      color: AppColors.feltLight,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            const Text(
-              'Room code',
-              style: TextStyle(color: AppColors.ivory, fontSize: 13),
+    return ClubCard(
+      accent: true,
+      padding: const EdgeInsets.fromLTRB(17, 16, 17, 16),
+      child: Column(
+        children: [
+          const Text(
+            'ROOM CODE',
+            style: TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.brassDeep,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.8,
             ),
-            const SizedBox(height: 4),
-            Center(
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  SelectableText(
-                    value ?? '····',
-                    style: const TextStyle(
-                      color: AppColors.gold,
-                      fontSize: 34,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 8,
-                    ),
+          ),
+          const SizedBox(height: 3),
+          Center(
+            child: Wrap(
+              alignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SelectableText(
+                  value ?? '····',
+                  style: const TextStyle(
+                    fontFamily: AppFonts.display,
+                    color: AppColors.ink,
+                    fontSize: 38,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 7,
+                    height: 1.1,
                   ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.copy, color: AppColors.gold),
-                    tooltip: 'Copy room code',
-                    onPressed: value == null ? null : () => _copyCode(context),
-                  ),
-                  if (link != null)
-                    IconButton(
-                      icon: const Icon(Icons.ios_share, color: AppColors.gold),
-                      tooltip: 'Share join link',
-                      onPressed: () => _share(context),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Share it so friends can join',
-              style: TextStyle(
-                color: AppColors.ivory.withAlpha(150),
-                fontSize: 12,
-              ),
-            ),
-            if (link != null) ...[
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                key: const Key('copy-join-link'),
-                icon: const Icon(Icons.link, size: 18),
-                label: const Text('Copy join link'),
-                onPressed: () => _copyLink(context),
-              ),
-              const SizedBox(height: 6),
-              SelectableText(
-                link,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: AppColors.ivory.withAlpha(150),
-                  fontSize: 11.5,
                 ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 20),
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppColors.paperDeep.withValues(alpha: 0.7),
+                    foregroundColor: AppColors.brassDeep,
+                  ),
+                  tooltip: 'Copy room code',
+                  onPressed: value == null ? null : () => _copyCode(context),
+                ),
+                if (link != null)
+                  IconButton(
+                    icon: const Icon(Icons.ios_share, size: 20),
+                    style: IconButton.styleFrom(
+                      backgroundColor: AppColors.paperDeep.withValues(
+                        alpha: 0.7,
+                      ),
+                      foregroundColor: AppColors.brassDeep,
+                    ),
+                    tooltip: 'Share join link',
+                    onPressed: () => _share(context),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            'Share it so friends can join',
+            style: TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.inkFaint,
+              fontSize: 11.5,
+            ),
+          ),
+          if (link != null) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('copy-join-link'),
+              icon: const Icon(Icons.link, size: 18),
+              label: const Text('Copy join link'),
+              onPressed: () => _copyLink(context),
+            ),
+            const SizedBox(height: 6),
+            SelectableText(
+              link,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: AppFonts.body,
+                color: AppColors.inkFaint,
+                fontSize: 11.5,
               ),
-            ],
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
