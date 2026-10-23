@@ -167,7 +167,7 @@ class _ContactScreenState extends State<ContactScreen> {
                                   width: 18,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
-                                    color: AppColors.paperLight,
+                                    color: AppColors.darkInk,
                                   ),
                                 )
                               : const Text('Send message'),

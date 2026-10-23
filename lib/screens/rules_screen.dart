@@ -82,7 +82,7 @@ class _RulesScreenState extends State<RulesScreen> {
                         content.lead,
                         style: const TextStyle(
                           fontFamily: AppFonts.display,
-                          color: AppColors.ink,
+                          color: AppColors.textPrimary,
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
                           height: 1.38,
@@ -116,13 +116,13 @@ class _RulesScreenState extends State<RulesScreen> {
           Container(
             height: 1,
             margin: const EdgeInsets.only(bottom: 14),
-            color: AppColors.ink.withValues(alpha: 0.09),
+            color: AppColors.textPrimary.withValues(alpha: 0.09),
           ),
           Text(
             section.heading,
             style: const TextStyle(
               fontFamily: AppFonts.display,
-              color: AppColors.brassDeep,
+              color: AppColors.gold,
               fontSize: 18,
               fontWeight: FontWeight.w600,
               height: 1.35,
@@ -139,7 +139,7 @@ class _RulesScreenState extends State<RulesScreen> {
       line.text,
       style: const TextStyle(
         fontFamily: AppFonts.body,
-        color: AppColors.ink,
+        color: AppColors.textPrimary,
         fontSize: 14.5,
         height: 1.58,
       ),

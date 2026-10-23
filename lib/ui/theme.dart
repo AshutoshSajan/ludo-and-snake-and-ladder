@@ -2,47 +2,65 @@ import 'package:flutter/material.dart';
 
 import '../engine/ludo/ludo_models.dart';
 
-/// "The Green Room" design tokens.
+/// "The Green Room" design tokens, in the club's old gold-and-green livery.
 ///
-/// One room, two surfaces: deep green felt for the table itself, and warm
-/// cream paper for everything laid on it — menus, score sheets, rule books and
-/// forms. Brass is the one metal in the room, used for selection, scores and
-/// the small rules that keep the paper feeling printed rather than floating.
+/// One room, one material: deep green felt for every surface, warm ivory type
+/// and a single brass accent. There is deliberately no paper-white layer in
+/// this theme — cards are raised green felt, separated by hairline brass rules,
+/// so the room stays a room even on a bright monitor.
 class AppColors {
   AppColors._();
 
   // ---------------------------------------------------------------- felt
-  /// The room behind every screen. Deeper than the old tabletop green so the
-  /// paper surfaces carry the light, the way they do in a real club room.
-  static const felt = Color(0xFF0C1F17);
-  static const feltDeep = Color(0xFF07140E);
-  static const feltLight = Color(0xFF173A2A);
-  static const feltGlow = Color(0xFF21503A);
+  /// The room behind every screen.
+  static const felt = Color(0xFF123524);
+  static const feltDeep = Color(0xFF0A2015);
+  static const feltLight = Color(0xFF1B4A33);
+  static const feltGlow = Color(0xFF21573D);
 
-  // --------------------------------------------------------------- paper
-  static const paper = Color(0xFFF6EEDD);
-  static const paperLight = Color(0xFFFCF7EC);
-  static const paperDeep = Color(0xFFE9DDC5);
-  static const paperEdge = Color(0xFFD6C7A9);
+  // ------------------------------------------------------------- surfaces
+  /// A card laid on the felt: green, not paper.
+  static const surface = Color(0xFF1B4A33);
+  static const surfaceRaised = Color(0xFF23573D);
+  static const surfaceDeep = Color(0xFF153F2C);
 
-  // ------------------------------------------------------------------ ink
-  static const ink = Color(0xFF1B2A21);
-  static const inkSoft = Color(0xFF526055);
-  static const inkFaint = Color(0xFF7D887D);
+  /// The recessed fill inside a form field.
+  static const input = Color(0xFF0F2E20);
 
-  // ---------------------------------------------------------------- brass
-  static const gold = Color(0xFFD7B45D);
-  static const brass = Color(0xFFBC9138);
-  static const brassDeep = Color(0xFF856221);
+  // ------------------------------------------------------------------ type
+  static const ivory = Color(0xFFF5EFE0);
+  static const textPrimary = ivory;
+  static const textSecondary = Color(0xFFD6D0BE);
+  static const textMuted = Color(0xFFB5B3A2);
+
+  /// Ink for marks printed on gold or on an ivory board. Never use this for
+  /// type on the felt — use [textPrimary].
+  static const darkInk = Color(0xFF26221A);
+  static const darkInkSoft = Color(0xFF574B2C);
+
+  // ----------------------------------------------------------------- gold
+  static const gold = Color(0xFFD9A441);
+  static const brass = Color(0xFFC29232);
+  static const brassDeep = Color(0xFF8B651D);
 
   // -------------------------------------------------------------- accents
-  static const danger = Color(0xFFB2473B);
+  static const danger = Color(0xFFD46A5E);
   static const claret = Color(0xFF7B2F2F);
-  static const sage = Color(0xFF7F9A80);
+  static const sage = Color(0xFF8FAF91);
 
-  // Back-compat aliases: the board painters and older screens speak in ivory.
-  static const ivory = paper;
-  static const ivoryDark = paperDeep;
+  // Back-compat aliases. "Paper" is gone as a surface; these names now carry
+  // the ivory type and hairline rules that used to live on it.
+  static const paper = ivory;
+  static const paperLight = Color(0xFFFCF7EC);
+  static const paperDeep = textSecondary;
+  static const paperEdge = Color(0x66D9A441);
+  static const ivoryDark = textSecondary;
+
+  // Ink aliases kept for the board painters, which still print dark lines on
+  // an ivory board.
+  static const ink = darkInk;
+  static const inkSoft = darkInkSoft;
+  static const inkFaint = Color(0xFF8B8068);
 
   static const ludoRed = Color(0xFFC0392B);
   static const ludoGreen = Color(0xFF1E8449);
@@ -78,7 +96,7 @@ class AppFonts {
   static const body = 'Manrope';
 }
 
-/// The type scale is the same on felt and on paper; only the colours change.
+/// The type scale is the same on every surface; only the colours change.
 /// Headings are Fraunces, body and controls Manrope, so a score and a sentence
 /// never compete for the same voice.
 TextTheme _typeScale(Color primary, Color secondary) {
@@ -128,25 +146,25 @@ TextTheme _typeScale(Color primary, Color secondary) {
 class AppTheme {
   AppTheme._();
 
-  /// The room: deep felt, cream type, brass controls.
+  /// The room: deep felt, ivory type, brass controls.
   static ThemeData dark() {
     const scheme = ColorScheme.dark(
       primary: AppColors.gold,
-      onPrimary: AppColors.ink,
+      onPrimary: AppColors.darkInk,
       primaryContainer: AppColors.brassDeep,
-      onPrimaryContainer: AppColors.paperLight,
-      secondary: AppColors.paperDeep,
-      onSecondary: AppColors.ink,
+      onPrimaryContainer: AppColors.ivory,
+      secondary: AppColors.gold,
+      onSecondary: AppColors.darkInk,
       tertiary: AppColors.sage,
-      onTertiary: AppColors.ink,
+      onTertiary: AppColors.darkInk,
       surface: AppColors.felt,
-      onSurface: AppColors.paper,
-      surfaceContainerHighest: AppColors.feltLight,
+      onSurface: AppColors.ivory,
+      surfaceContainerHighest: AppColors.surfaceRaised,
       onSurfaceVariant: AppColors.paperDeep,
       outline: AppColors.brass,
-      outlineVariant: Color(0x55D7B45D),
+      outlineVariant: Color(0x55D9A441),
       error: AppColors.danger,
-      onError: Colors.white,
+      onError: AppColors.ivory,
     );
 
     final base = ThemeData(
@@ -161,51 +179,51 @@ class AppTheme {
     );
 
     return base.copyWith(
-      textTheme: _typeScale(AppColors.paper, AppColors.gold),
-      primaryTextTheme: _typeScale(AppColors.ink, AppColors.brassDeep),
-      iconTheme: const IconThemeData(color: AppColors.paper, size: 22),
+      textTheme: _typeScale(AppColors.textPrimary, AppColors.gold),
+      primaryTextTheme: _typeScale(AppColors.darkInk, AppColors.darkInkSoft),
+      iconTheme: const IconThemeData(color: AppColors.ivory, size: 22),
       dividerTheme: DividerThemeData(
-        color: AppColors.paper.withValues(alpha: 0.12),
+        color: AppColors.ivory.withValues(alpha: 0.12),
         thickness: 1,
         space: 1,
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: AppColors.felt,
-        foregroundColor: AppColors.paper,
+        foregroundColor: AppColors.ivory,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
         toolbarHeight: 64,
-        iconTheme: const IconThemeData(color: AppColors.paper, size: 22),
-        actionsIconTheme: const IconThemeData(color: AppColors.paper, size: 22),
+        iconTheme: const IconThemeData(color: AppColors.ivory, size: 22),
+        actionsIconTheme: const IconThemeData(color: AppColors.ivory, size: 22),
         titleTextStyle: const TextStyle(
           fontFamily: AppFonts.display,
           fontSize: 22,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.1,
-          color: AppColors.paper,
+          color: AppColors.ivory,
         ),
         shape: Border(
           bottom: BorderSide(color: AppColors.gold.withValues(alpha: 0.22)),
         ),
       ),
       cardTheme: CardThemeData(
-        color: AppColors.feltLight,
+        color: AppColors.surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
-          side: BorderSide(color: AppColors.paper.withValues(alpha: 0.10)),
+          side: BorderSide(color: AppColors.gold.withValues(alpha: 0.22)),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           backgroundColor: AppColors.gold,
-          foregroundColor: AppColors.ink,
-          disabledBackgroundColor: AppColors.paper.withValues(alpha: 0.12),
-          disabledForegroundColor: AppColors.paper.withValues(alpha: 0.38),
+          foregroundColor: AppColors.darkInk,
+          disabledBackgroundColor: AppColors.ivory.withValues(alpha: 0.10),
+          disabledForegroundColor: AppColors.ivory.withValues(alpha: 0.38),
           elevation: 0,
           minimumSize: const Size(44, 48),
           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
@@ -222,8 +240,8 @@ class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.paper,
-          backgroundColor: AppColors.paper.withValues(alpha: 0.035),
+          foregroundColor: AppColors.ivory,
+          backgroundColor: AppColors.surfaceRaised.withValues(alpha: 0.35),
           side: BorderSide(color: AppColors.gold.withValues(alpha: 0.55)),
           minimumSize: const Size(44, 48),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
@@ -253,30 +271,34 @@ class AppTheme {
       ),
       iconButtonTheme: IconButtonThemeData(
         style: IconButton.styleFrom(
-          foregroundColor: AppColors.paper,
+          foregroundColor: AppColors.ivory,
           minimumSize: const Size(44, 44),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
         ),
       ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: AppColors.gold,
+        foregroundColor: AppColors.darkInk,
+      ),
       chipTheme: ChipThemeData(
-        backgroundColor: AppColors.feltLight,
+        backgroundColor: AppColors.surfaceRaised,
         selectedColor: AppColors.gold,
-        disabledColor: AppColors.feltLight,
-        side: BorderSide(color: AppColors.paper.withValues(alpha: 0.16)),
+        disabledColor: AppColors.surfaceDeep,
+        side: BorderSide(color: AppColors.gold.withValues(alpha: 0.28)),
         shape: const StadiumBorder(),
         labelStyle: const TextStyle(
           fontFamily: AppFonts.body,
           fontSize: 13,
           fontWeight: FontWeight.w700,
-          color: AppColors.paper,
+          color: AppColors.ivory,
         ),
         secondaryLabelStyle: const TextStyle(
           fontFamily: AppFonts.body,
           fontSize: 13,
           fontWeight: FontWeight.w800,
-          color: AppColors.ink,
+          color: AppColors.darkInk,
         ),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         showCheckmark: false,
@@ -285,13 +307,13 @@ class AppTheme {
         style: ButtonStyle(
           foregroundColor: WidgetStateProperty.resolveWith(
             (states) => states.contains(WidgetState.selected)
-                ? AppColors.ink
-                : AppColors.paper,
+                ? AppColors.darkInk
+                : AppColors.ivory,
           ),
           backgroundColor: WidgetStateProperty.resolveWith(
             (states) => states.contains(WidgetState.selected)
                 ? AppColors.gold
-                : AppColors.paper.withValues(alpha: 0.04),
+                : AppColors.surfaceRaised.withValues(alpha: 0.45),
           ),
           side: WidgetStatePropertyAll(
             BorderSide(color: AppColors.gold.withValues(alpha: 0.42)),
@@ -310,7 +332,7 @@ class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.paperLight,
+        fillColor: AppColors.input,
         isDense: true,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 14,
@@ -318,37 +340,49 @@ class AppTheme {
         ),
         labelStyle: const TextStyle(
           fontFamily: AppFonts.body,
-          color: AppColors.inkSoft,
+          color: AppColors.textSecondary,
           fontSize: 13.5,
           fontWeight: FontWeight.w600,
         ),
         floatingLabelStyle: const TextStyle(
           fontFamily: AppFonts.body,
-          color: AppColors.brassDeep,
+          color: AppColors.gold,
           fontSize: 13,
           fontWeight: FontWeight.w700,
         ),
-        hintStyle: TextStyle(
+        hintStyle: const TextStyle(
           fontFamily: AppFonts.body,
-          color: AppColors.inkFaint.withValues(alpha: 0.8),
+          color: AppColors.textMuted,
           fontSize: 13.5,
+        ),
+        helperStyle: const TextStyle(
+          fontFamily: AppFonts.body,
+          color: AppColors.textMuted,
+          fontSize: 12,
+        ),
+        counterStyle: const TextStyle(
+          fontFamily: AppFonts.body,
+          color: AppColors.textMuted,
+          fontSize: 11,
         ),
         errorStyle: const TextStyle(
           fontFamily: AppFonts.body,
           color: AppColors.danger,
           fontSize: 12,
         ),
+        prefixIconColor: AppColors.textSecondary,
+        suffixIconColor: AppColors.textSecondary,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.paperEdge),
+          borderSide: BorderSide(color: AppColors.gold.withValues(alpha: 0.28)),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.paperEdge),
+          borderSide: BorderSide(color: AppColors.gold.withValues(alpha: 0.28)),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.brass, width: 1.6),
+          borderSide: const BorderSide(color: AppColors.gold, width: 1.6),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -362,34 +396,50 @@ class AppTheme {
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
-              ? AppColors.gold
-              : AppColors.paper,
+              ? AppColors.darkInk
+              : AppColors.paperLight,
         ),
         trackColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
-              ? AppColors.gold.withValues(alpha: 0.38)
-              : AppColors.paper.withValues(alpha: 0.12),
+              ? AppColors.gold.withValues(alpha: 0.55)
+              : AppColors.ivory.withValues(alpha: 0.12),
         ),
         trackOutlineColor: WidgetStatePropertyAll(
-          AppColors.paper.withValues(alpha: 0.20),
+          AppColors.ivory.withValues(alpha: 0.20),
+        ),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        fillColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? AppColors.gold
+              : Colors.transparent,
+        ),
+        checkColor: const WidgetStatePropertyAll(AppColors.darkInk),
+        side: BorderSide(color: AppColors.gold.withValues(alpha: 0.55)),
+      ),
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? AppColors.gold
+              : AppColors.textSecondary,
         ),
       ),
       progressIndicatorTheme: const ProgressIndicatorThemeData(
         color: AppColors.gold,
-        linearTrackColor: Color(0x33F6EEDD),
+        linearTrackColor: Color(0x33F5EFE0),
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: AppColors.paper,
+        backgroundColor: AppColors.gold,
         contentTextStyle: const TextStyle(
           fontFamily: AppFonts.body,
-          color: AppColors.ink,
-          fontWeight: FontWeight.w600,
+          color: AppColors.darkInk,
+          fontWeight: FontWeight.w700,
         ),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: AppColors.feltLight,
+        backgroundColor: AppColors.surface,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(22),
@@ -399,17 +449,17 @@ class AppTheme {
           fontFamily: AppFonts.display,
           fontSize: 23,
           fontWeight: FontWeight.w600,
-          color: AppColors.paper,
+          color: AppColors.ivory,
         ),
-        contentTextStyle: TextStyle(
+        contentTextStyle: const TextStyle(
           fontFamily: AppFonts.body,
           fontSize: 14.5,
           height: 1.5,
-          color: AppColors.paper.withValues(alpha: 0.82),
+          color: AppColors.textSecondary,
         ),
       ),
       bottomSheetTheme: const BottomSheetThemeData(
-        backgroundColor: AppColors.feltLight,
+        backgroundColor: AppColors.surface,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -417,222 +467,113 @@ class AppTheme {
       ),
       listTileTheme: const ListTileThemeData(
         iconColor: AppColors.gold,
-        textColor: AppColors.paper,
+        textColor: AppColors.ivory,
         minVerticalPadding: 10,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: AppColors.surfaceRaised,
+        surfaceTintColor: Colors.transparent,
+        textStyle: const TextStyle(
+          fontFamily: AppFonts.body,
+          color: AppColors.ivory,
+          fontWeight: FontWeight.w600,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: AppColors.gold.withValues(alpha: 0.28)),
+        ),
+      ),
+      dropdownMenuTheme: DropdownMenuThemeData(
+        textStyle: const TextStyle(
+          fontFamily: AppFonts.body,
+          color: AppColors.ivory,
+        ),
+        menuStyle: MenuStyle(
+          backgroundColor: const WidgetStatePropertyAll(
+            AppColors.surfaceRaised,
+          ),
+          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: BorderSide(color: AppColors.gold.withValues(alpha: 0.28)),
+            ),
+          ),
+        ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: AppColors.feltDeep,
+        indicatorColor: AppColors.gold,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? AppColors.darkInk
+                : AppColors.textSecondary,
+            size: 22,
+          ),
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            fontFamily: AppFonts.body,
+            fontSize: 11.5,
+            fontWeight: FontWeight.w700,
+            color: states.contains(WidgetState.selected)
+                ? AppColors.gold
+                : AppColors.textSecondary,
+          ),
+        ),
+      ),
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor: AppColors.feltDeep,
+        indicatorColor: AppColors.gold,
+        selectedIconTheme: const IconThemeData(color: AppColors.darkInk),
+        unselectedIconTheme: const IconThemeData(
+          color: AppColors.textSecondary,
+        ),
+        selectedLabelTextStyle: const TextStyle(
+          fontFamily: AppFonts.body,
+          color: AppColors.gold,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+        unselectedLabelTextStyle: const TextStyle(
+          fontFamily: AppFonts.body,
+          color: AppColors.textSecondary,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
       ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
-          color: AppColors.paper,
+          color: AppColors.surfaceRaised,
           borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppColors.gold.withValues(alpha: 0.28)),
         ),
         textStyle: const TextStyle(
           fontFamily: AppFonts.body,
-          color: AppColors.ink,
+          color: AppColors.ivory,
           fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
       ),
       scrollbarTheme: ScrollbarThemeData(
         thumbColor: WidgetStatePropertyAll(
-          AppColors.paper.withValues(alpha: 0.26),
+          AppColors.gold.withValues(alpha: 0.34),
         ),
         radius: const Radius.circular(99),
         thickness: const WidgetStatePropertyAll(6),
       ),
-    );
-  }
-
-  /// A sheet of club paper. Used by [ClubCard] to give its subtree a light,
-  /// ink-based material theme, so defaults inside a paper card never inherit
-  /// the room's cream-on-felt colours.
-  static ThemeData paper() {
-    const scheme = ColorScheme.light(
-      primary: AppColors.brassDeep,
-      onPrimary: AppColors.paperLight,
-      secondary: AppColors.claret,
-      onSecondary: AppColors.paperLight,
-      surface: AppColors.paper,
-      onSurface: AppColors.ink,
-      surfaceContainerHighest: AppColors.paperDeep,
-      onSurfaceVariant: AppColors.inkSoft,
-      outline: AppColors.paperEdge,
-      error: AppColors.claret,
-    );
-    final base = ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.light,
-      colorScheme: scheme,
-      fontFamily: AppFonts.body,
-      scaffoldBackgroundColor: AppColors.paper,
-      canvasColor: AppColors.paper,
-    );
-    return base.copyWith(
-      textTheme: _typeScale(AppColors.ink, AppColors.brassDeep),
-      primaryTextTheme: _typeScale(AppColors.paperLight, AppColors.gold),
-      iconTheme: const IconThemeData(color: AppColors.inkSoft, size: 22),
-      dividerTheme: DividerThemeData(
-        color: AppColors.ink.withValues(alpha: 0.10),
-        thickness: 1,
-        space: 1,
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: AppColors.gold,
+        selectionColor: AppColors.gold.withValues(alpha: 0.30),
+        selectionHandleColor: AppColors.gold,
       ),
-      filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          backgroundColor: AppColors.ink,
-          foregroundColor: AppColors.paperLight,
-          disabledBackgroundColor: AppColors.ink.withValues(alpha: 0.12),
-          disabledForegroundColor: AppColors.ink.withValues(alpha: 0.38),
-          elevation: 0,
-          minimumSize: const Size(44, 48),
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-          textStyle: const TextStyle(
-            fontFamily: AppFonts.body,
-            fontSize: 14,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.2,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      ),
-      outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.ink,
-          side: BorderSide(color: AppColors.ink.withValues(alpha: 0.28)),
-          minimumSize: const Size(44, 48),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
-          textStyle: const TextStyle(
-            fontFamily: AppFonts.body,
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      ),
-      textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          foregroundColor: AppColors.brassDeep,
-          minimumSize: const Size(44, 44),
-          textStyle: const TextStyle(
-            fontFamily: AppFonts.body,
-            fontSize: 13.5,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-      chipTheme: ChipThemeData(
-        backgroundColor: AppColors.paperDeep,
-        selectedColor: AppColors.gold,
-        side: BorderSide(color: AppColors.ink.withValues(alpha: 0.12)),
-        shape: const StadiumBorder(),
-        labelStyle: const TextStyle(
-          fontFamily: AppFonts.body,
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: AppColors.ink,
-        ),
-        secondaryLabelStyle: const TextStyle(
-          fontFamily: AppFonts.body,
-          fontSize: 13,
-          fontWeight: FontWeight.w800,
-          color: AppColors.ink,
-        ),
-        showCheckmark: false,
-      ),
-      segmentedButtonTheme: SegmentedButtonThemeData(
-        style: ButtonStyle(
-          foregroundColor: WidgetStateProperty.resolveWith(
-            (states) => states.contains(WidgetState.selected)
-                ? AppColors.ink
-                : AppColors.inkSoft,
-          ),
-          backgroundColor: WidgetStateProperty.resolveWith(
-            (states) => states.contains(WidgetState.selected)
-                ? AppColors.gold
-                : AppColors.paperLight,
-          ),
-          side: WidgetStatePropertyAll(
-            BorderSide(color: AppColors.ink.withValues(alpha: 0.16)),
-          ),
-          textStyle: const WidgetStatePropertyAll(
-            TextStyle(
-              fontFamily: AppFonts.body,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: AppColors.paperLight,
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 14,
-        ),
-        labelStyle: const TextStyle(
-          fontFamily: AppFonts.body,
-          color: AppColors.inkSoft,
-          fontSize: 13.5,
-          fontWeight: FontWeight.w600,
-        ),
-        floatingLabelStyle: const TextStyle(
-          fontFamily: AppFonts.body,
-          color: AppColors.brassDeep,
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-        ),
-        hintStyle: TextStyle(
-          fontFamily: AppFonts.body,
-          color: AppColors.inkFaint.withValues(alpha: 0.72),
-          fontSize: 13.5,
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.paperEdge),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.paperEdge),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.brass, width: 1.6),
-        ),
-      ),
-      switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              ? AppColors.brassDeep
-              : AppColors.paperLight,
-        ),
-        trackColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              ? AppColors.gold.withValues(alpha: 0.55)
-              : AppColors.ink.withValues(alpha: 0.12),
-        ),
-        trackOutlineColor: WidgetStatePropertyAll(
-          AppColors.ink.withValues(alpha: 0.14),
-        ),
-      ),
-      progressIndicatorTheme: const ProgressIndicatorThemeData(
-        color: AppColors.brassDeep,
-        linearTrackColor: Color(0x221B2A21),
-      ),
-      tooltipTheme: TooltipThemeData(
-        decoration: BoxDecoration(
-          color: AppColors.ink,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        textStyle: const TextStyle(
-          fontFamily: AppFonts.body,
-          color: AppColors.paper,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
+      sliderTheme: SliderThemeData(
+        activeTrackColor: AppColors.gold,
+        thumbColor: AppColors.gold,
+        inactiveTrackColor: AppColors.ivory.withValues(alpha: 0.12),
       ),
     );
   }

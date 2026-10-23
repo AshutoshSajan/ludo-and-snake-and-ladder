@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:game_club/screens/friends_screen.dart';
 import 'package:game_club/services/friend_client.dart';
+import 'package:game_club/ui/club_widgets.dart';
 
 const serverUrl = 'wss://friends.test/ws';
 
@@ -21,19 +22,22 @@ const serverUrl = 'wss://friends.test/ws';
 Map<String, dynamic> _stateBody({
   int latestForP9 = 7,
   List<Map<String, Object?>> table = const [],
+  List<Map<String, Object?>>? friends,
 }) => {
   'ok': true,
   'me': {'seatId': 'p1', 'name': 'Swift Otter', 'code': 'PRK7VW'},
   'table': table,
-  'friends': [
-    {
-      'seatId': 'p9',
-      'name': 'Small Fox',
-      'code': 'FOXCDE',
-      'since': 100,
-      'latest': latestForP9,
-    },
-  ],
+  'friends':
+      friends ??
+      [
+        {
+          'seatId': 'p9',
+          'name': 'Small Fox',
+          'code': 'FOXCDE',
+          'since': 100,
+          'latest': latestForP9,
+        },
+      ],
   'incoming': [
     {
       'id': 7,
@@ -204,5 +208,68 @@ void main() {
     expect(find.textContaining('Remove Small Fox'), findsOneWidget);
     expect(find.textContaining('Block Small Fox'), findsOneWidget);
     expect(find.textContaining('Report Small Fox'), findsOneWidget);
+  });
+
+  testWidgets('add friend dialog shows one short placeholder', (tester) async {
+    await _pump(
+      tester,
+      FriendClient(
+        serverUrl: serverUrl,
+        httpClient: MockClient((_) async => ok(_stateBody())),
+      ),
+    );
+    await tester.tap(find.byTooltip('Add a friend'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Add a friend'), findsOneWidget);
+    expect(find.text('Friend code or player ID'), findsOneWidget);
+    expect(find.textContaining('(e.g.'), findsNothing);
+  });
+
+  testWidgets('friend cards leave a ten pixel gap', (tester) async {
+    tester.view.physicalSize = const Size(900, 2000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await _pump(
+      tester,
+      FriendClient(
+        serverUrl: serverUrl,
+        httpClient: MockClient(
+          (_) async => ok(
+            _stateBody(
+              friends: [
+                {
+                  'seatId': 'p9',
+                  'name': 'Small Fox',
+                  'code': 'FOXCDE',
+                  'since': 100,
+                  'latest': 0,
+                },
+                {
+                  'seatId': 'p10',
+                  'name': 'Big Bear',
+                  'code': 'BEARCD',
+                  'since': 101,
+                  'latest': 0,
+                },
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final first = find.ancestor(
+      of: find.text('Small Fox'),
+      matching: find.byType(ClubCard),
+    );
+    final second = find.ancestor(
+      of: find.text('Big Bear'),
+      matching: find.byType(ClubCard),
+    );
+    expect(first, findsOneWidget);
+    expect(second, findsOneWidget);
+    final gap = tester.getTopLeft(second).dy - tester.getBottomLeft(first).dy;
+    expect(gap, greaterThanOrEqualTo(10));
   });
 }

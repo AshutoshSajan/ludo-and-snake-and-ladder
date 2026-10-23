@@ -743,7 +743,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                           vertical: 8,
                         ),
                         decoration: BoxDecoration(
-                          color: AppColors.paperDeep.withValues(alpha: 0.65),
+                          color: AppColors.surfaceRaised,
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
                             color: AppColors.brass.withValues(alpha: 0.34),
@@ -755,7 +755,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                             const Icon(
                               Icons.badge_outlined,
                               size: 16,
-                              color: AppColors.brassDeep,
+                              color: AppColors.gold,
                             ),
                             const SizedBox(width: 8),
                             Text(
@@ -764,14 +764,14 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                                 fontFamily: AppFonts.body,
                                 fontSize: 11.5,
                                 fontWeight: FontWeight.w600,
-                                color: AppColors.inkSoft,
+                                color: AppColors.textSecondary,
                               ),
                             ),
                             const SizedBox(width: 8),
                             const Icon(
                               Icons.copy,
                               size: 15,
-                              color: AppColors.brassDeep,
+                              color: AppColors.gold,
                             ),
                           ],
                         ),
@@ -809,7 +809,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                 'Players at the table',
                 style: TextStyle(
                   fontFamily: AppFonts.body,
-                  color: AppColors.ink,
+                  color: AppColors.textPrimary,
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
@@ -882,8 +882,8 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   ),
                   style: TextButton.styleFrom(
                     foregroundColor: _spectate
-                        ? AppColors.brassDeep
-                        : AppColors.inkSoft,
+                        ? AppColors.gold
+                        : AppColors.textSecondary,
                   ),
                   onPressed: () {
                     setState(() => _spectate = !_spectate);
@@ -926,7 +926,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontFamily: AppFonts.display,
-              color: AppColors.ink,
+              color: AppColors.textPrimary,
               fontSize: 21,
               fontWeight: FontWeight.w600,
               height: 1.2,
@@ -940,7 +940,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkSoft,
+              color: AppColors.textSecondary,
               fontSize: 12.5,
               height: 1.45,
             ),
@@ -1038,7 +1038,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontFamily: AppFonts.body,
-                    color: AppColors.ink,
+                    color: AppColors.textPrimary,
                     fontSize: 14,
                     height: 1.45,
                   ),
@@ -1076,7 +1076,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final spectating = client.isSpectator;
     const muted = TextStyle(
       fontFamily: AppFonts.body,
-      color: AppColors.inkSoft,
+      color: AppColors.textSecondary,
       fontSize: 12,
       height: 1.35,
     );
@@ -1131,7 +1131,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                     seat.name,
                     style: const TextStyle(
                       fontFamily: AppFonts.body,
-                      color: AppColors.ink,
+                      color: AppColors.textPrimary,
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                     ),
@@ -1186,7 +1186,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                   contentPadding: const EdgeInsets.fromLTRB(12, 0, 4, 0),
                   leading: CircleAvatar(
                     backgroundColor: _colorOf(seat.color).withAlpha(50),
-                    foregroundColor: AppColors.inkSoft,
+                    foregroundColor: AppColors.textSecondary,
                     child: const Icon(Icons.person_off, size: 18),
                   ),
                   title: Text('${seat.name} left the room', style: muted),
@@ -1209,7 +1209,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                     height: 40,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: AppColors.paperDeep.withValues(alpha: 0.55),
+                      color: AppColors.surfaceRaised,
                       border: Border.all(
                         color: AppColors.brass.withValues(alpha: 0.24),
                       ),
@@ -1217,7 +1217,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                     child: const Icon(
                       Icons.person_add_alt,
                       size: 18,
-                      color: AppColors.brassDeep,
+                      color: AppColors.gold,
                     ),
                   ),
                   title: Text(
@@ -1233,12 +1233,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
                     height: 40,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: AppColors.paperDeep.withValues(alpha: 0.55),
+                      color: AppColors.surfaceRaised,
                     ),
                     child: const Icon(
                       Icons.visibility,
                       size: 18,
-                      color: AppColors.brassDeep,
+                      color: AppColors.gold,
                     ),
                   ),
                   title: Text(
@@ -1498,7 +1498,7 @@ class RoomCodeCard extends StatelessWidget {
             'ROOM CODE',
             style: TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.brassDeep,
+              color: AppColors.gold,
               fontSize: 9.5,
               fontWeight: FontWeight.w800,
               letterSpacing: 1.8,
@@ -1514,7 +1514,7 @@ class RoomCodeCard extends StatelessWidget {
                   value ?? '····',
                   style: const TextStyle(
                     fontFamily: AppFonts.display,
-                    color: AppColors.ink,
+                    color: AppColors.textPrimary,
                     fontSize: 38,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 7,
@@ -1525,8 +1525,8 @@ class RoomCodeCard extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.copy, size: 20),
                   style: IconButton.styleFrom(
-                    backgroundColor: AppColors.paperDeep.withValues(alpha: 0.7),
-                    foregroundColor: AppColors.brassDeep,
+                    backgroundColor: AppColors.surfaceRaised,
+                    foregroundColor: AppColors.gold,
                   ),
                   tooltip: 'Copy room code',
                   onPressed: value == null ? null : () => _copyCode(context),
@@ -1535,10 +1535,8 @@ class RoomCodeCard extends StatelessWidget {
                   IconButton(
                     icon: const Icon(Icons.ios_share, size: 20),
                     style: IconButton.styleFrom(
-                      backgroundColor: AppColors.paperDeep.withValues(
-                        alpha: 0.7,
-                      ),
-                      foregroundColor: AppColors.brassDeep,
+                      backgroundColor: AppColors.surfaceRaised,
+                      foregroundColor: AppColors.gold,
                     ),
                     tooltip: 'Share join link',
                     onPressed: () => _share(context),
@@ -1551,7 +1549,7 @@ class RoomCodeCard extends StatelessWidget {
             'Share it so friends can join',
             style: TextStyle(
               fontFamily: AppFonts.body,
-              color: AppColors.inkFaint,
+              color: AppColors.textMuted,
               fontSize: 11.5,
             ),
           ),
@@ -1569,7 +1567,7 @@ class RoomCodeCard extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontFamily: AppFonts.body,
-                color: AppColors.inkFaint,
+                color: AppColors.textMuted,
                 fontSize: 11.5,
               ),
             ),
