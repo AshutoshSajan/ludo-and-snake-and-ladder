@@ -5,6 +5,7 @@ import '../app_router.dart';
 import '../app_routes.dart';
 import '../providers/app_providers.dart';
 import '../services/server_url.dart';
+import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/shared/bug_report_sheet.dart';
 import '../ui/shared/tutorial_walkthrough.dart';
@@ -30,125 +31,124 @@ class SettingsScreen extends ConsumerWidget {
     final anims = ref.watch(animationsEnabledProvider);
 
     return Scaffold(
-      backgroundColor: AppColors.felt,
-      appBar: PageAppBar(
-        title: 'Settings',
-        backgroundColor: AppColors.feltLight,
-        foregroundColor: AppColors.ivory,
-      ),
-      body: ContentColumn(
-        child: ListView(
-          // The same 16px inset the page bar uses, so the hero card and the
-          // app bar title share one edge on every window size.
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-          children: [
-            const _ClubHero(),
-            const SizedBox(height: 24),
-            const _SectionLabel('Table feel'),
-            _SurfaceCard(
+      appBar: PageAppBar(title: 'Settings'),
+      body: ClubBackground(
+        child: SafeArea(
+          child: ContentColumn(
+            child: ListView(
+              // The same 16px inset the page bar uses, so the hero card and the
+              // app bar title share one edge on every window size.
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
               children: [
-                _ToggleRow(
-                  key: const ValueKey('settings-row-sound'),
-                  switchKey: const ValueKey('settings-switch-sound'),
-                  icon: Icons.volume_up,
-                  title: 'Sound effects',
-                  description: 'Dice, hops, captures and fanfares',
-                  value: sound,
-                  onToggle: () =>
-                      ref.read(soundEnabledProvider.notifier).toggle(),
+                const _ClubHero(),
+                const SizedBox(height: 24),
+                const _SectionLabel('Table feel'),
+                _SurfaceCard(
+                  children: [
+                    _ToggleRow(
+                      key: const ValueKey('settings-row-sound'),
+                      switchKey: const ValueKey('settings-switch-sound'),
+                      icon: Icons.volume_up,
+                      title: 'Sound effects',
+                      description: 'Dice, hops, captures and fanfares',
+                      value: sound,
+                      onToggle: () =>
+                          ref.read(soundEnabledProvider.notifier).toggle(),
+                    ),
+                    _ToggleRow(
+                      key: const ValueKey('settings-row-haptics'),
+                      switchKey: const ValueKey('settings-switch-haptics'),
+                      icon: Icons.vibration,
+                      title: 'Haptics',
+                      description: 'A gentle buzz on rolls and moves',
+                      value: haptics,
+                      onToggle: () =>
+                          ref.read(hapticsEnabledProvider.notifier).toggle(),
+                    ),
+                    _ToggleRow(
+                      key: const ValueKey('settings-row-animations'),
+                      switchKey: const ValueKey('settings-switch-animations'),
+                      icon: Icons.animation,
+                      title: 'Board animations',
+                      description: 'Glow and rings. Off saves battery.',
+                      value: anims,
+                      onToggle: () =>
+                          ref.read(animationsEnabledProvider.notifier).toggle(),
+                    ),
+                  ],
                 ),
-                _ToggleRow(
-                  key: const ValueKey('settings-row-haptics'),
-                  switchKey: const ValueKey('settings-switch-haptics'),
-                  icon: Icons.vibration,
-                  title: 'Haptics',
-                  description: 'A gentle buzz on rolls and moves',
-                  value: haptics,
-                  onToggle: () =>
-                      ref.read(hapticsEnabledProvider.notifier).toggle(),
+                const SizedBox(height: 22),
+                const _SectionLabel('Friends & support'),
+                _SurfaceCard(
+                  children: [
+                    _LinkRow(
+                      key: const ValueKey('settings-row-friends'),
+                      icon: Icons.group_outlined,
+                      title: 'Friends',
+                      description: 'Add friends, chat, and invite them over.',
+                      onTap: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.friends,
+                        builder: (_) => const FriendsScreen(),
+                      ),
+                    ),
+                    _LinkRow(
+                      key: const ValueKey('settings-row-report'),
+                      icon: Icons.bug_report,
+                      title: 'Report an issue',
+                      description: 'Something broken, or an idea? Tell us.',
+                      onTap: () => BugReportSheet.show(
+                        context,
+                        serverUrl: defaultServerUrl(),
+                      ),
+                    ),
+                    _LinkRow(
+                      key: const ValueKey('settings-row-contact'),
+                      icon: Icons.mail_outline,
+                      title: 'Contact us',
+                      description: 'Questions or feedback? Leave an email.',
+                      onTap: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.contact,
+                        builder: (_) =>
+                            ContactScreen(serverUrl: defaultServerUrl()),
+                      ),
+                    ),
+                  ],
                 ),
-                _ToggleRow(
-                  key: const ValueKey('settings-row-animations'),
-                  switchKey: const ValueKey('settings-switch-animations'),
-                  icon: Icons.animation,
-                  title: 'Board animations',
-                  description: 'Glow and rings. Off saves battery.',
-                  value: anims,
-                  onToggle: () =>
-                      ref.read(animationsEnabledProvider.notifier).toggle(),
+                const SizedBox(height: 22),
+                const _SectionLabel('Learn'),
+                _SurfaceCard(
+                  children: [
+                    _LinkRow(
+                      key: const ValueKey('settings-row-tutorial'),
+                      icon: Icons.school_outlined,
+                      title: 'Replay the tutorial',
+                      description: 'A one-minute walk through everything',
+                      onTap: () => TutorialWalkthrough.show(
+                        context,
+                        steps: TutorialWalkthrough.homeSteps,
+                      ),
+                    ),
+                    _LinkRow(
+                      key: const ValueKey('settings-row-rules'),
+                      icon: Icons.help_outline,
+                      title: 'How to play',
+                      description: 'Rules for Ludo and Snakes & Ladders',
+                      onTap: () => pushAppScreen<void>(
+                        context,
+                        name: AppRoutes.rules,
+                        builder: (_) => const RulesScreen(),
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 22),
+                const _SectionLabel('About'),
+                const _AboutCard(),
               ],
             ),
-            const SizedBox(height: 22),
-            const _SectionLabel('Friends & support'),
-            _SurfaceCard(
-              children: [
-                _LinkRow(
-                  key: const ValueKey('settings-row-friends'),
-                  icon: Icons.group_outlined,
-                  title: 'Friends',
-                  description: 'Add friends, chat, and invite them over.',
-                  onTap: () => pushAppScreen<void>(
-                    context,
-                    name: AppRoutes.friends,
-                    builder: (_) => const FriendsScreen(),
-                  ),
-                ),
-                _LinkRow(
-                  key: const ValueKey('settings-row-report'),
-                  icon: Icons.bug_report,
-                  title: 'Report an issue',
-                  description: 'Something broken, or an idea? Tell us.',
-                  onTap: () => BugReportSheet.show(
-                    context,
-                    serverUrl: defaultServerUrl(),
-                  ),
-                ),
-                _LinkRow(
-                  key: const ValueKey('settings-row-contact'),
-                  icon: Icons.mail_outline,
-                  title: 'Contact us',
-                  description: 'Questions or feedback? Leave an email.',
-                  onTap: () => pushAppScreen<void>(
-                    context,
-                    name: AppRoutes.contact,
-                    builder: (_) =>
-                        ContactScreen(serverUrl: defaultServerUrl()),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 22),
-            const _SectionLabel('Learn'),
-            _SurfaceCard(
-              children: [
-                _LinkRow(
-                  key: const ValueKey('settings-row-tutorial'),
-                  icon: Icons.school_outlined,
-                  title: 'Replay the tutorial',
-                  description: 'A one-minute walk through everything',
-                  onTap: () => TutorialWalkthrough.show(
-                    context,
-                    steps: TutorialWalkthrough.homeSteps,
-                  ),
-                ),
-                _LinkRow(
-                  key: const ValueKey('settings-row-rules'),
-                  icon: Icons.help_outline,
-                  title: 'How to play',
-                  description: 'Rules for Ludo and Snakes & Ladders',
-                  onTap: () => pushAppScreen<void>(
-                    context,
-                    name: AppRoutes.rules,
-                    builder: (_) => const RulesScreen(),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 22),
-            const _SectionLabel('About'),
-            const _AboutCard(),
-          ],
+          ),
         ),
       ),
     );
@@ -162,105 +162,89 @@ class _ClubHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF2B5A3C), Color(0xFF183A28)],
-        ),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.gold.withValues(alpha: 0.5)),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 18,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
+    return ClubCard(
+      accent: true,
+      padding: const EdgeInsets.fromLTRB(16, 17, 16, 16),
       child: Stack(
         children: [
           // A washed-out die in the corner, the same quiet watermark the
           // leaderboard uses behind its champion card.
           Positioned(
-            right: -20,
-            top: -26,
+            right: -22,
+            top: -30,
             child: Icon(
               Icons.casino_outlined,
               size: 132,
-              color: AppColors.gold.withValues(alpha: 0.06),
+              color: AppColors.ink.withValues(alpha: 0.045),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const RadialGradient(
-                      colors: [Color(0xFF2F6547), Color(0xFF153725)],
+          Row(
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const RadialGradient(
+                    colors: [AppColors.feltLight, AppColors.feltDeep],
+                  ),
+                  border: Border.all(color: AppColors.gold, width: 1.6),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.feltDeep.withValues(alpha: 0.28),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
                     ),
-                    border: Border.all(color: AppColors.gold, width: 1.6),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 8,
-                        offset: Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.casino,
-                    color: AppColors.gold,
-                    size: 28,
-                  ),
+                  ],
                 ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'LOCAL TABLE SETTINGS',
-                        style: TextStyle(
-                          color: AppColors.gold,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        'Game Club',
-                        style: TextStyle(
-                          color: AppColors.ivory,
-                          fontSize: 23,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.4,
-                          height: 1.1,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        'Set the table to your taste — it all stays on this '
-                        'device.',
-                        style: TextStyle(
-                          color: AppColors.ivoryDark,
-                          fontSize: 12.5,
-                          height: 1.35,
-                        ),
-                      ),
-                    ],
-                  ),
+                child: const Icon(
+                  Icons.casino,
+                  color: AppColors.gold,
+                  size: 28,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 15),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'LOCAL TABLE SETTINGS',
+                      style: TextStyle(
+                        fontFamily: AppFonts.body,
+                        color: AppColors.brassDeep,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.7,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Game Club',
+                      style: TextStyle(
+                        fontFamily: AppFonts.display,
+                        color: AppColors.ink,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w600,
+                        height: 1.05,
+                      ),
+                    ),
+                    SizedBox(height: 5),
+                    Text(
+                      'Set the table to your taste — it all stays on this '
+                      'device.',
+                      style: TextStyle(
+                        fontFamily: AppFonts.body,
+                        color: AppColors.inkSoft,
+                        fontSize: 12.5,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -278,23 +262,24 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      padding: const EdgeInsets.only(left: 4, bottom: 9),
       child: Row(
         children: [
           Text(
             text.toUpperCase(),
-            style: TextStyle(
-              color: AppColors.gold.withValues(alpha: 0.9),
-              fontSize: 10.5,
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.gold,
+              fontSize: 10,
               fontWeight: FontWeight.w800,
-              letterSpacing: 1.6,
+              letterSpacing: 1.7,
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Container(
               height: 1,
-              color: AppColors.gold.withValues(alpha: 0.18),
+              color: AppColors.gold.withValues(alpha: 0.20),
             ),
           ),
         ],
@@ -311,15 +296,9 @@ class _SurfaceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      color: AppColors.feltLight,
-      elevation: 0,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-      ),
+    return ClubCard(
+      padding: EdgeInsets.zero,
+      radius: 18,
       child: Column(
         children: [
           for (var i = 0; i < children.length; i++) ...[
@@ -329,7 +308,7 @@ class _SurfaceCard extends StatelessWidget {
                 thickness: 1,
                 indent: 66,
                 endIndent: 14,
-                color: Colors.white.withValues(alpha: 0.06),
+                color: AppColors.ink.withValues(alpha: 0.09),
               ),
             children[i],
           ],
@@ -386,17 +365,19 @@ class _ToggleRow extends StatelessWidget {
                         Text(
                           title,
                           style: const TextStyle(
-                            color: AppColors.ivory,
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w700,
+                            fontFamily: AppFonts.body,
+                            color: AppColors.ink,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           description,
-                          style: TextStyle(
-                            color: AppColors.ivory.withValues(alpha: 0.55),
-                            fontSize: 12.5,
+                          style: const TextStyle(
+                            fontFamily: AppFonts.body,
+                            color: AppColors.inkSoft,
+                            fontSize: 12,
                             height: 1.35,
                           ),
                         ),
@@ -410,14 +391,14 @@ class _ToggleRow extends StatelessWidget {
                         key: switchKey,
                         value: value,
                         onChanged: (_) => onToggle(),
-                        activeThumbColor: AppColors.gold,
+                        activeThumbColor: AppColors.brassDeep,
                         activeTrackColor: AppColors.gold.withValues(
-                          alpha: 0.38,
+                          alpha: 0.55,
                         ),
-                        inactiveThumbColor: AppColors.ivory.withValues(
-                          alpha: 0.75,
+                        inactiveThumbColor: AppColors.paperLight,
+                        inactiveTrackColor: AppColors.ink.withValues(
+                          alpha: 0.12,
                         ),
-                        inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
                       ),
                     ),
                   ),
@@ -469,17 +450,19 @@ class _LinkRow extends StatelessWidget {
                         Text(
                           title,
                           style: const TextStyle(
-                            color: AppColors.ivory,
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w700,
+                            fontFamily: AppFonts.body,
+                            color: AppColors.ink,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           description,
-                          style: TextStyle(
-                            color: AppColors.ivory.withValues(alpha: 0.55),
-                            fontSize: 12.5,
+                          style: const TextStyle(
+                            fontFamily: AppFonts.body,
+                            color: AppColors.inkSoft,
+                            fontSize: 12,
                             height: 1.35,
                           ),
                         ),
@@ -490,7 +473,7 @@ class _LinkRow extends StatelessWidget {
                   Icon(
                     Icons.chevron_right,
                     size: 20,
-                    color: AppColors.ivory.withValues(alpha: 0.35),
+                    color: AppColors.ink.withValues(alpha: 0.30),
                   ),
                 ],
               ),
@@ -517,21 +500,21 @@ class _RowIcon extends StatelessWidget {
       height: 40,
       decoration: BoxDecoration(
         color: active
-            ? AppColors.gold.withValues(alpha: 0.16)
-            : Colors.white.withValues(alpha: 0.06),
+            ? AppColors.gold.withValues(alpha: 0.20)
+            : AppColors.ink.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: active
-              ? AppColors.gold.withValues(alpha: 0.34)
-              : Colors.white.withValues(alpha: 0.08),
+              ? AppColors.brass.withValues(alpha: 0.38)
+              : AppColors.ink.withValues(alpha: 0.08),
         ),
       ),
       child: Icon(
         icon,
         size: 20,
         color: active
-            ? AppColors.gold
-            : AppColors.ivory.withValues(alpha: 0.62),
+            ? AppColors.brassDeep
+            : AppColors.ink.withValues(alpha: 0.58),
       ),
     );
   }
@@ -544,7 +527,8 @@ class _AboutCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final body = TextStyle(
-      color: AppColors.ivory.withValues(alpha: 0.62),
+      fontFamily: AppFonts.body,
+      color: AppColors.inkSoft,
       fontSize: 13,
       height: 1.45,
     );
@@ -560,15 +544,16 @@ class _AboutCard extends StatelessWidget {
                   const Icon(
                     Icons.info_outline,
                     size: 18,
-                    color: AppColors.gold,
+                    color: AppColors.brassDeep,
                   ),
                   const SizedBox(width: 8),
                   Text(
                     'About the club',
                     style: const TextStyle(
-                      color: AppColors.ivory,
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.w700,
+                      fontFamily: AppFonts.body,
+                      color: AppColors.ink,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ],
@@ -583,16 +568,16 @@ class _AboutCard extends StatelessWidget {
               const SizedBox(height: 14),
               Container(
                 height: 1,
-                color: AppColors.gold.withValues(alpha: 0.14),
+                color: AppColors.ink.withValues(alpha: 0.10),
               ),
               const SizedBox(height: 12),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.lightbulb_outline,
                     size: 16,
-                    color: AppColors.gold.withValues(alpha: 0.85),
+                    color: AppColors.brass,
                   ),
                   const SizedBox(width: 8),
                   Expanded(

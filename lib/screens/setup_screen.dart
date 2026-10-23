@@ -1,4 +1,5 @@
 import '../ui/page_app_bar.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -12,6 +13,7 @@ import '../../services/online_client.dart' show DefaultNames;
 import '../../controllers/ludo_session.dart';
 
 import '../../services/sound_service.dart';
+import '../../ui/club_widgets.dart';
 import '../../ui/ludo/ludo_view.dart';
 import '../../ui/snakes/snakes_view.dart';
 import '../../ui/theme.dart';
@@ -79,9 +81,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         profileId: profiles.isNotEmpty ? profiles.first.id : null,
         // A saved profile keeps its own name; only a seat with nothing behind
         // it gets a generated one.
-        name: profiles.isNotEmpty
-            ? profiles.first.name
-            : _freshSeatName(taken),
+        name: profiles.isNotEmpty ? profiles.first.name : _freshSeatName(taken),
       ),
       _SeatDraft(name: _freshSeatName(taken), isAI: true),
     ];
@@ -118,10 +118,12 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   void _setCount(int count) {
     setState(() {
       while (_seats.length < count) {
-        _seats.add(_SeatDraft(
-          name: _freshSeatName({for (final s in _seats) s.name}),
-          isAI: true,
-        ));
+        _seats.add(
+          _SeatDraft(
+            name: _freshSeatName({for (final s in _seats) s.name}),
+            isAI: true,
+          ),
+        );
       }
       while (_seats.length > count) {
         _seats.removeLast();
@@ -137,86 +139,154 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
     return Scaffold(
       appBar: PageAppBar(title: '$label — New game'),
-      body: SafeArea(
-        // A reading-width column, centred. Unconstrained, every card and button
-        // stretched to the full viewport: on a wide desktop a seat row put a
-        // short name at the far left and its corner swatches at the far right,
-        // with a metre of empty felt between them. The swatch row is what makes
-        // it read badly - it is the thing you compare across seats, and it has
-        // to sit near the name to be comparable at all.
-        //
-        // 720 rather than the 520 the home screen uses: a seat card puts the
-        // Human/Bot toggle and the difficulty dropdown on the same row as the
-        // name, and 520 forces those onto their own lines.
-        //
-        // The inner block is deliberately left at its old indentation. Running
-        // `dart format` on this file rewrites 240 unrelated lines, because the
-        // committed formatting predates this SDK's formatter; CI does not check
-        // format, so reformatting here would bury the actual change in noise.
-        child: ContentColumn(
+      body: ClubBackground(
+        child: SafeArea(
+          // A reading-width column, centred. Unconstrained, every card and
+          // button stretched to the full viewport: on a wide desktop a seat row
+          // put a short name at the far left and its corner swatches at the far
+          // right, with a metre of empty felt between them. The swatch row is
+          // what makes it read badly - it is the thing you compare across
+          // seats, and it has to sit near the name to be comparable at all.
+          child: ContentColumn(
             child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Players at the table',
-                        style: TextStyle(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        for (var n = _minPlayers; n <= _maxPlayers; n++)
-                          ChoiceChip(
-                            label: Text('$n'),
-                            selected: _seats.length == n,
-                            onSelected: (_) => _setCount(n),
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 30),
+              children: [
+                _tablePreamble(label),
+                const SizedBox(height: 14),
+                // The first Card on the page is deliberately the table-size
+                // sheet: the title bar and every sheet share one left edge.
+                ClubCard(
+                  padding: const EdgeInsets.fromLTRB(15, 14, 15, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Players at the table',
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(
+                                    color: AppColors.ink,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                            ),
                           ),
-                      ],
+                          const SizedBox(width: 8),
+                          Text(
+                            '${_seats.length} of $_maxPlayers',
+                            style: const TextStyle(
+                              fontFamily: AppFonts.body,
+                              color: AppColors.inkFaint,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 9),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (var n = _minPlayers; n <= _maxPlayers; n++)
+                            ChoiceChip(
+                              label: Text('$n'),
+                              selected: _seats.length == n,
+                              onSelected: (_) => _setCount(n),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                for (var i = 0; i < _seats.length; i++) _seatCard(i, profiles),
+                const SizedBox(height: 12),
+                // Offered only when there is something to resume, so a player
+                // who never left a game in progress never sees it.
+                // SAVE & RESUME — parked; see the note on _saved below.
+                /*
+                if (_saved != null) ...[
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.restore),
+                    label: Text(
+                      'Resume $_savedSeats saved · ${_age(_saved!.savedAt)}',
                     ),
-                  ],
+                    onPressed: _resume,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                */
+                SizedBox(
+                  height: 54,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.casino, size: 20),
+                    label: const Text('Start game'),
+                    onPressed: _start,
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            for (var i = 0; i < _seats.length; i++) _seatCard(i, profiles),
-            const SizedBox(height: 12),
-            // Offered only when there is something to resume, so a player who
-            // never left a game in progress never sees it.
-            // SAVE & RESUME — parked; see the note on _saved below.
-            /*
-            if (_saved != null) ...[
-              OutlinedButton.icon(
-                icon: const Icon(Icons.restore),
-                label: Text(
-                  'Resume $_savedSeats saved · ${_age(_saved!.savedAt)}',
+                const SizedBox(height: 12),
+                const Center(
+                  child: Text(
+                    'Hot-seat local play · bots join instantly · '
+                    'swap seats any time mid-game',
+                    style: TextStyle(
+                      fontFamily: AppFonts.body,
+                      color: AppColors.paperDeep,
+                      fontSize: 11.5,
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
                 ),
-                onPressed: _resume,
-              ),
-              const SizedBox(height: 8),
-            ],
-            */
-            FilledButton.icon(
-              icon: const Icon(Icons.casino),
-              label: const Text('Start game'),
-              onPressed: _start,
+              ],
             ),
-            const SizedBox(height: 8),
-            const Center(
-              child: Text(
-                'Hot-seat local play · bots join instantly · '
-                'swap seats any time mid-game',
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
-      ),
+    );
+  }
+
+  /// The quiet line above the sheets: which game this table is for, and what
+  /// the room expects from the player.
+  Widget _tablePreamble(String label) {
+    return Row(
+      children: [
+        ClubSeal(
+          icon: _isLudo ? Icons.casino_outlined : Icons.grid_on_outlined,
+          size: 38,
+          onPaper: false,
+        ),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'SET THE TABLE',
+                style: TextStyle(
+                  fontFamily: AppFonts.body,
+                  color: AppColors.gold,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.8,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '$label · ${_seats.length} seats',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: AppColors.paper,
+                  fontFamily: AppFonts.display,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 19,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -224,30 +294,76 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
   Widget _seatCard(int i, List<PlayerProfile> profiles) {
     final seat = _seats[i];
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+    final seatColor = _isLudo && seat.color != null
+        ? AppColors.ludo(seat.color!)
+        : i == 0
+        ? AppColors.brass
+        : AppColors.snakesColors[i % 10];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: ClubCard(
+        padding: const EdgeInsets.fromLTRB(14, 11, 14, 12),
+        radius: 16,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                CircleAvatar(
-                  radius: 13,
-                  backgroundColor: _isLudo && seat.color != null
-                      ? AppColors.ludo(seat.color!)
-                      : i == 0
-                          ? AppColors.gold
-                          : AppColors.snakesColors[i % 10],
-                  child: Text('${i + 1}',
-                      style: const TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w800)),
+                Container(
+                  width: 30,
+                  height: 30,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: seatColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: AppColors.paperLight.withValues(alpha: 0.85),
+                      width: 2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: seatColor.withValues(alpha: 0.28),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    '${i + 1}',
+                    style: const TextStyle(
+                      fontFamily: AppFonts.body,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 8),
-                Text('Seat ${i + 1}',
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                const Spacer(),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Seat ${i + 1}',
+                        style: const TextStyle(
+                          fontFamily: AppFonts.body,
+                          color: AppColors.ink,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      Text(
+                        seat.isAI ? 'House bot' : 'Human player',
+                        style: const TextStyle(
+                          fontFamily: AppFonts.body,
+                          color: AppColors.inkFaint,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 SegmentedButton<bool>(
                   segments: const [
                     ButtonSegment(value: false, label: Text('Human')),
@@ -255,35 +371,48 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   ],
                   selected: {seat.isAI},
                   showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                   onSelectionChanged: (v) =>
                       setState(() => seat.isAI = v.first),
                 ),
               ],
             ),
             if (_isLudo) ...[
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
               Row(
                 children: [
-                  const Text('Corner',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white54)),
-                  const SizedBox(width: 10),
+                  const Text(
+                    'CORNER',
+                    style: TextStyle(
+                      fontFamily: AppFonts.body,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                      color: AppColors.inkFaint,
+                    ),
+                  ),
+                  const SizedBox(width: 9),
                   for (final c in LudoBoard.colorOrder) ...[
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 3),
                     _cornerDot(c, seat),
                   ],
                   const Spacer(),
                   if (_seats.length == 2)
                     const Text(
                       'Diagonal seating',
-                      style: TextStyle(fontSize: 11, color: Colors.white38),
+                      style: TextStyle(
+                        fontFamily: AppFonts.body,
+                        fontSize: 10.5,
+                        color: AppColors.inkFaint,
+                      ),
                     ),
                 ],
               ),
             ],
-            const SizedBox(height: 8),
+            const SizedBox(height: 9),
             if (seat.isAI)
               Row(
                 children: [
@@ -291,23 +420,46 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                     child: TextFormField(
                       initialValue: seat.name,
                       decoration: const InputDecoration(
-                          labelText: 'Bot name', isDense: true),
+                        labelText: 'Bot name',
+                        isDense: true,
+                      ),
                       onChanged: (v) => seat.name = v,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  DropdownButton<AIDifficulty>(
-                    value: seat.difficulty,
-                    items: const [
-                      DropdownMenuItem(
-                          value: AIDifficulty.easy, child: Text('Easy')),
-                      DropdownMenuItem(
-                          value: AIDifficulty.medium, child: Text('Medium')),
-                      DropdownMenuItem(
-                          value: AIDifficulty.hard, child: Text('Hard')),
-                    ],
-                    onChanged: (v) =>
-                        setState(() => seat.difficulty = v ?? seat.difficulty),
+                  DropdownButtonHideUnderline(
+                    child: DropdownButton<AIDifficulty>(
+                      value: seat.difficulty,
+                      borderRadius: BorderRadius.circular(14),
+                      style: const TextStyle(
+                        fontFamily: AppFonts.body,
+                        color: AppColors.ink,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      icon: const Icon(
+                        Icons.keyboard_arrow_down,
+                        size: 18,
+                        color: AppColors.inkSoft,
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: AIDifficulty.easy,
+                          child: Text('Easy'),
+                        ),
+                        DropdownMenuItem(
+                          value: AIDifficulty.medium,
+                          child: Text('Medium'),
+                        ),
+                        DropdownMenuItem(
+                          value: AIDifficulty.hard,
+                          child: Text('Hard'),
+                        ),
+                      ],
+                      onChanged: (v) => setState(
+                        () => seat.difficulty = v ?? seat.difficulty,
+                      ),
+                    ),
                   ),
                 ],
               )
@@ -318,16 +470,23 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                     child: DropdownButtonFormField<String?>(
                       initialValue: seat.profileId,
                       decoration: const InputDecoration(
-                          labelText: 'Choose profile', isDense: true),
+                        labelText: 'Choose profile',
+                        isDense: true,
+                      ),
                       items: [
-                        ...profiles.map((p) => DropdownMenuItem(
-                            value: p.id, child: Text(p.name))),
+                        ...profiles.map(
+                          (p) => DropdownMenuItem(
+                            value: p.id,
+                            child: Text(p.name),
+                          ),
+                        ),
                       ],
                       onChanged: (v) => setState(() {
                         seat.profileId = v;
                         if (v != null) {
-                          seat.name =
-                              profiles.firstWhere((p) => p.id == v).name;
+                          seat.name = profiles
+                              .firstWhere((p) => p.id == v)
+                              .name;
                         }
                       }),
                     ),
@@ -354,14 +513,14 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         onTap: takenByOther ? null : () => setState(() => seat.color = c),
         customBorder: const CircleBorder(),
         child: Container(
-          width: 30,
-          height: 30,
+          width: 28,
+          height: 28,
           padding: const EdgeInsets.all(3),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: selected ? AppColors.ivory : Colors.transparent,
-              width: 2,
+              color: selected ? AppColors.ink : Colors.transparent,
+              width: 1.6,
             ),
           ),
           child: Container(
@@ -370,11 +529,10 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               color: AppColors.ludo(c),
             ),
             child: takenByOther
-                ? const Icon(Icons.lock, size: 12, color: Colors.black45)
+                ? const Icon(Icons.lock, size: 11, color: Colors.white70)
                 : (selected
-                    ? const Icon(Icons.check,
-                        size: 14, color: Colors.white, weight: 3)
-                    : null),
+                      ? const Icon(Icons.check, size: 13, color: Colors.white)
+                      : null),
           ),
         ),
       ),
@@ -394,11 +552,13 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
-              child: const Text('Create')),
+            onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
+            child: const Text('Create'),
+          ),
         ],
       ),
     );

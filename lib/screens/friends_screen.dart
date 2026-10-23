@@ -23,6 +23,7 @@ import '../services/friend_client.dart';
 import '../services/online_client.dart';
 import '../services/server_url.dart';
 import '../services/storage_service.dart';
+import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/shared/player_actions_sheet.dart';
 import '../ui/shared/chat_line_view.dart';
@@ -552,14 +553,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
           ),
         ],
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.4),
-            radius: 1.4,
-            colors: [AppColors.feltLight, AppColors.felt],
-          ),
-        ),
+      body: ClubBackground(
         child: SafeArea(
           // The reading-width column: this screen is a phone list (the
           // header above already constrains itself to the same width), so
@@ -571,7 +565,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
                     child: _busyText != null
                         ? Text(
                             _busyText!,
-                            style: const TextStyle(color: AppColors.ivory),
+                            style: const TextStyle(
+                              fontFamily: AppFonts.body,
+                              color: AppColors.paper,
+                            ),
                           )
                         : const CircularProgressIndicator(
                             color: AppColors.gold,
@@ -581,7 +578,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                     onRefresh: _refresh,
                     color: AppColors.gold,
                     child: ListView(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                       children: [
                         _meCode(state.me),
                         // Discovery at the table: everyone seated in the
@@ -610,19 +607,25 @@ class _FriendsScreenState extends State<FriendsScreen> {
                             if (i.pending) _inviteTile(i),
                         ],
                         if (state.friends.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 28),
-                            child: Center(
-                              child: Text(
-                                'No friends yet.\nAdd the players you meet '
-                                'at a table straight from their row in the '
-                                'room, or tap + for a friend code.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: AppColors.ivory,
-                                  height: 1.6,
+                          const ClubCard(
+                            padding: EdgeInsets.fromLTRB(20, 24, 20, 24),
+                            child: Column(
+                              children: [
+                                ClubSeal(icon: Icons.people_outline, size: 46),
+                                SizedBox(height: 12),
+                                Text(
+                                  'No friends yet.\nAdd the players you meet '
+                                  'at a table straight from their row in the '
+                                  'room, or tap + for a friend code.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontFamily: AppFonts.body,
+                                    color: AppColors.inkSoft,
+                                    fontSize: 13,
+                                    height: 1.6,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ),
                           )
                         else ...[
@@ -643,51 +646,80 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   Widget _meCode(FriendProfile me) {
-    return Card(
-      color: Colors.white.withValues(alpha: 0.06),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: ListTile(
-        leading: const Icon(Icons.badge, color: AppColors.gold),
-        title: Text(
-          me.name.isEmpty ? 'You' : me.name,
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-        subtitle: Text(
-          'Your friend code: ${me.code}',
-          style: const TextStyle(letterSpacing: 1.6),
-        ),
-        trailing: IconButton(
-          icon: const Icon(Icons.copy, size: 18),
-          tooltip: 'Copy friend code',
-          onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: me.code));
-            if (mounted) _showSnack('Friend code copied');
-          },
-        ),
+    return ClubCard(
+      accent: true,
+      padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
+      child: Row(
+        children: [
+          const ClubSeal(icon: Icons.badge_outlined, size: 42),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  me.name.isEmpty ? 'You' : me.name,
+                  style: const TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.ink,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'Your friend code: ${me.code}',
+                  style: const TextStyle(
+                    fontFamily: AppFonts.body,
+                    color: AppColors.inkSoft,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy, size: 18),
+            color: AppColors.brassDeep,
+            tooltip: 'Copy friend code',
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: me.code));
+              if (mounted) _showSnack('Friend code copied');
+            },
+          ),
+        ],
       ),
     );
   }
 
   Widget _tableTile(TableMate t) {
-    return Card(
-      color: Colors.white.withValues(alpha: 0.06),
-      margin: const EdgeInsets.only(bottom: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      // The same one-row shape the friend cards use; the trailing add
-      // icon and the row's own tap both lead into the actions sheet, so
-      // the whole card is the target and nothing is icon-only.
-      child: ListTile(
-        dense: true,
-        onTap: () => _openTableActions(t),
-        leading: _avatar(t.seatId),
-        title: Text(
-          t.name,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        trailing: TextButton.icon(
-          onPressed: () => _openTableActions(t),
-          icon: const Icon(Icons.person_add, size: 16),
-          label: const Text('Add'),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: ClubCard(
+        padding: EdgeInsets.zero,
+        radius: 15,
+        // The same one-row shape the friend cards use; the trailing add
+        // icon and the row's own tap both lead into the actions sheet, so
+        // the whole card is the target and nothing is icon-only.
+        child: ListTile(
+          dense: true,
+          onTap: () => _openTableActions(t),
+          leading: _avatar(t.seatId),
+          title: Text(
+            t.name,
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.ink,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          trailing: TextButton.icon(
+            onPressed: () => _openTableActions(t),
+            icon: const Icon(Icons.person_add, size: 16),
+            label: const Text('Add'),
+          ),
         ),
       ),
     );
@@ -714,15 +746,27 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   Widget _sectionTitle(String text) => Padding(
-    padding: const EdgeInsets.only(top: 18, bottom: 6, left: 6),
-    child: Text(
-      text,
-      style: const TextStyle(
-        color: AppColors.gold,
-        fontWeight: FontWeight.w800,
-        fontSize: 12.5,
-        letterSpacing: 0.8,
-      ),
+    padding: const EdgeInsets.only(top: 20, bottom: 8, left: 2),
+    child: Row(
+      children: [
+        Text(
+          text,
+          style: const TextStyle(
+            fontFamily: AppFonts.body,
+            color: AppColors.gold,
+            fontWeight: FontWeight.w800,
+            fontSize: 9.5,
+            letterSpacing: 1.7,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Container(
+            height: 1,
+            color: AppColors.gold.withValues(alpha: 0.18),
+          ),
+        ),
+      ],
     ),
   );
 
@@ -730,80 +774,95 @@ class _FriendsScreenState extends State<FriendsScreen> {
       PlayerAvatar(seed: seed, size: 40, circular: true);
 
   Widget _requestTile(FriendRequestView r, {required bool incoming}) {
-    return Card(
-      color: Colors.white.withValues(alpha: 0.06),
-      margin: const EdgeInsets.only(bottom: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: ListTile(
-        leading: _avatar(r.seatId),
-        title: Text(
-          r.name,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(
-          incoming ? 'wants to be your friend' : 'asking them',
-          style: TextStyle(
-            color: AppColors.ivory.withValues(alpha: 0.55),
-            fontSize: 12,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: ClubCard(
+        padding: EdgeInsets.zero,
+        radius: 15,
+        child: ListTile(
+          leading: _avatar(r.seatId),
+          title: Text(
+            r.name,
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.ink,
+              fontWeight: FontWeight.w700,
+            ),
           ),
+          subtitle: Text(
+            incoming ? 'wants to be your friend' : 'asking them',
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.inkSoft,
+              fontSize: 12,
+            ),
+          ),
+          trailing: incoming
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.check_circle_outline),
+                      color: AppColors.brassDeep,
+                      tooltip: 'Accept',
+                      onPressed: () => _respond(r, true),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Decline',
+                      onPressed: () => _respond(r, false),
+                    ),
+                  ],
+                )
+              : TextButton(
+                  onPressed: () => _withdraw(r),
+                  child: const Text('Cancel'),
+                ),
         ),
-        trailing: incoming
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.check_circle_outline),
-                    color: AppColors.gold,
-                    tooltip: 'Accept',
-                    onPressed: () => _respond(r, true),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    tooltip: 'Decline',
-                    onPressed: () => _respond(r, false),
-                  ),
-                ],
-              )
-            : TextButton(
-                onPressed: () => _withdraw(r),
-                child: const Text('Cancel'),
-              ),
       ),
     );
   }
 
   Widget _inviteTile(FriendInviteView i) {
-    return Card(
-      color: Colors.white.withValues(alpha: 0.06),
-      margin: const EdgeInsets.only(bottom: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: ListTile(
-        leading: const Icon(Icons.sports_esports, color: AppColors.gold),
-        title: Text(
-          i.name,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(
-          'invites you to ${i.game == 'snakes' ? 'Snakes & Ladders' : 'Ludo'}'
-          ' · room ${i.code.isEmpty ? '(starting)' : i.code}',
-          style: TextStyle(
-            color: AppColors.ivory.withValues(alpha: 0.55),
-            fontSize: 12,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: ClubCard(
+        padding: EdgeInsets.zero,
+        radius: 15,
+        child: ListTile(
+          leading: const ClubSeal(icon: Icons.sports_esports, size: 38),
+          title: Text(
+            i.name,
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.ink,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            FilledButton(
-              onPressed: () => _answerInvite(i, true),
-              child: const Text('Join'),
+          subtitle: Text(
+            'invites you to '
+            '${i.game == 'snakes' ? 'Snakes & Ladders' : 'Ludo'}'
+            ' · room ${i.code.isEmpty ? '(starting)' : i.code}',
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.inkSoft,
+              fontSize: 12,
             ),
-            const SizedBox(width: 4),
-            TextButton(
-              onPressed: () => _answerInvite(i, false),
-              child: const Text('No'),
-            ),
-          ],
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FilledButton(
+                onPressed: () => _answerInvite(i, true),
+                child: const Text('Join'),
+              ),
+              const SizedBox(width: 4),
+              TextButton(
+                onPressed: () => _answerInvite(i, false),
+                child: const Text('No'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -858,61 +917,82 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final latest = f.latest;
     final read = _read[f.seatId] ?? 0;
     final unread = latest > 0 && latest > read;
-    return Card(
-      color: Colors.white.withValues(alpha: 0.06),
-      margin: const EdgeInsets.only(bottom: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      // One compact row like every other card in the app: the instruction
-      // line ("tap to chat · long-press for more") used to stretch every
-      // card to two display lines — a hint that repeats forever teaches
-      // nobody and reads as scaffolding. The gestures it described still
-      // exist: tapping opens the chat, holding opens the sheet.
-      child: ListTile(
-        dense: true,
-        onLongPress: () => _friendLongPressSheet(f),
-        onTap: () => _openChat(f),
-        leading: _avatar(f.seatId),
-        title: Text(
-          f.name,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (unread)
-              const Padding(
-                padding: EdgeInsets.only(right: 8),
-                child: Icon(Icons.circle, size: 11, color: AppColors.gold),
-              ),
-            TextButton.icon(
-              onPressed: () => _playWithFriend(f),
-              icon: const Icon(Icons.sports_esports, size: 16),
-              label: const Text('Play'),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: ClubCard(
+        padding: EdgeInsets.zero,
+        radius: 15,
+        // One compact row like every other card in the app: the instruction
+        // line ("tap to chat · long-press for more") used to stretch every
+        // card to two display lines — a hint that repeats forever teaches
+        // nobody and reads as scaffolding. The gestures it described still
+        // exist: tapping opens the chat, holding opens the sheet.
+        child: ListTile(
+          dense: true,
+          onLongPress: () => _friendLongPressSheet(f),
+          onTap: () => _openChat(f),
+          leading: _avatar(f.seatId),
+          title: Text(
+            f.name,
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.ink,
+              fontWeight: FontWeight.w700,
             ),
-          ],
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (unread)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: Icon(
+                    Icons.circle,
+                    size: 11,
+                    color: AppColors.brassDeep,
+                  ),
+                ),
+              TextButton.icon(
+                onPressed: () => _playWithFriend(f),
+                icon: const Icon(Icons.sports_esports, size: 16),
+                label: const Text('Play'),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _blockedTile(FriendBlockView b) {
-    return Card(
-      color: Colors.white.withValues(alpha: 0.04),
-      margin: const EdgeInsets.only(bottom: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: ListTile(
-        leading: Opacity(opacity: 0.6, child: _avatar(b.seatId)),
-        title: Text(
-          b.name.isEmpty ? b.seatId : b.name,
-          style: TextStyle(color: AppColors.ivory.withValues(alpha: 0.7)),
-        ),
-        subtitle: const Text(
-          'cannot contact you',
-          style: TextStyle(fontSize: 12),
-        ),
-        trailing: TextButton(
-          onPressed: () => _unblock(b),
-          child: const Text('Unblock'),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: ClubCard(
+        background: AppColors.paperDeep.withValues(alpha: 0.72),
+        padding: EdgeInsets.zero,
+        radius: 15,
+        child: ListTile(
+          leading: Opacity(opacity: 0.6, child: _avatar(b.seatId)),
+          title: Text(
+            b.name.isEmpty ? b.seatId : b.name,
+            style: const TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.inkSoft,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: const Text(
+            'cannot contact you',
+            style: TextStyle(
+              fontFamily: AppFonts.body,
+              color: AppColors.inkFaint,
+              fontSize: 12,
+            ),
+          ),
+          trailing: TextButton(
+            onPressed: () => _unblock(b),
+            child: const Text('Unblock'),
+          ),
         ),
       ),
     );
@@ -1132,14 +1212,7 @@ class _FriendsChatScreenState extends State<FriendsChatScreen> {
     final peer = widget.peer;
     return Scaffold(
       appBar: PageAppBar(title: peer.name),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.4),
-            radius: 1.4,
-            colors: [AppColors.feltLight, AppColors.felt],
-          ),
-        ),
+      body: ClubBackground(
         child: SafeArea(
           // The same reading-width column as every other screen: the DM
           // thread is a phone conversation, so on a desktop window the
@@ -1154,7 +1227,11 @@ class _FriendsChatScreenState extends State<FriendsChatScreen> {
                           child: Text(
                             'Say hi to ${peer.name} — the first message '
                             'is the hardest',
-                            style: const TextStyle(color: AppColors.ivory),
+                            style: const TextStyle(
+                              fontFamily: AppFonts.body,
+                              color: AppColors.paperDeep,
+                              fontSize: 14,
+                            ),
                           ),
                         )
                       : ListView.builder(
