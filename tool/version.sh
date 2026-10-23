@@ -14,6 +14,9 @@
 #   tool/version.sh              print the current version, e.g. 1.0.0
 #   tool/version.sh --bump       print the next version, without writing
 #   tool/version.sh --set 1.2.0  write that version everywhere
+#
+# The pubspec +build suffix is the Android versionCode. --set carries it
+# forward when the version changes, so F-Droid sees every release as newer.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -23,6 +26,8 @@ MANIFESTS=(extension/manifest.chrome.json extension/manifest.firefox.json)
 die() { echo "error: $*" >&2; exit 1; }
 
 current() { sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' "$PUBSPEC" | head -1; }
+
+current_build() { sed -n 's/^version: *[0-9][0-9.]*+\([0-9][0-9]*\).*/\1/p' "$PUBSPEC" | head -1; }
 
 # The highest tag, not the most recent one. `git tag` sorts lexically, so v1.9.0
 # would sort below v1.10.0 and the wrong "latest" would be picked.
@@ -85,7 +90,18 @@ case "${1:-}" in
       [ -n "$n" ] || continue
       [ "$n" -lt 65536 ] || die "component '$n' exceeds 65535"
     done
-    sed -i.bak -E "s/^version: .*/version: $v+1/" "$PUBSPEC" && rm -f "$PUBSPEC.bak"
+    # The +build suffix is the Android versionCode. It must increase for every
+    # version F-Droid sees, not reset to 1 on each release: F-Droid compares
+    # codes, so a later release with the same code is treated as already
+    # installed and never offered. Preserve the code when only re-declaring the
+    # same version; otherwise move it forward.
+    build=$(current_build)
+    if [ "$v" = "$(current)" ] && [ -n "$build" ]; then
+      :
+    else
+      build=$(( ${build:-0} + 1 ))
+    fi
+    sed -i.bak -E "s/^version: .*/version: $v+$build/" "$PUBSPEC" && rm -f "$PUBSPEC.bak"
     for m in "${MANIFESTS[@]}"; do
       [ -f "$m" ] || die "$m is missing"
       sed -i.bak -E "s/(\"version\": \")[^\"]*(\")/\1$v\2/" "$m" && rm -f "$m.bak"

@@ -586,6 +586,48 @@ void main() {
           reason: 'lexical tag sorting breaks at v1.10.0');
     });
 
+    test('--set moves the Android build suffix forward across releases', () {
+      // F-Droid treats an equal versionCode as "already installed" and never
+      // offers the update. Resetting the pubspec suffix to +1 on every
+      // release made every release after the first invisible, so the script
+      // must carry the code forward when the version changes.
+      final dir = Directory.systemTemp.createTempSync('game-club-version-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      Directory('${dir.path}/extension').createSync();
+      Directory('${dir.path}/tool').createSync();
+      File('tool/version.sh').copySync('${dir.path}/tool/version.sh');
+      File('${dir.path}/pubspec.yaml')
+          .writeAsStringSync('name: game_club\nversion: 1.3.0+1\n');
+      for (final name in ['manifest.chrome.json', 'manifest.firefox.json']) {
+        File('${dir.path}/extension/$name')
+            .writeAsStringSync('{\n  "version": "1.3.0"\n}\n');
+      }
+      final git = Process.runSync('git', ['init', '-q'], workingDirectory: dir.path);
+      expect(git.exitCode, 0, reason: '${git.stdout}${git.stderr}');
+
+      String set(String version) {
+        final r = Process.runSync(
+          'bash',
+          ['${dir.path}/tool/version.sh', '--set', version],
+          workingDirectory: dir.path,
+        );
+        expect(r.exitCode, 0, reason: '${r.stdout}${r.stderr}');
+        return File('${dir.path}/pubspec.yaml')
+            .readAsLinesSync()
+            .firstWhere((line) => line.startsWith('version: '));
+      }
+
+      expect(set('1.3.1'), 'version: 1.3.1+2');
+      // Re-declaring the same version is idempotent: a retried release-prep
+      // run must not move the code without a version to match it.
+      expect(set('1.3.1'), 'version: 1.3.1+2');
+      expect(set('1.4.0'), 'version: 1.4.0+3');
+      expect(
+        File('${dir.path}/extension/manifest.chrome.json').readAsStringSync(),
+        contains('"version": "1.4.0"'),
+      );
+    });
+
     test('the git-cliff install step names a path that exists', () {
       // This step failed on its first real run with "Not found in archive".
       // The tarball's top directory is git-cliff-<version>; the asset filename
