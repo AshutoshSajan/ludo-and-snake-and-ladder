@@ -471,7 +471,7 @@ void main() {
     test('hooks are shipped executable, or git silently ignores them', () {
       // A non-executable hook is not a weaker check, it is no check at all,
       // and git reports nothing when it skips one.
-      for (final f in ['tool/ci.sh', 'tool/changelog.sh', 'tool/deps.sh', '.githooks/pre-push']) {
+      for (final f in ['tool/ci.sh', 'tool/changelog.sh', 'tool/deps.sh', 'tool/release_target.sh', '.githooks/pre-push']) {
         expect(File(f).existsSync(), isTrue, reason: '$f is missing');
         expect(File(f).statSync().mode & 0x111, isNot(0),
             reason: '$f is not executable — git will ignore it silently');
@@ -691,6 +691,72 @@ void main() {
       // main from being anything but a merge commit.
       expect(prep, isNot(contains('push origin HEAD:main')));
       expect(prep, isNot(contains('origin HEAD:refs/heads/main')));
+    });
+
+    test('release-prep regenerates the changelog even with no version bump', () {
+      // The production failure: main had already declared 1.3.0 while the
+      // newest tag was v1.2.1, so --bump returned 1.3.0, the old step read
+      // `next == base` as "nothing to do" and exited BEFORE regenerating.
+      // The stale changelog then failed --check on every push.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final prep = workflow
+          .split('\n')
+          .skipWhile((l) => l != '  release-prep:')
+          .skip(1)
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:$').hasMatch(l))
+          .join('\n');
+
+      final nextAt = prep.indexOf(r'next=$(tool/version.sh --bump)');
+      // The executable line, not the prose mention of the generator or the
+      // later --check verification step.
+      final regenAt = prep.indexOf('\n          tool/changelog.sh\n');
+      expect(nextAt, isNonNegative,
+          reason: 'the tag-derived next version is needed');
+      expect(regenAt, isNonNegative,
+          reason: 'the changelog must always be regenerated');
+      expect(nextAt, lessThan(regenAt));
+      expect(prep, isNot(contains('nothing to bump')),
+          reason: 'the removed early exit is the bug this guards');
+      expect(prep.substring(nextAt, regenAt), isNot(contains('exit 0')),
+          reason: 'an early exit after --bump skips the stale changelog again');
+      // The target is chosen before it is written, so a lagging tag cannot
+      // move the declared version backwards.
+      final targetAt = prep.indexOf('tool/release_target.sh');
+      expect(targetAt, isNonNegative);
+      expect(targetAt, lessThan(regenAt));
+      expect(prep, contains(r'tool/version.sh --set "$target"'));
+    });
+
+    test('release target never moves the declared version backwards', () {
+      ProcessResult run(String declared, String derived) => Process.runSync(
+            'tool/release_target.sh',
+            [declared, derived],
+            workingDirectory: Directory.current.path,
+          );
+
+      // Same version: regenerate the changelog, but do not invent a bump.
+      var r = run('1.3.0', '1.3.0');
+      expect(r.exitCode, 0, reason: '${r.stdout}${r.stderr}');
+      expect((r.stdout as String).trim(), '1.3.0');
+
+      // A genuinely newer target still wins.
+      r = run('1.3.0', '1.4.0');
+      expect((r.stdout as String).trim(), '1.4.0');
+
+      // History behind an already-declared version must not downgrade it.
+      r = run('1.3.0', '1.2.2');
+      expect((r.stdout as String).trim(), '1.3.0');
+      expect((r.stderr as String), contains('keeping 1.3.0'));
+
+      // Numeric, not lexical: 1.10.0 is above 1.9.0.
+      r = run('1.9.0', '1.10.0');
+      expect((r.stdout as String).trim(), '1.10.0');
+      r = run('1.10.0', '1.9.0');
+      expect((r.stdout as String).trim(), '1.10.0');
+
+      // The release script is not a place for malformed versions.
+      r = run('1.3.x', '1.4.0');
+      expect(r.exitCode, isNot(0));
     });
 
     test('publishing follows the bump on ext-v* tag, not on main push', () {

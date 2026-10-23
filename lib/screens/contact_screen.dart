@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/report_client.dart';
+import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/shared/table_alert.dart';
 import '../ui/theme.dart';
@@ -56,7 +57,9 @@ class _ContactScreenState extends State<ContactScreen> {
       await client.submit(
         category: _category,
         source: 'contact',
-        title: _name.text.trim().isEmpty ? null : 'Message from ${_name.text.trim()}',
+        title: _name.text.trim().isEmpty
+            ? null
+            : 'Message from ${_name.text.trim()}',
         message: message,
         contact: _email.text.trim(),
       );
@@ -87,92 +90,101 @@ class _ContactScreenState extends State<ContactScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: PageAppBar(title: 'Contact'),
-      backgroundColor: AppColors.felt,
-      body: ContentColumn(
-        child: ListView(
-          children: [
-            const SizedBox(height: 8),
-            const Card(
-              child: ListTile(
-                leading: Icon(Icons.mail_outline, color: AppColors.gold),
-                title: Text('We read everything'),
-                subtitle: Text(
-                  'Questions, bug reports, feature ideas — it all lands in '
-                  'the same inbox. Leave an email if you want a reply.',
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'What is this about?',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+      body: ClubBackground(
+        child: SafeArea(
+          child: ContentColumn(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
               children: [
-                for (final (value, label) in _categories)
-                  ChoiceChip(
-                    label: Text(label),
-                    selected: _category == value,
-                    selectedColor: AppColors.gold,
-                    backgroundColor: AppColors.feltLight,
-                    labelStyle: TextStyle(
-                      color:
-                          _category == value ? AppColors.ink : AppColors.ivory,
-                    ),
-                    onSelected: (_) => setState(() => _category = value),
+                const ClubCard(
+                  accent: true,
+                  padding: EdgeInsets.fromLTRB(17, 18, 17, 16),
+                  child: ClubPageHeader(
+                    eyebrow: 'The front desk',
+                    title: 'We read everything',
+                    icon: Icons.mail_outline,
+                    subtitle:
+                        'Questions, bug reports, feature ideas — it all lands '
+                        'in the same inbox. Leave an email if you want a reply.',
                   ),
+                ),
+                const SizedBox(height: 14),
+                ClubCard(
+                  padding: const EdgeInsets.fromLTRB(18, 17, 18, 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const ClubSectionLabel('What is this about?'),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final (value, label) in _categories)
+                            ChoiceChip(
+                              label: Text(label),
+                              selected: _category == value,
+                              onSelected: (_) =>
+                                  setState(() => _category = value),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _name,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: const InputDecoration(
+                          labelText: 'Your name (optional)',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _email,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'Email (optional)',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _message,
+                        maxLength: 4000,
+                        maxLines: 6,
+                        decoration: const InputDecoration(
+                          labelText: 'Your message *',
+                          alignLabelWithHint: true,
+                          counterText: '',
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: FilledButton(
+                          onPressed: _sending ? null : _send,
+                          child: _sending
+                              ? const SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: AppColors.paperLight,
+                                  ),
+                                )
+                              : const Text('Send message'),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const ClubNote(
+                        'No account needed. We only use an email address to '
+                        'answer you.',
+                        icon: Icons.lock_outline,
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _name,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Your name (optional)',
-                border: OutlineInputBorder(),
-                fillColor: AppColors.feltLight,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _email,
-              keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(
-                labelText: 'Email (optional)',
-                border: OutlineInputBorder(),
-                fillColor: AppColors.feltLight,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _message,
-              maxLength: 4000,
-              maxLines: 6,
-              decoration: const InputDecoration(
-                labelText: 'Your message *',
-                alignLabelWithHint: true,
-                border: OutlineInputBorder(),
-                fillColor: AppColors.feltLight,
-                counterText: '',
-              ),
-            ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: _sending ? null : _send,
-              style: FilledButton.styleFrom(backgroundColor: AppColors.gold),
-              child: _sending
-                  ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Send message'),
-            ),
-            const SizedBox(height: 24),
-          ],
+          ),
         ),
       ),
     );

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
-import '../ui/theme.dart' show AppColors;
 import '../ui/theme.dart';
 
 /// The rule book, reachable from Settings.
@@ -28,45 +28,80 @@ class _RulesScreenState extends State<RulesScreen> {
   Widget build(BuildContext context) {
     final content = _game == 'ludo' ? ludoRulesContent : snakesRulesContent;
     return Scaffold(
-      backgroundColor: AppColors.felt,
-      appBar: PageAppBar(
-        title: 'How to play',
-        backgroundColor: AppColors.feltLight,
-        foregroundColor: AppColors.ivory,
-      ),
-      body: ContentColumn(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          children: [
-            // Which game the sheet below is about — built like the lobby's
-            // game toggle so switching between them never has to be learned.
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: 'ludo',
-                  label: Text('Ludo'),
-                  icon: Icon(Icons.casino_outlined),
+      appBar: PageAppBar(title: 'How to play'),
+      body: ClubBackground(
+        child: SafeArea(
+          child: ContentColumn(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+              children: [
+                ClubCard(
+                  accent: true,
+                  padding: const EdgeInsets.fromLTRB(17, 18, 17, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const ClubPageHeader(
+                        eyebrow: 'The rule book',
+                        title: 'Everything the table expects.',
+                        icon: Icons.menu_book_outlined,
+                        subtitle:
+                            'The short rules first, then the house rules that '
+                            'keep an online table fair.',
+                      ),
+                      const SizedBox(height: 15),
+                      // The same Ludo/Snakes vocabulary the lobby uses, so
+                      // switching games never has to be learned twice.
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(
+                            value: 'ludo',
+                            label: Text('Ludo'),
+                            icon: Icon(Icons.casino_outlined),
+                          ),
+                          ButtonSegment(
+                            value: 'snakes',
+                            label: Text('Snakes'),
+                            icon: Icon(Icons.grid_on_outlined),
+                          ),
+                        ],
+                        selected: {_game},
+                        onSelectionChanged: (sel) =>
+                            setState(() => _game = sel.first),
+                      ),
+                    ],
+                  ),
                 ),
-                ButtonSegment(
-                  value: 'snakes',
-                  label: Text('Snakes'),
-                  icon: Icon(Icons.grid_on_outlined),
+                const SizedBox(height: 14),
+                ClubCard(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 22),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        content.lead,
+                        style: const TextStyle(
+                          fontFamily: AppFonts.display,
+                          color: AppColors.ink,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
+                          height: 1.38,
+                          letterSpacing: -0.1,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: 52,
+                        height: 2,
+                        color: AppColors.gold.withValues(alpha: 0.85),
+                      ),
+                      for (final section in content.sections) _section(section),
+                    ],
+                  ),
                 ),
               ],
-              selected: {_game},
-              onSelectionChanged: (sel) => setState(() => _game = sel.first),
             ),
-            const SizedBox(height: 20),
-            Text(
-              content.lead,
-              style: const TextStyle(
-                color: AppColors.ivory,
-                fontSize: 16,
-                height: 1.5,
-              ),
-            ),
-            for (final section in content.sections) _section(section),
-          ],
+          ),
         ),
       ),
     );
@@ -78,13 +113,19 @@ class _RulesScreenState extends State<RulesScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(
+            height: 1,
+            margin: const EdgeInsets.only(bottom: 14),
+            color: AppColors.ink.withValues(alpha: 0.09),
+          ),
           Text(
             section.heading,
             style: const TextStyle(
-              color: AppColors.gold,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              height: 1.5,
+              fontFamily: AppFonts.display,
+              color: AppColors.brassDeep,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
             ),
           ),
           for (final line in section.lines) _line(line),
@@ -96,28 +137,35 @@ class _RulesScreenState extends State<RulesScreen> {
   Widget _line(RulesLine line) {
     final text = Text(
       line.text,
-      style: const TextStyle(color: AppColors.ivory, fontSize: 15, height: 1.5),
+      style: const TextStyle(
+        fontFamily: AppFonts.body,
+        color: AppColors.ink,
+        fontSize: 14.5,
+        height: 1.58,
+      ),
     );
     // Bullets get a hanging dot via a baseline-aligned row; paragraphs just
     // flow. Rows keep inside the reading column because they are an
     // Expanded inside the ContentColumn's constraint — the width test pins
     // exactly that.
     if (!line.bullet) {
-      return Padding(padding: const EdgeInsets.only(top: 4), child: text);
+      return Padding(padding: const EdgeInsets.only(top: 6), child: text);
     }
     return Padding(
-      padding: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.only(top: 7),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: Text(
-              '•',
-              style: TextStyle(color: AppColors.gold, fontSize: 15),
+          Container(
+            width: 5,
+            height: 5,
+            margin: const EdgeInsets.only(top: 8),
+            decoration: const BoxDecoration(
+              color: AppColors.brass,
+              shape: BoxShape.circle,
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Expanded(child: text),
         ],
       ),
