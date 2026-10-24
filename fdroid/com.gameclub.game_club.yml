@@ -1,0 +1,95 @@
+Categories:
+  - Board Game
+License: GPL-3.0-only
+AuthorName: Ashutosh Sajan
+SourceCode: https://github.com/AshutoshSajan/ludo-and-snake-and-ladder
+IssueTracker: https://github.com/AshutoshSajan/ludo-and-snake-and-ladder/issues
+Changelog: https://github.com/AshutoshSajan/ludo-and-snake-and-ladder/blob/HEAD/CHANGELOG.md
+
+AutoName: Game Club
+
+RepoType: git
+Repo: https://github.com/AshutoshSajan/ludo-and-snake-and-ladder.git
+
+Builds:
+  - versionName: 1.3.0
+    versionCode: 11
+    commit: 8eb5d64cdb489913a8f440b1ff62d22a479bfba0
+    output: build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+    srclibs:
+      - flutter@3.47.2
+    rm:
+      - ios
+      - macos
+      - windows
+      - linux
+      - web
+      - extension
+    prebuild:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter config --no-analytics
+      - $$flutter$$/bin/flutter pub get --enforce-lockfile
+    scandelete:
+      - .pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter build apk --release --no-pub --split-per-abi --target-platform
+        android-arm --build-number $$VERCODE$$ --android-project-arg=force-version-code-ignoring-abi=true
+
+  - versionName: 1.3.0
+    versionCode: 12
+    commit: 8eb5d64cdb489913a8f440b1ff62d22a479bfba0
+    output: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+    srclibs:
+      - flutter@3.47.2
+    rm:
+      - ios
+      - macos
+      - windows
+      - linux
+      - web
+      - extension
+    prebuild:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter config --no-analytics
+      - $$flutter$$/bin/flutter pub get --enforce-lockfile
+    scandelete:
+      - .pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter build apk --release --no-pub --split-per-abi --target-platform
+        android-arm64 --build-number $$VERCODE$$ --android-project-arg=force-version-code-ignoring-abi=true
+
+  - versionName: 1.3.0
+    versionCode: 13
+    commit: 8eb5d64cdb489913a8f440b1ff62d22a479bfba0
+    output: build/app/outputs/flutter-apk/app-x86_64-release.apk
+    srclibs:
+      - flutter@3.47.2
+    rm:
+      - ios
+      - macos
+      - windows
+      - linux
+      - web
+      - extension
+    prebuild:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter config --no-analytics
+      - $$flutter$$/bin/flutter pub get --enforce-lockfile
+    scandelete:
+      - .pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter build apk --release --no-pub --split-per-abi --target-platform
+        android-x64 --build-number $$VERCODE$$ --android-project-arg=force-version-code-ignoring-abi=true
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+VercodeOperation:
+  - '%c * 10 + 1'
+  - '%c * 10 + 2'
+  - '%c * 10 + 3'
+UpdateCheckData: pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
+CurrentVersion: 1.3.0
+CurrentVersionCode: 13
