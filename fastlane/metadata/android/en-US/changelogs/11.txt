@@ -1,0 +1,5 @@
+First F-Droid release.
+
+• Ludo and Snakes & Ladders, offline hot-seat or against bots
+• Online rooms with chat, voice, reconnect and leaderboards
+• Responsive phone layout, sound and haptics settings
