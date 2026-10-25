@@ -31,5 +31,8 @@ three APKs at 11, 12 and 13 instead of 1011, 2012 and 4013.
 codes: `%c * 10 + 1`, `+ 2`, `+ 3`. The next upstream build (`+2`) therefore
 becomes 21/22/23, and F-Droid sees a newer code for every release.
 
+Every build pins `ndk: 28.2.13676358` — the NDK that Flutter 3.47.2 selects by
+default — so the buildserver does not have to guess which one to install.
+
 The recipe was checked with `fdroid lint` against fdroiddata's current
 `config/categories.yml` and `config/antiFeatures.yml`.
