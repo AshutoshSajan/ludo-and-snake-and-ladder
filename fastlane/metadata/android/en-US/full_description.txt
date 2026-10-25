@@ -1,0 +1,22 @@
+Game Club is a free, open-source tabletop club for two classic board games:
+Ludo and Snakes & Ladders.
+
+Play the way you want:
+• Hot-seat: pass one device around the table.
+• Bots: easy, medium and hard opponents.
+• Online: create a room, share the four-letter code, and play with friends.
+• Voice chat, table chat, reconnect and spectator mode are built in.
+• Leaderboards track your results across games.
+• Ludo supports 2–4 players; Snakes & Ladders supports 2–10.
+• Turn timer, autoplay, undo and hints keep a table moving.
+• Sound and haptics can be switched off in Settings.
+
+No accounts, no ads, and no tracking. The game works offline for hot-seat and
+bot play. Online play uses the project's own free software game server; the
+public server is a convenience and can be self-hosted.
+
+Voice chat uses the microphone only while you hold the mic button. Android asks
+for microphone access the first time you use it.
+
+Game Club is licensed under GPL-3.0-only. Source code and issue tracker:
+https://github.com/AshutoshSajan/ludo-and-snake-and-ladder

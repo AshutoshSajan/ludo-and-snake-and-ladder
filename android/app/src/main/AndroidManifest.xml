@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Online rooms, chat and voice signalling use a WebSocket. The debug and
+         profile manifests already carry this permission; without it in the
+         release manifest, every online feature fails on a release APK. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="Game Club"
         android:name="${applicationName}"
