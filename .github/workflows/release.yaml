@@ -4,6 +4,12 @@ name: Release
 # for a dry run) and every distributable is built and attached to the
 # GitHub Release. Extension tags (`ext-v*`) are NOT matched here.
 #
+# Test runs can rebuild only the legs that failed before: dispatch with
+# `legs: build-linux,build-appimage` (comma- or space-separated job names).
+# A subset run leaves `publish` skipped — a `needs` leg that never runs
+# skips its dependents — so a partial test can never publish anything.
+# A tag push always runs every leg and is the only publish path.
+#
 # LUDO also ships a browser extension via AMO (`publish-firefox` in ci.yml,
 # which runs on main pushes). That path is untouched by this file: AMO takes
 # a source upload through its own API, not a GitHub Release, so the two
@@ -19,6 +25,10 @@ on:
         description: 'Version X.Y.Z override (defaults to tag, else pubspec)'
         required: false
         default: ''
+      legs:
+        description: 'Job names to run for a test dispatch (e.g. build-linux,build-appimage). Empty or "all" = every leg. Never publishes.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -32,7 +42,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-legs:
+    # Decides whether a run is a full release matrix or a leg-filtered test.
+    # A push (a v* tag — the only publish path) is always full. A dispatch
+    # may name a comma- or space-separated subset of legs to rebuild only
+    # what failed previously; unknown names abort with the valid list.
+    runs-on: ubuntu-24.04
+    outputs:
+      full: ${{ steps.select.outputs.full }}
+      legs: ${{ steps.select.outputs.legs }}
+    steps:
+      - id: select
+        env:
+          REQUESTED: ${{ inputs.legs }}
+        run: |
+          valid='build-android build-linux build-appimage build-windows build-web build-extension build-snap'
+          if [ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ] \
+            || [ -z "$REQUESTED" ] || [ "$REQUESTED" = 'all' ]; then
+            echo 'full=true' >> "$GITHUB_OUTPUT"
+            echo 'legs=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          legs=$(echo "$REQUESTED" | tr ',' ' ' | xargs)
+          for leg in $legs; do
+            case " $valid " in
+              *" $leg "*) ;;
+              *)
+                echo "::error title=Unknown leg::'$leg' is not a build leg."
+                echo 'Valid legs: build-android, build-linux, build-appimage,'
+                echo 'build-windows, build-web, build-extension, build-snap'
+                exit 1
+                ;;
+            esac
+          done
+          echo 'full=false' >> "$GITHUB_OUTPUT"
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          echo "subset run: $legs"
+
   verify:
+    needs: release-legs
+    # analyze+tests are the tag-path quality gate; a leg-filtered test does
+    # not repeat them (ci.yml runs them on every push already).
+    if: needs.release-legs.outputs.full == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -52,7 +103,7 @@ jobs:
       - run: flutter test
 
   resolve-version:
-    needs: verify
+    needs: release-legs
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.ver.outputs.version }}
@@ -100,7 +151,10 @@ jobs:
           EOF
 
   build-android:
-    needs: resolve-version
+    needs: [release-legs, resolve-version]
+    if: >-
+      needs.release-legs.outputs.full == 'true' ||
+      contains(split(needs.release-legs.outputs.legs, ' '), 'build-android')
     runs-on: ubuntu-24.04
     # The ANDROID_* secrets are promoted to job-level env rather than read in a
     # step `if:` — GitHub rejects `secrets` inside `if` outright ("Unrecognized
@@ -186,7 +240,10 @@ jobs:
           path: dist/
 
   build-linux:
-    needs: resolve-version
+    needs: [release-legs, resolve-version]
+    if: >-
+      needs.release-legs.outputs.full == 'true' ||
+      contains(split(needs.release-legs.outputs.legs, ' '), 'build-linux')
     # Oldest supported runner: glibc 2.35 baseline runs on Ubuntu 22.04
     # through the latest releases (forward-compatible), plus Debian 12+,
     # Fedora 36+ and RHEL 9+. A 24.04 build would not install on 22.04.
@@ -251,7 +308,10 @@ jobs:
           path: dist/
 
   build-appimage:
-    needs: resolve-version
+    needs: [release-legs, resolve-version]
+    if: >-
+      needs.release-legs.outputs.full == 'true' ||
+      contains(split(needs.release-legs.outputs.legs, ' '), 'build-appimage')
     # glibc floor: 24.04-built AppImages won't run on older distros.
     runs-on: ubuntu-22.04
     env:
@@ -325,7 +385,10 @@ jobs:
           path: dist/
 
   build-windows:
-    needs: resolve-version
+    needs: [release-legs, resolve-version]
+    if: >-
+      needs.release-legs.outputs.full == 'true' ||
+      contains(split(needs.release-legs.outputs.legs, ' '), 'build-windows')
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
@@ -365,7 +428,10 @@ jobs:
           path: dist/
 
   build-web:
-    needs: resolve-version
+    needs: [release-legs, resolve-version]
+    if: >-
+      needs.release-legs.outputs.full == 'true' ||
+      contains(split(needs.release-legs.outputs.legs, ' '), 'build-web')
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
@@ -390,12 +456,15 @@ jobs:
           path: dist/
 
   build-extension:
+    needs: [release-legs, resolve-version]
+    if: >-
+      needs.release-legs.outputs.full == 'true' ||
+      contains(split(needs.release-legs.outputs.legs, ' '), 'build-extension')
     # The add-ons as installable files, so the GitHub Release is complete
     # without touching AMO or the Web Store. The store route (publish-firefox
     # in ci.yml) still owns listing updates; this is the downloadable copy a
     # tester can side-load. Chrome loads the folder unpacked; Firefox signs
     # on upload, so the .xpi here is unsigned and for testing only.
-    needs: resolve-version
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
@@ -423,7 +492,10 @@ jobs:
           path: dist/
 
   build-snap:
-    needs: resolve-version
+    needs: [release-legs, resolve-version]
+    if: >-
+      needs.release-legs.outputs.full == 'true' ||
+      contains(split(needs.release-legs.outputs.legs, ' '), 'build-snap')
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
