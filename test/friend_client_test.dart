@@ -1,6 +1,6 @@
 /// FriendClient contract: URL building off the ws(s) server URL, the
 /// server's row shapes parsed into client-side views (peer picking,
-/// mine/them, reply snapshots), failure mapping to人人-readable
+/// mine/them, reply snapshots), failure mapping to human-readable
 /// FriendException texts, and the lookup-miss that stays null.
 library;
 
@@ -15,7 +15,12 @@ import 'package:game_club/services/friend_client.dart';
 const serverUrl = 'wss://ludo.test/ws';
 
 FriendClient clientWith(http.Client mock) =>
-    FriendClient(serverUrl: serverUrl, httpClient: mock);
+    FriendClient(
+      serverUrl: serverUrl,
+      // Tests ride the same bearer shape the wire uses: `_headers` covers it.
+      credential: 'test-credential',
+      httpClient: mock,
+    );
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -129,6 +134,25 @@ void main() {
   });
 
   group('requests ride the right URLs and bodies', () {
+    test('every request presents the device credential as Bearer', () async {
+      final headers = <Map<String, String>>[];
+      final mock = MockClient((req) async {
+        headers.add(req.headers);
+        return http.Response(jsonEncode({'ok': true}), 200);
+      });
+      final client = clientWith(mock);
+      // A POST (the family's default) and the single GET route both
+      // carry the header — the server refuses bearer-less friends calls,
+      // so a missing one would strand the whole screen on 401s.
+      await client.remove(seatId: 'p1', target: 'p2');
+      await client.chat(seatId: 'p1', peer: 'p2');
+      expect(
+        headers.where((h) => h['authorization'] == 'Bearer test-credential'),
+        hasLength(2),
+        reason: 'POST and GET must both present the credential header',
+      );
+    });
+
     test('send POSTs friends/request with the target', () async {
       late String path;
       late Map<String, dynamic> sent;

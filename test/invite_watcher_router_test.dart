@@ -31,6 +31,7 @@ void main() {
       interval: const Duration(milliseconds: 50),
       clientFactory: () => FriendClient(
         serverUrl: 'wss://test/ws',
+        credential: 'test-credential',
         httpClient: MockClient((req) async {
           if (req.url.path == '/friends/state') {
             return http.Response(
@@ -64,7 +65,11 @@ void main() {
           return http.Response('{}', 200);
         }),
       ),
-      identityOverride: Future.value((seatId: 'p2', name: 'Bo')),
+      identityOverride: Future.value((
+        seatId: 'p2',
+        name: 'Bo',
+        credential: 'test-credential',
+      )),
       chime: () async {},
     );
 

@@ -35,6 +35,7 @@ typedef OnlineClientBuilder = OnlineClient Function({
   required String serverUrl,
   required String seatId,
   required String name,
+  String credential,
   required String gameType,
   required int capacity,
 });
@@ -43,12 +44,14 @@ OnlineClient _defaultClient({
   required String serverUrl,
   required String seatId,
   required String name,
+  String credential = '',
   required String gameType,
   required int capacity,
 }) => OnlineClient(
   serverUrl,
   seatId: seatId,
   name: name,
+  credential: credential,
   gameType: gameType,
   capacity: capacity,
 );
@@ -212,6 +215,12 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   String _seatId = '';
   String _name = '';
 
+  /// The credential paired with [_seatId] — the private identity half the
+  /// friends server binds to this seat. Loaded with the rest of the
+  /// identity and threaded into [_connect]'s client build + the friends
+  /// tray client so their calls present it as `Authorization: Bearer`.
+  String _credential = '';
+
   @override
   void initState() {
     super.initState();
@@ -248,7 +257,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     // server the WS connects to, whatever the connect form holds now.
     if (_friendClient == null || _friendUrl != client.serverUrl) {
       _friendClient?.close();
-      _friendClient = FriendClient(serverUrl: client.serverUrl);
+      _friendClient = FriendClient(
+        serverUrl: client.serverUrl,
+        credential: client.credential,
+      );
       _friendUrl = client.serverUrl;
     }
     try {
@@ -287,6 +299,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   Future<void> _restoreIdentity() async {
     final storage = StorageService();
     final id = await storage.loadOnlinePlayerId();
+    final credential = await storage.loadOnlineCredential();
     final name = await storage.loadOnlineName();
     if (!mounted) return;
     final hadStoredName = name.isNotEmpty;
@@ -297,6 +310,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final resolved = hadStoredName ? name : _defaultNameFor(id);
     setState(() {
       _seatId = id;
+      _credential = credential;
       _nameCtrl.text = resolved;
       _name = resolved;
     });
@@ -420,6 +434,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         serverUrl: client.serverUrl,
         mySeatId: client.seatId,
         myName: client.name,
+        myCredential: client.credential,
         peerSeatId: seat.seatId,
         peerName: seat.name,
       ),
@@ -507,6 +522,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       serverUrl: OnlineLobbyScreen.defaultServerUrl(),
       seatId: _seatId,
       name: name,
+      credential: _credential,
       gameType: _gameType,
       // The table size rides only when this hello creates (or matches
       // into) a room; a join submits a code and inherits the room's size

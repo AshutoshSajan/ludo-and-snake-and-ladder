@@ -110,3 +110,13 @@ CREATE TABLE IF NOT EXISTS friend_blocks (
   UNIQUE(blocker, blocked)
 );
 CREATE INDEX IF NOT EXISTS idx_friend_blocks_blocker ON friend_blocks(blocker);
+
+-- The device credential: only the SHA-256 hash of the device's secret is
+-- stored (never the token). First bind of a seat wins; every friends
+-- endpoint derives the acting seat from the hash instead of trusting a
+-- request's public seat id.
+CREATE TABLE IF NOT EXISTS friend_credentials (
+  seat_id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_ms INTEGER NOT NULL
+);

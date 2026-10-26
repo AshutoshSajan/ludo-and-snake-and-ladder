@@ -75,6 +75,48 @@ void _runFriendStoreContract(
       await store.respond(b, (await store.incoming(b)).single.id, accept: true);
     }
 
+    group('credentials (the private identity half)', () {
+      test('first bind wins and the hash derives its seat', () async {
+        expect(await store.bindCredential('p1', 'hash-a'), isTrue);
+        expect(await store.seatForCredential('hash-a'), 'p1');
+
+        // Re-binding the same token is idempotent; a foreign token is a no.
+        expect(await store.bindCredential('p1', 'hash-a'), isTrue);
+        expect(await store.bindCredential('p1', 'hash-b'), isFalse);
+        expect(await store.seatForCredential('hash-b'), isNull);
+        expect(await store.seatForCredential('hash-a'), 'p1');
+      });
+
+      test('a hash belongs to exactly one seat', () async {
+        expect(await store.bindCredential('pA', 'hash-one'), isTrue);
+        // pB cannot present pA's hash: the UNIQUE rule fails the bind and
+        // the seat stays unbound (no partial state, no identity leak).
+        expect(await store.bindCredential('pB', 'hash-one'), isFalse);
+        expect(await store.seatForCredential('hash-one'), 'pA');
+        expect(await store.seatForCredential(
+          'hash-never-bound-anywhere',
+        ), isNull);
+      });
+
+      test('clear frees the seat for a fresh bind (recovery path)', () async {
+        expect(await store.bindCredential('p1', 'hash-a'), isTrue);
+        await store.clearCredential('p1');
+        expect(await store.seatForCredential('hash-a'), isNull);
+        expect(await store.bindCredential('p1', 'hash-b'), isTrue);
+        expect(await store.seatForCredential('hash-b'), 'p1');
+        // And the freed hash can bind elsewhere.
+        expect(await store.bindCredential('p2', 'hash-a'), isTrue);
+        expect(await store.seatForCredential('hash-a'), 'p2');
+      });
+
+      test('binding needs a seat', () async {
+        await expectLater(
+          store.bindCredential(' ', 'hash-x'),
+          throwsArgumentError,
+        );
+      });
+    });
+
     group('profiles', () {
       test('serves a profile with a readable 6-char code', () async {
         final p = await store.serve('p1', 'Swift Otter');
@@ -82,7 +124,6 @@ void _runFriendStoreContract(
         expect(p.name, 'Swift Otter');
         expect(RegExp(r'^[2-9A-HJ-NP-Z]{6}$').hasMatch(p.code), isTrue);
       });
-
       test('code survives a re-serve and keeps the newest name', () async {
         final first = await store.serve('p1', 'Old Name');
         final second = await store.serve('p1', 'New Name');

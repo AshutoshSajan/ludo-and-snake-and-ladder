@@ -110,10 +110,12 @@ Future<void> _openSheet(
                   serverUrl: 'ws://table.test/ws',
                   mySeatId: mySeatId,
                   myName: myName,
+                  myCredential: 'test-credential',
                   peerSeatId: peerSeatId,
                   peerName: peerName,
                   friendClientForTest: FriendClient(
                     serverUrl: 'ws://table.test/ws',
+                    credential: 'test-credential',
                     httpClient: wire.client(),
                   ),
                 ),

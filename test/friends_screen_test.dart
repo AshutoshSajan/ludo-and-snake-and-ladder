@@ -84,6 +84,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient((_) async => ok(_stateBody())),
       ),
     );
@@ -102,6 +103,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient((_) async => ok(_stateBody())),
       ),
     );
@@ -121,6 +123,7 @@ void main() {
         tester,
         FriendClient(
           serverUrl: serverUrl,
+          credential: 'test-credential',
           httpClient: MockClient((req) async {
             stateCalls.add(req.url.path);
             return ok(
@@ -163,6 +166,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient((_) async => ok(_stateBody(latestForP9: 0))),
       ),
     );
@@ -175,6 +179,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient((req) async {
           if (req.url.path == '/friends/respond') {
             answered.add(jsonDecode(req.body) as Map<String, dynamic>);
@@ -198,6 +203,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient((_) async => ok(_stateBody())),
       ),
     );
@@ -215,6 +221,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient((_) async => ok(_stateBody())),
       ),
     );
@@ -234,6 +241,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient(
           (_) async => ok(
             _stateBody(
