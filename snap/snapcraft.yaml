@@ -8,7 +8,7 @@
 #   snapcraft upload game-club-ludo_1.2.2_amd64.snap --release=edge
 # Keep `version` in sync with pubspec.yaml.
 name: game-club-ludo
-version: '1.2.2'
+version: '1.3.0'
 # Flutter ships prebuilt engines for x64 and ARM64 only; other arches
 # (armhf/ppc64el/s390x/riscv64) can never build, so don't attempt them.
 # NOTE: core22 grammar takes a plain list; the build-on/run-on dict form
