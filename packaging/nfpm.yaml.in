@@ -6,9 +6,18 @@ maintainer: Ashutosh Sajan
 description: Ludo and Snakes & Ladders — hot-seat and online board games
 homepage: https://github.com/AshutoshSajan/ludo-and-snake-and-ladder
 license: GPL-3.0-only
-# Alternation covers the 24.04 rename (libgtk-3-0t64) and older suites.
+# Deb gets the Ubuntu 24.04 alternation (libgtk-3-0t64 | libgtk-3-0); plain
+# and exact Debian-style names are malformed as an RPM relation, so the rpm
+# override declares the Fedora/EL/SUSE gtk3 package instead.
 depends:
-  - libgtk-3-0t64 | libgtk-3-0
+  - libgtk-3-0
+overrides:
+  deb:
+    depends:
+      - "libgtk-3-0t64 | libgtk-3-0"
+  rpm:
+    depends:
+      - gtk3
 # nFPM resolves src relative to the repository root (its CWD), not packaging/.
 contents:
   - src: build/linux/x64/release/bundle/

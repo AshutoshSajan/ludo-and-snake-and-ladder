@@ -377,9 +377,14 @@ jobs:
           export APPIMAGE_EXTRACT_AND_RUN=1
           # Icon filename must match the desktop file's Icon= entry.
           cp web/icons/Icon-512.png packaging/game-club.png
+          # Exec=game-club in the desktop file; the flutter bundle names the
+          # binary game_club. linuxdeploy needs a file of the Exec name to
+          # create the AppDir-root symlink, so stage the ubiquitarian copy.
+          cp build/linux/x64/release/bundle/game_club \
+             build/linux/x64/release/bundle/game-club
           # Stage 1: deploy the executable and its linked libraries.
           ./tools/linuxdeploy --appdir AppDir \
-            -e build/linux/x64/release/bundle/game_club \
+            -e build/linux/x64/release/bundle/game-club \
             -d packaging/game-club.desktop \
             -i packaging/game-club.png
           # Stage 2: the Flutter engine loads lib/libapp.so and data/
