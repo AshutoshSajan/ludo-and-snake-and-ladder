@@ -138,6 +138,16 @@ class Room {
   /// returning player reclaims their exact seat, even mid-game.
   final Map<String, LudoColor> seatRegistry = {};
 
+  /// The private reconnect credential bound to each seatId this room has
+  /// ever admitted (CWE-287 fix). A seat id is public — the roster and
+  /// the leaderboard both show it — so a claimant who merely *knows* one
+  /// must not be able to reclaim it: the first admission mints a random
+  /// secret kept only here (never broadcast; it travels once, in its
+  /// owner's private `joined` response) and every later admission that
+  /// would install a connection under a seen-before seat has to present
+  /// it exactly. Dies with the room.
+  final Map<String, String> seatCredentials = {};
+
   /// Seats the room is playing *for*: the server rolls and moves on their
   /// behalf until they switch it off (or the game ends). Server-side rather
   /// than client-side so it keeps working when the human's tab is closed,
@@ -526,11 +536,14 @@ class GameAuthority {
     ServerMember member, {
     String game = 'ludo',
     int? capacity,
+    String? credential,
   }) {
     for (final room in rooms.values) {
       if (room.gameType != game || room.started || room.full) continue;
       if (capacity != null && room.capacity != capacity) continue;
-      if (joinRoom(room.code, member) != null) return room;
+      if (joinRoom(room.code, member, credential: credential) != null) {
+        return room;
+      }
     }
     return null;
   }
@@ -538,17 +551,73 @@ class GameAuthority {
   /// Quick match: seats [member] in the first waiting (unstarted, not full)
   /// room playing [game], creating a fresh room when none fits. Waiting
   /// players thus pair up automatically instead of trading room codes.
-  Room findMatch(ServerMember member, {String game = 'ludo', int? capacity}) =>
-      matchExisting(member, game: game, capacity: capacity) ??
-      createRoom(member, game: game, capacity: capacity ?? 4);
+  Room findMatch(
+    ServerMember member, {
+    String game = 'ludo',
+    int? capacity,
+    String? credential,
+  }) =>
+      matchExisting(
+        member,
+        game: game,
+        capacity: capacity,
+        credential: credential,
+      ) ??
+      createRoom(
+        member,
+        game: game,
+        capacity: capacity ?? 4,
+      );
 
-  Room? joinRoom(String code, ServerMember member) {
+  static final Random _secureForCredentials = Random.secure();
+
+  /// A fresh private reconnect credential: 32 secure random bytes in a
+  /// url-safe form (~43 characters). Deliberately NOT derived from the
+  /// room's seeded [rng] — test rooms are built with a fixed-seed Random,
+  /// and a credential predictable from anything previously observable is
+  /// forgeable, which would defeat the binding it exists to enforce.
+  String _newSeatCredential() {
+    final bytes = List<int>.generate(
+      32,
+      (_) => _secureForCredentials.nextInt(256),
+    );
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
+  /// Whether [credential] binds this connection to the stored claim of
+  /// [seatId] in [room] — the gate every admission that installs a member
+  /// must pass before the room's state is touched (CWE-287: a seat id is
+  /// public, the credential bound to it is not). A seat the room has
+  /// never seen admits any fresh claim and is minted one afterwards; a
+  /// seat with a stored claim verifies the presentation exactly, and
+  /// absent/mangled/mistaken credentials all stop at this line, without
+  /// ever evicting whoever currently holds the seat.
+  bool _seatCredentialHolds(Room room, String seatId, String? credential) {
+    final stored = room.seatCredentials[seatId];
+    if (stored == null) return true; // first sight of this seatId here
+    return stored == (credential ?? '');
+  }
+
+  /// Records [seatId]'s reconnect credential if this room has not minted
+  /// one for it yet, so the claim keeps binding across every later
+  /// disconnect and reconnection of the same seat in this room.
+  void _bindSeatCredential(Room room, String seatId) {
+    room.seatCredentials[seatId] ??= _newSeatCredential();
+  }
+
+  Room? joinRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null || room.full || room.started) return null;
     // Reject duplicate seat ids (same profile joining twice).
     if (room.members.values.any((m) => m.seatId == member.seatId)) {
       return null;
     }
+    // A seatId this room has seen before — a returning player reclaiming
+    // a freed lobby corner, not someone new — is rewritable only with the
+    // private credential their first admission was granted (CWE-287).
+    // Checked before anything is moved or renamed: a wrong presentation
+    // leaves the room exactly as it was.
+    if (!_seatCredentialHolds(room, member.seatId, credential)) return null;
     // Two players may pick the same display name, but the room and the
     // leaderboard must still tell them apart — "Asha" twice is unreadable in a
     // seat list. The seat id is already unique and is what the leaderboard
@@ -583,23 +652,36 @@ class GameAuthority {
     room.spectators.removeWhere((_, m) => m.seatId == member.seatId);
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
+    // First admission of this seatId here gets the private reconnect
+    // credential minted into the room's bound secret store; later
+    // admissions fall through to putIfAbsent, which keeps the original.
+    _bindSeatCredential(room, member.seatId);
     return room;
   }
 
   /// Attempts to seat [member] with a preferred color; picks the first
   /// free clockwise corner otherwise. Returns the room or null.
-  Room? joinWithColor(String code, ServerMember member, LudoColor color) {
+  Room? joinWithColor(
+    String code,
+    ServerMember member,
+    LudoColor color, {
+    String? credential,
+  }) {
     final room = rooms[code.toUpperCase()];
     if (room == null || room.full || room.started) return null;
     if (room.members.values.any((m) => m.seatId == member.seatId)) return null;
+    // Same replay rule as joinRoom: a seen-before seatId binds to the
+    // credential its holder was granted (CWE-287).
+    if (!_seatCredentialHolds(room, member.seatId, credential)) return null;
     if (room.ownerOf(color) != null || room.forfeited.contains(member.seatId)) {
-      return joinRoom(code, member);
+      return joinRoom(code, member, credential: credential);
     }
     room.members[member.id] = member;
     room.seatRegistry[member.seatId] = member.color;
     room.spectators.removeWhere((_, m) => m.seatId == member.seatId);
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
+    _bindSeatCredential(room, member.seatId);
     return room;
   }
 
@@ -608,7 +690,7 @@ class GameAuthority {
   /// game state (whose turn, tokens) keeps pointing at the same seatId. Any
   /// stale half-open connection for that seat is evicted. Returns null when
   /// the room is gone or the seatId never sat there (no seat stealing).
-  Room? rejoinRoom(String code, ServerMember member) {
+  Room? rejoinRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null) return null;
     final claimed = room.seatRegistry[member.seatId];
@@ -617,6 +699,11 @@ class GameAuthority {
     // must not silently put their pieces back on a board the others have
     // already moved on from.
     if (room.forfeited.contains(member.seatId)) return null;
+    // The reclaim's whole job is replacing a connection, so the private
+    // credential check lands BEFORE the removal: whoever holds the seat is
+    // untouched until the presentation verifies. The check here is exact —
+    // this path only ever targets seats the room has minted a claim for.
+    if (!_seatCredentialHolds(room, member.seatId, credential)) return null;
     room.members.removeWhere((_, m) => m.seatId == member.seatId);
     member.color = claimed;
     room.members[member.id] = member;
@@ -635,11 +722,20 @@ class GameAuthority {
   /// mid-game. Spectators never claim seats and their intents are ignored
   /// by [handleIntent]. Returns null only when the room is gone, or when
   /// [member] is already seated as a player in it.
-  Room? spectateRoom(String code, ServerMember member) {
+  Room? spectateRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null) return null;
     if (room.members.values.any((m) => m.seatId == member.seatId)) {
       return null; // already playing here — no duplicate feeds
+    }
+    // A watcher this room has seen before is replaced only by the holder
+    // of that seat's private credential (CWE-287): the roster broadcasts
+    // the seat id, so anyone with it must not be able to detach the live
+    // reader. A REFUSED replacement leaves the current watcher connected,
+    // exactly like the refused player reclaim below [rejoinRoom].
+    if (room.seatCredentials.containsKey(member.seatId) &&
+        !_seatCredentialHolds(room, member.seatId, credential)) {
+      return null;
     }
     // One spectator connection per profile; a reconnecting watcher replaces
     // their own stale connection.
@@ -647,6 +743,9 @@ class GameAuthority {
     room.spectators[member.id] = member;
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
+    // Watchers are also granted the private reconnect credential: from
+    // here on, reconnecting into watcher mode re-verifies the same seat.
+    _bindSeatCredential(room, member.seatId);
     // Somebody is watching again, so a game the table was handed may resume:
     // the same rule that stopped it when the room went quiet (see _armAutoTimer).
     _armAutoTimer(room);

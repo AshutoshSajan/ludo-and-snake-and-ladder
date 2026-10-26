@@ -375,6 +375,7 @@ class OnlineClient extends ChangeNotifier {
     this.serverUrl, {
     required this.seatId,
     required this.name,
+    this.initialSeatCredential = '',
     this.gameType = 'ludo',
     this.quickMatch = false,
     this.capacity = 4,
@@ -386,6 +387,20 @@ class OnlineClient extends ChangeNotifier {
   final String serverUrl;
   final String seatId; // profile id — our identity across reconnects
   final String name;
+
+  /// The seat's private reconnect credential restored from storage, so a
+  /// restart mid-game can present the same claim the device held before it
+  /// died (the server refuses a seat rewrite without it). Refreshed from
+  /// every `joined` response; empty until the first grant arrives.
+  final String initialSeatCredential;
+
+  /// The private reconnect credential granted for this client's seat, kept
+  /// separate from the public roster identity (CWE-287 fix). Anything the
+  /// server broadcasts — lobby, seats, state — never contains it.
+  String _seatCredential = '';
+  String get seatCredential => _seatCredential.isEmpty
+      ? initialSeatCredential
+      : _seatCredential;
 
   /// Which game to play when creating a room ('ludo' | 'snakes'). Joiners
   /// have their value overwritten by the room's real game type on 'joined'.
@@ -719,6 +734,11 @@ class OnlineClient extends ChangeNotifier {
         'seatId': seatId,
         'name': name,
         'game': gameType,
+        // The private reconnect credential, presented when this device
+        // holds one: the server re-verifies the claim on a widen-before
+        // ever installing a connection under a seen-before seat id.
+        // First-time joins have none yet and the field is omitted.
+        if (seatCredential.isNotEmpty) 'credential': seatCredential,
         if (quickMatch && (_joinCode == null || _joinCode!.isEmpty))
           'match': true,
         // Room creators (and quick match, which creates too) name the table
@@ -904,6 +924,15 @@ class OnlineClient extends ChangeNotifier {
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
         myColor = colorName == null ? null : LudoColor.values.byName(colorName);
+        // The seat's private reconnect credential rides the joined response
+        // and nothing else — the server minted it for this admission and
+        // every later hello presents it, so a reclaim verifies the claimant
+        // instead of the publicly-visible seat id (CWE-287). Absent before
+        // the first grant; a regrant overwrites, an absent field keeps.
+        final credential = msg['credential'] as String?;
+        if (credential != null && credential.isNotEmpty) {
+          _seatCredential = credential;
+        }
         // A (re)join is a clean slate: whatever eviction this client saw
         // last belongs to the room we just left.
         _mySeatEvicted = false;

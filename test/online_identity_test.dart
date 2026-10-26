@@ -59,6 +59,27 @@ void main() {
     );
   });
 
+  test('the seat credential persists beside the id and name', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+
+    expect(
+      await storage.loadOnlineCredential(),
+      isEmpty,
+      reason: 'nothing is granted before the first seat',
+    );
+
+    // The server grants the credential inside a 'joined' response; the
+    // lobby screen persists it so a restart can present the same claim.
+    await storage.saveOnlineCredential('cred-1');
+    expect(await StorageService().loadOnlineCredential(), 'cred-1');
+
+    // Writing the credential leaves the identity untouched, and vice versa.
+    expect(await storage.loadOnlinePlayerId(), isNotEmpty);
+    await storage.saveOnlineName('Asha');
+    expect(await StorageService().loadOnlineCredential(), 'cred-1');
+  });
+
   group('default names', () {
     test('are generated, and well formed', () {
       final name = DefaultNames.generate();

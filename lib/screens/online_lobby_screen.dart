@@ -37,6 +37,7 @@ typedef OnlineClientBuilder = OnlineClient Function({
   required String name,
   required String gameType,
   required int capacity,
+  required String seatCredential,
 });
 
 OnlineClient _defaultClient({
@@ -45,12 +46,14 @@ OnlineClient _defaultClient({
   required String name,
   required String gameType,
   required int capacity,
+  required String seatCredential,
 }) => OnlineClient(
   serverUrl,
   seatId: seatId,
   name: name,
   gameType: gameType,
   capacity: capacity,
+  initialSeatCredential: seatCredential,
 );
 
 /// Online lobby: connect to an authoritative Ludo server, create or join a
@@ -212,6 +215,13 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   String _seatId = '';
   String _name = '';
 
+  /// The seat's private reconnect credential, restored from storage and
+  /// handed to every new [OnlineClient] as its initial claim; a `joined`
+  /// grant refreshes it in [_onClientChanged]. A secret, never a display
+  /// value: the server refuses to rewrite a seen-before seat without it
+  /// (CWE-287), and it absent from everything the roster broadcasts.
+  String _seatCredential = '';
+
   @override
   void initState() {
     super.initState();
@@ -224,7 +234,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     // the first build, so the lobby panel draws with it from frame one.
     final adopted = widget.startup?.adoptedClient;
     if (adopted != null) {
-      adopted.addListener(() => setState(() {}));
+      adopted.addListener(() => _onClientChanged(adopted));
       // A server push is the real-time half of the friends lifecycle: the
       // watcher still owns the poll, this just tells it there is something
       // to read now instead of on the next five-second beat.
@@ -288,6 +298,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final storage = StorageService();
     final id = await storage.loadOnlinePlayerId();
     final name = await storage.loadOnlineName();
+    final credential = await storage.loadOnlineCredential();
     if (!mounted) return;
     final hadStoredName = name.isNotEmpty;
     // A first-time player is given a name rather than an empty field, and it
@@ -299,6 +310,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       _seatId = id;
       _nameCtrl.text = resolved;
       _name = resolved;
+      _seatCredential = credential;
     });
 
     final joinCode = widget.startup?.joinCode;
@@ -484,6 +496,20 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     super.dispose();
   }
 
+  /// Reacts to the client's changes: redraw the lobby panel, and persist
+  /// the seat's private reconnect credential. The server grants it inside
+  /// the `joined` response and never rotates it, so the write happens once
+  /// per grant — but a client adopted from the friends handoff grants its
+  /// later than a screen-built one, so every change re-checks.
+  void _onClientChanged(OnlineClient client) {
+    if (mounted) setState(() {});
+    final credential = client.seatCredential;
+    if (credential.isNotEmpty && credential != _seatCredential) {
+      _seatCredential = credential;
+      StorageService().saveOnlineCredential(credential);
+    }
+  }
+
   void _connect({bool createRoom = true, String? codeOverride}) {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
@@ -512,7 +538,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       // into) a room; a join submits a code and inherits the room's size
       // on the first lobby feed.
       capacity: createRoom ? _players : 4,
-    )..addListener(() => setState(() {}));
+      seatCredential: _seatCredential,
+    );
+    client.addListener(() => _onClientChanged(client));
     client.onFriendsPulse = inviteWatcher.poke;
     _seatsPrimed = false;
     _knownSeatIds = {};

@@ -87,6 +87,43 @@ void main() {
     });
   });
 
+  test('a granted credential rides the reconnect hello, not the first one', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p3', name: 'C', channelFactory: factory.create);
+
+      client.connect();
+      async.flushMicrotasks();
+      // Before the seat exists there is nothing to present: the field is
+      // omitted entirely, never an empty string.
+      expect(factory.last.sent.first['credential'], isNull);
+
+      // The server seats us and grants the seat's private reclaim
+      // credential inside 'joined' — the only channel it ever leaves by.
+      factory.last.serverAdd({
+        'type': 'joined',
+        'code': 'GRNT',
+        'color': 'red',
+        'game': 'ludo',
+        'credential': 'cred-1',
+      });
+      async.flushMicrotasks();
+      expect(client.seatCredential, 'cred-1');
+
+      factory.last.dropConnection();
+      async.flushMicrotasks();
+      async.elapse(const Duration(milliseconds: 501));
+      expect(factory.channels, hasLength(2));
+      expect(
+        factory.last.sent
+            .firstWhere((m) => m['type'] == 'hello')['credential'],
+        'cred-1',
+        reason: 'the reconnect presents the granted claim to reclaim the seat',
+      );
+    });
+  });
+
   test('backoff doubles between failed attempts', () {
     fakeAsync((async) {
       final factory = FakeChannelFactory();

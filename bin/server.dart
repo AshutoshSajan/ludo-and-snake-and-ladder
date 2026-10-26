@@ -311,6 +311,15 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
         final spectate = msg['spectate'] as bool? ?? false;
         final game = (msg['game'] as String?) == 'snakes' ? 'snakes' : 'ludo';
         final match = msg['match'] as bool? ?? false;
+        // The private reconnect credential this connection presents for a
+        // seat the room has already bound (an absence is an empty string,
+        // exactly what a first join legitimately has). Parsed defensively:
+        // a non-string or absurd-length JSON value is simply nobody's
+        // credential — no crash, no cast in the socket listener — and the
+        // authority decides the rest.
+        final credential = msg['credential'] is String
+            ? (msg['credential'] as String).trim()
+            : '';
         // Table size the host asks to close a created room at (2..4; the
         // seats are the board's corners). Sent only by room creators —
         // joiners inherit the room's size, so an absent/odd value or any
@@ -339,7 +348,11 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             );
             return;
           }
-          final watched = authority.spectateRoom(code, member!);
+          final watched = authority.spectateRoom(
+            code,
+            member!,
+            credential: credential,
+          );
           if (watched == null) {
             final owner = await _foreignOwnerOf(code);
             webSocket.sink.add(
@@ -369,6 +382,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
                   member!,
                   game: game,
                   capacity: players,
+                  credential: credential,
                 ) ??
                 await _createClaimedRoom(
                   member!,
@@ -410,10 +424,15 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             return;
           }
         } else {
-          var joined = authority.joinWithColor(code, member!, color);
+          var joined = authority.joinWithColor(
+            code,
+            member!,
+            color,
+            credential: credential,
+          );
           // Not a fresh join — maybe a returning player reclaiming
           // their seat (lobby or mid-game).
-          joined ??= authority.rejoinRoom(code, member!);
+          joined ??= authority.rejoinRoom(code, member!, credential: credential);
           if (joined == null) {
             final owner = await _foreignOwnerOf(code);
             webSocket.sink.add(
@@ -457,6 +476,12 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             'game': room.gameType,
             if (!spectate) 'color': member!.color.name,
             if (spectate) 'spectator': true,
+            // The seat's private reconnect credential, granted here and
+            // only here: never broadcast in rosters, never echoed back by
+            // any other message. Every later hello from this client
+            // presents it so a reclaim verifies the claimant, not merely
+            // the publicly-visible seat id (CWE-287).
+            'credential': room.seatCredentials[member!.seatId],
           }),
         );
         _lobby(room);

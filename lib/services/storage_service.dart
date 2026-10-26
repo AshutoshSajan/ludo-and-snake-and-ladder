@@ -13,6 +13,7 @@ class StorageService {
   static const _kAnimations = 'gc.animationsEnabled';
   static const _kOnlineId = 'gc.onlinePlayerId';
   static const _kOnlineName = 'gc.onlineName';
+  static const _kOnlineCredential = 'gc.onlineCredential';
   static const _kTutorialAsked = 'gc.tutorialAsked';
   static const _kTutorialDone = 'gc.tutorialDone';
 
@@ -94,6 +95,22 @@ class StorageService {
   Future<void> saveOnlineName(String name) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kOnlineName, name);
+  }
+
+  /// The game server's private reconnect credential for the stored player
+  /// id, as granted inside the `joined` response. Persisted beside the id
+  /// and name with the same lifetime — one device profile — because the
+  /// server refuses a seat rewrite without it and a restart mid-game must
+  /// still be able to present it (CWE-287). Never shown in the UI and
+  /// never part of any roster: it is a secret, not a display value.
+  Future<String> loadOnlineCredential() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString(_kOnlineCredential) ?? '';
+  }
+
+  Future<void> saveOnlineCredential(String credential) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kOnlineCredential, credential);
   }
 
   /// Whether the home screen already offered the guided walkthrough.
