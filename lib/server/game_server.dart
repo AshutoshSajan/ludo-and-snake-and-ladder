@@ -757,6 +757,45 @@ class GameAuthority {
     room.removed = true;
   }
 
+  /// Dissolves a room permanently: everyone out, every timer stopped, the
+  /// registry claim released, no seat left to reclaim.
+  ///
+  /// [leaveRoom] is a *disconnect* operation: a started game lingers for
+  /// [emptyRoomGrace] precisely so a dropped player can return, and a
+  /// rejoin repairs the seat one-for-one. That courtesy is exactly the
+  /// hole an administrative closure cannot offer (CWE-863 report): the
+  /// admin `rooms/close` action used to drive it connection by
+  /// connection, reported success — and a former participant's hello
+  /// carrying their own seatId re-seated them into the "closed" room,
+  /// restoring membership and cancelling the pending abandonment.
+  /// Administrative callers take this path instead; the natural room
+  /// lifecycle (walk-outs, link drops, the reconnection grace) keeps
+  /// [leaveRoom]'s semantics.
+  void closeRoomPermanently(String code) {
+    final room = rooms[code];
+    if (room == null) return;
+    rooms.remove(code);
+    room.removed = true;
+    // The table first hears it the ordinary way — the same message the
+    // reconnection grace ships when a game's last connection is gone for
+    // good — and then no part of the room can ever reach anyone again:
+    // the rosters are emptied so even a stale reference held by a socket
+    // in flight broadcasts nothing, the three timers (reconnection grace,
+    // autoplay driver, turn clock) are stopped, and the registry claim is
+    // released through the same [onRoomClosed] hook the natural close
+    // paths use.
+    room.broadcast({'type': 'roomClosed'});
+    room.members.clear();
+    room.spectators.clear();
+    room.abandonTimer?.cancel();
+    room.abandonTimer = null;
+    room.autoTimer?.cancel();
+    room.autoTimer = null;
+    room.turnTimer?.cancel();
+    room.turnTimer = null;
+    onRoomClosed?.call(room.code, room.registryToken);
+  }
+
   /// Removes the connection [connectionId] from a room's players or
   /// spectators. A room nobody is connected to at all is dropped right away
   /// if it never started; a started game lingers for [emptyRoomGrace] so a
