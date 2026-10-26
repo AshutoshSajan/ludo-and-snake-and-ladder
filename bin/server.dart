@@ -259,6 +259,29 @@ Future<void> advertiseRoom(Room room) async {
       .catchError((Object _) {});
 }
 
+/// The largest message a single connection may hand the protocol
+/// parser, in characters of a UTF-16-ish Dart string (a few bytes less
+/// than the wire frame). The biggest legitimate intent is a voice
+/// note's WebRTC signalling payload, itself capped at 64 KiB inside the
+/// intent handler; everything beyond this bound is parse cost and
+/// retained-metadata fuel somebody else pays for — refused with an
+/// error before the process does any work with it (per-connection
+/// message limit, the transport half of the CWE-400 fix).
+const maxIncomingMessageChars = 96 * 1024;
+
+/// Trims and clamps a hello-carried identity string — a display name or
+/// a seat id — to [max] characters. Both ride every roster broadcast to
+/// every tablemate, so a bound enforced BEFORE anything retains them
+/// keeps stored metadata from becoming megabyte re-serializations on
+/// every later message (CWE-400). Non-string JSON arrives as [fallback]:
+/// the hello path used to let a `"name": 12345` crash an uncaught cast
+/// in the socket listener, which a clean default now answers instead.
+String _clampIdentity(Object? value, Object fallback, int max) {
+  final c = value is String ? value : fallback.toString();
+  final v = c.trim();
+  return v.length <= max ? v : v.substring(0, max);
+}
+
 shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
   final connId = 'c${_connCounter++}';
   _openConnections.add(connId); // counted from the raw socket up
@@ -267,6 +290,15 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
 
   webSocket.stream.listen(
     (data) async {
+      // Per-connection inbound bound BEFORE any parse work: no single
+      // frame may cost the process serialization, CPU or memory beyond
+      // this line. Empty frames fall through to the bad-json answer.
+      if (data is String && data.length > maxIncomingMessageChars) {
+        webSocket.sink.add(
+          jsonEncode({'type': 'error', 'text': 'message too large'}),
+        );
+        return;
+      }
       Map<String, dynamic> msg;
       try {
         msg = jsonDecode(data as String) as Map<String, dynamic>;
@@ -283,8 +315,22 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           );
           return;
         }
-        final seatId = msg['seatId'] as String? ?? '';
-        final name = (msg['name'] as String? ?? 'Player').trim();
+        // Enemy input here is arbitrary JSON: both reads are typed and
+        // clamped BEFORE anything retains them. The roster ships these
+        // strings to every tablemate, so an oversized name or seat id
+        // meant two junk intents re-shipping megabyte rosters (CWE-400);
+        // a non-string JSON value is a clean default, not an uncaught
+        // cast in the socket listener.
+        final seatId = _clampIdentity(
+          msg['seatId'],
+          '',
+          ServerMember.maxSeatIdChars,
+        );
+        final name = _clampIdentity(
+          msg['name'],
+          'Player',
+          ServerMember.maxNameChars,
+        );
         if (seatId.isEmpty) {
           webSocket.sink.add(
             jsonEncode({'type': 'error', 'text': 'seatId required'}),
@@ -459,7 +505,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             if (spectate) 'spectator': true,
           }),
         );
-        _lobby(room);
+        room.broadcastLobbyIfChanged();
         // Who holds which corner, whether their link is live, whether the
         // table is playing for them, and who has left: the corner badges
         // and the "X left the game" notice both read this.
@@ -484,10 +530,14 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
         final room = authority.rooms[roomCode];
         if (room != null) {
           authority.handleIntent(room: room, connectionId: connId, msg: msg);
-          // Keep the roster fresh — in the lobby too, where a player who
-          // walks out must disappear from everyone's seat list and not
-          // only once a game happens to be running.
-          _lobby(room);
+          // Ship the roster only when it actually changed: the lobby lane
+          // must not turn every dead letter or rejected intent into a
+          // full re-serialization of stored metadata for the whole table
+          // (the intent half of the CWE-400 bound — see
+          // Room.broadcastLobbyIfChanged). A player who walks out in the
+          // lobby still leaves everyone's seat list the moment a real
+          // roster change ships it.
+          room.broadcastLobbyIfChanged();
         }
       }
     },
@@ -524,25 +574,6 @@ Future<String?> _foreignOwnerOf(String code) async {
   } on RoomRegistryException {
     return null;
   }
-}
-
-void _lobby(Room room) {
-  room.broadcast({
-    'type': 'lobby',
-    'code': room.code,
-    'started': room.started,
-    // Table size the room closes at: the lobby's "Waiting for players…
-    // (n/size)" line reads this. Fine to list next to the roster — a size
-    // never changes after creation, so unlike the seats it cannot disagree
-    // with itself between arrivals.
-    'capacity': room.capacity,
-    // The same entries the `seats` feed carries, so whichever of the two
-    // arrives last cannot wipe the seat ids and statuses the other one
-    // reported — two shapes for one roster is how badges start disappearing
-    // at random, depending on the order the broadcasts land in.
-    'seats': room.seatsJson()['seats'],
-    'spectators': [for (final m in room.spectators.values) m.name],
-  });
 }
 
 /// The documented JSON health check. Always served at GET /health; at GET /
