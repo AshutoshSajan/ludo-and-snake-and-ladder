@@ -51,6 +51,13 @@ jobs:
     outputs:
       full: ${{ steps.select.outputs.full }}
       legs: ${{ steps.select.outputs.legs }}
+      build-android: ${{ steps.select.outputs.build-android }}
+      build-linux: ${{ steps.select.outputs.build-linux }}
+      build-appimage: ${{ steps.select.outputs.build-appimage }}
+      build-windows: ${{ steps.select.outputs.build-windows }}
+      build-web: ${{ steps.select.outputs.build-web }}
+      build-extension: ${{ steps.select.outputs.build-extension }}
+      build-snap: ${{ steps.select.outputs.build-snap }}
     steps:
       - id: select
         env:
@@ -74,6 +81,13 @@ jobs:
                 exit 1
                 ;;
             esac
+          done
+          for token in $valid; do
+            case " $legs " in
+              *" $token "*) state=true ;;
+              *) state=false ;;
+            esac
+            echo "$token=$state" >> "$GITHUB_OUTPUT"
           done
           echo 'full=false' >> "$GITHUB_OUTPUT"
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
@@ -154,7 +168,7 @@ jobs:
     needs: [release-legs, resolve-version]
     if: >-
       needs.release-legs.outputs.full == 'true' ||
-      contains(concat(' ', needs.release-legs.outputs.legs, ' '), ' build-android ')
+      needs.release-legs.outputs.build-android == 'true'
     runs-on: ubuntu-24.04
     # The ANDROID_* secrets are promoted to job-level env rather than read in a
     # step `if:` — GitHub rejects `secrets` inside `if` outright ("Unrecognized
@@ -243,7 +257,7 @@ jobs:
     needs: [release-legs, resolve-version]
     if: >-
       needs.release-legs.outputs.full == 'true' ||
-      contains(concat(' ', needs.release-legs.outputs.legs, ' '), ' build-linux ')
+      needs.release-legs.outputs.build-linux == 'true'
     # Oldest supported runner: glibc 2.35 baseline runs on Ubuntu 22.04
     # through the latest releases (forward-compatible), plus Debian 12+,
     # Fedora 36+ and RHEL 9+. A 24.04 build would not install on 22.04.
@@ -311,7 +325,7 @@ jobs:
     needs: [release-legs, resolve-version]
     if: >-
       needs.release-legs.outputs.full == 'true' ||
-      contains(concat(' ', needs.release-legs.outputs.legs, ' '), ' build-appimage ')
+      needs.release-legs.outputs.build-appimage == 'true'
     # glibc floor: 24.04-built AppImages won't run on older distros.
     runs-on: ubuntu-22.04
     env:
@@ -388,7 +402,7 @@ jobs:
     needs: [release-legs, resolve-version]
     if: >-
       needs.release-legs.outputs.full == 'true' ||
-      contains(concat(' ', needs.release-legs.outputs.legs, ' '), ' build-windows ')
+      needs.release-legs.outputs.build-windows == 'true'
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
@@ -431,7 +445,7 @@ jobs:
     needs: [release-legs, resolve-version]
     if: >-
       needs.release-legs.outputs.full == 'true' ||
-      contains(concat(' ', needs.release-legs.outputs.legs, ' '), ' build-web ')
+      needs.release-legs.outputs.build-web == 'true'
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
@@ -459,7 +473,7 @@ jobs:
     needs: [release-legs, resolve-version]
     if: >-
       needs.release-legs.outputs.full == 'true' ||
-      contains(concat(' ', needs.release-legs.outputs.legs, ' '), ' build-extension ')
+      needs.release-legs.outputs.build-extension == 'true'
     # The add-ons as installable files, so the GitHub Release is complete
     # without touching AMO or the Web Store. The store route (publish-firefox
     # in ci.yml) still owns listing updates; this is the downloadable copy a
@@ -495,7 +509,7 @@ jobs:
     needs: [release-legs, resolve-version]
     if: >-
       needs.release-legs.outputs.full == 'true' ||
-      contains(concat(' ', needs.release-legs.outputs.legs, ' '), ' build-snap ')
+      needs.release-legs.outputs.build-snap == 'true'
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
