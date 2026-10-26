@@ -186,11 +186,16 @@ jobs:
           sparse-checkout: \'\'
       # LUDO plays sounds through audioplayers, so the runner needs the same
       # GStreamer headers a laptop build needs — not just the GTK set.
-      - run: >
-          sudo apt-get update -qq &&
-          sudo apt-get install -y -qq clang cmake ninja-build pkg-config
-          libgtk-3-dev liblzma-dev
-          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      # -qq hid "held broken packages" detail from the runner image (which has
+      # newer clang/cmake/ninja preinstalled); verbose output keeps runner-image
+      # drift in the logs instead of guesses. The image preinstalls those tools,
+      # so only the missing dev headers actually install.
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -236,11 +241,16 @@ jobs:
           sparse-checkout: \'\'
       # LUDO plays sounds through audioplayers, so the runner needs the same
       # GStreamer headers a laptop build needs — not just the GTK set.
-      - run: >
-          sudo apt-get update -qq &&
-          sudo apt-get install -y -qq clang cmake ninja-build pkg-config
-          libgtk-3-dev liblzma-dev
-          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      # -qq hid "held broken packages" detail from the runner image (which has
+      # newer clang/cmake/ninja preinstalled); verbose output keeps runner-image
+      # drift in the logs instead of guesses. The image preinstalls those tools,
+      # so only the missing dev headers actually install.
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -371,7 +381,7 @@ jobs:
       - run: flutter build web --release
       - run: |
           mkdir -p dist
-          ./tools/build_extension.sh --chrome
+          ./tools/build_extension.sh --chrome --zip
           ./tools/build_extension.sh --firefox --zip
           cp build/game-club-chrome.zip dist/game-club-$VERSION-chrome.zip
           cp build/game-club-firefox.xpi dist/game-club-$VERSION-firefox-unsigned.xpi
