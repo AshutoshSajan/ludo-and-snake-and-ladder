@@ -84,12 +84,18 @@ void main() {
     });
 
     test('the desktop artifacts use the real executable names', () {
-      // Also LUDO-specific: linuxdeploy is handed an explicit -e path, and
-      // the Inno script has its own Source line. Both must name the binary
-      // CMake actually produces (`game_club`, not `game-club`), or the
-      // packaging succeeds while wrapping nothing. Checked here because a
-      // runner is the only other place it would fail.
-      expect(release, contains('-e build/linux/x64/release/bundle/game_club'));
+      // Also LUDO-specific: linuxdeploy is handed an explicit -e path that
+      // must match the desktop file's Exec name (`game-club`), so the release
+      // workflow stages the real CMake binary (`game_club`) under that name
+      // first — both lines have to be present, or packaging succeeds while
+      // wrapping nothing. The Inno script has its own Source line and must
+      // name `game_club.exe` directly. Checked here because a runner is the
+      // only other place it would fail.
+      expect(release, contains('cp build/linux/x64/release/bundle/game_club'));
+      expect(
+        release,
+        contains('-e build/linux/x64/release/bundle/game-club'),
+      );
       final iss = File('packaging/inno/game-club.iss').readAsStringSync();
       expect(iss, contains(r'build\windows\x64\runner\Release\*'));
       expect(iss, contains('game_club.exe'));
