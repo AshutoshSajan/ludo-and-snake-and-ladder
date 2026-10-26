@@ -1932,17 +1932,20 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
       );
     case 'rooms/close':
       final code = (body['code'] as String? ?? '').trim().toUpperCase();
-      final room = authority.rooms[code];
-      if (room == null) {
+      if (authority.rooms[code] == null) {
         return shelf.Response(
           404,
           body: jsonEncode({'ok': false, 'text': "room '$code' not found"}),
           headers: {'content-type': 'application/json'},
         );
       }
-      for (final connId in room.members.keys.toList()) {
-        authority.leaveRoom(code, connId);
-      }
+      // Permanent closure, not a connection-by-connection disconnect:
+      // leaveRoom deliberately keeps a started game alive for reconnecting
+      // players, which would let a former participant reclaim their seat
+      // right after the action reports success (CWE-863 bypass). The
+      // table is dissolved in one step and the sockets receive the
+      // roomClosed notice from it.
+      authority.closeRoomPermanently(code);
       await adminStore.recordRoomClosed(code, playerCount: 0);
       return shelf.Response.ok(
         jsonEncode({'ok': true}),
