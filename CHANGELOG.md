@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
-## Unreleased
+## [v1.3.0] - 2026-10-26
 ### Added
 - Feat(release): dispatch with legs= to re-test only failed builds
 - Feat(ui): redesign the club around a green-room identity
