@@ -37,6 +37,8 @@ apps:
     extensions: [gnome]
     plugs:
       - network
+      # audioplayers emits through pulseaudio at runtime.
+      - audio-playback
     slots:
       - dbus-gameclub
 
@@ -45,3 +47,17 @@ parts:
     source: .
     plugin: flutter
     flutter-target: lib/main.dart
+    # audioplayers_linux configures with pkg_check_modules(gstreamer-1.0):
+    # the snapcraft core22 container needs the gstreamer dev headers at
+    # build time (the deb/AppImage legs install them on the host via apt)
+    # and the gstreamer runtime libs at play time.
+    build-packages:
+      - libgstreamer1.0-dev
+      - libgstreamer-plugins-base1.0-dev
+      - pkg-config
+    stage-packages:
+      - libgstreamer1.0-0
+      - libpulse0
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-pulseaudio
