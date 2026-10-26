@@ -120,6 +120,36 @@ void main() {
       fake.dispose();
     });
 
+    test('device credentials survive a redeploy', () async {
+      final fake = FakeTursoPipeline();
+      var store = _store(fake);
+
+      // The first state call's bind, then the store is torn down with
+      // the ephemeral host that created it.
+      expect(await store.bindCredential('p1', 'hash-of-device-secret'), isTrue);
+      store.close();
+
+      // A new process, a new store, the same database: the credential
+      // still derives the same seat — a returning device is still
+      // themselves, and nobody else's token can claim their id.
+      store = _store(fake);
+      expect(
+        await store.seatForCredential('hash-of-device-secret'),
+        'p1',
+        reason: 'the credential binding outlives the store instance',
+      );
+      expect(
+        await store.bindCredential('pOther', 'hash-of-device-secret'),
+        isFalse,
+        reason: 'the UNIQUE rule survives the rebuild too',
+      );
+      await store.clearCredential('p1');
+      expect(await store.seatForCredential('hash-of-device-secret'), isNull);
+
+      store.close();
+      fake.dispose();
+    });
+
     test('the whole schema is idempotent across restarts', () async {
       final fake = FakeTursoPipeline();
       var store = _store(fake);
@@ -145,6 +175,7 @@ void main() {
           'friend_messages',
           'friend_invites',
           'friend_blocks',
+          'friend_credentials',
         ]),
       );
       final indexes = fake.db

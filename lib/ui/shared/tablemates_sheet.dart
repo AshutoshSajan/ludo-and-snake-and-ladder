@@ -122,6 +122,7 @@ class TablematesSheet extends StatelessWidget {
                 serverUrl: client.serverUrl,
                 mySeatId: mine,
                 myName: client.name,
+                myCredential: client.credential,
                 peerSeatId: s.seatId,
                 peerName: s.name,
                 friendClientForTest: friendClientForTest,

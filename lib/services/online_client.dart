@@ -375,6 +375,7 @@ class OnlineClient extends ChangeNotifier {
     this.serverUrl, {
     required this.seatId,
     required this.name,
+    this.credential = '',
     this.gameType = 'ludo',
     this.quickMatch = false,
     this.capacity = 4,
@@ -386,6 +387,14 @@ class OnlineClient extends ChangeNotifier {
   final String serverUrl;
   final String seatId; // profile id — our identity across reconnects
   final String name;
+
+  /// The friends credential paired with [seatId] — the device's private
+  /// identity half. The friends server binds it to the seat id, so the
+  /// friends calls this client's screens make carry it as `Authorization:
+  /// Bearer`; the seat id alone stays the public roster value and proves
+  /// nothing. Empty in the older constructions and most tests, which
+  /// never touch the friends HTTP plane.
+  final String credential;
 
   /// Which game to play when creating a room ('ludo' | 'snakes'). Joiners
   /// have their value overwritten by the room's real game type on 'joined'.

@@ -81,12 +81,22 @@ class FriendsScreen extends StatefulWidget {
 }
 
 class _FriendsScreenState extends State<FriendsScreen> {
+  /// The friends HTTP client. Built once the device credential loaded —
+  /// every call presents it as `Authorization: Bearer` — so [_restore]
+  /// assigns it and [_clientReady] marks the late field usable: dispose
+  /// can run before the storage read finishes, and late-final reads throw
+  /// rather than null-check.
   late final FriendClient _client;
+  bool _clientReady = false;
 
   /// The stable online identity — the same id the online lobby plays
   /// with — so a friend code granted anywhere grants the same person.
   String _seatId = '';
   String _myName = '';
+
+  /// The credential for those calls that need it inline (the actions
+  /// sheet and the table-invite lobby client).
+  String _credential = '';
 
   FriendState? _state;
 
@@ -100,28 +110,35 @@ class _FriendsScreenState extends State<FriendsScreen> {
   @override
   void initState() {
     super.initState();
-    _client = widget.client ?? FriendClient(serverUrl: defaultServerUrl());
     _restore();
   }
 
   @override
   void dispose() {
     _poller?.cancel();
-    _client.close();
+    if (_clientReady) _client.close();
     super.dispose();
   }
 
   Future<void> _restore() async {
     final storage = StorageService();
     final id = await storage.loadOnlinePlayerId();
+    final credential = await storage.loadOnlineCredential();
     final name = await storage.loadOnlineName();
     // A first-time player gets the lobby's stable derived name, so the
     // friends tray and the connect form can never disagree about identity.
     final resolved = name.isNotEmpty ? name : DefaultNames.unique(playerId: id);
     if (!mounted) return;
+    // The client exists only once the credential does: friends calls
+    // present it and the server refuses bearer-less requests outright.
+    _client =
+        widget.client ??
+        FriendClient(serverUrl: defaultServerUrl(), credential: credential);
+    _clientReady = true;
     setState(() {
       _seatId = id;
       _myName = resolved;
+      _credential = credential;
       _state = null;
     });
     if (name.isEmpty) {
@@ -378,6 +395,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
       OnlineLobbyScreen.defaultServerUrl(),
       seatId: _seatId,
       name: _myName.isEmpty ? _state?.me.name ?? 'Player' : _myName,
+      credential: _credential,
       gameType: game,
       capacity: 4,
     );
@@ -737,6 +755,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
       serverUrl: _client.serverUrl,
       mySeatId: _seatId,
       myName: _myName,
+      myCredential: _credential,
       peerSeatId: t.seatId,
       peerName: t.name,
       // The test-injected client drives the sheet's own tray fetch too;

@@ -23,6 +23,7 @@ class PlayerActionsSheet extends StatefulWidget {
     required this.serverUrl,
     required this.mySeatId,
     required this.myName,
+    required this.myCredential,
     required this.peerSeatId,
     required this.peerName,
     this.friendClientForTest,
@@ -33,6 +34,12 @@ class PlayerActionsSheet extends StatefulWidget {
   final String serverUrl;
   final String mySeatId;
   final String myName;
+
+  /// The device credential paired with [mySeatId] — the private identity
+  /// half the friends server binds to the seat id. The sheet's own client
+  /// presents it on every call; a seat id alone proves nothing.
+  final String myCredential;
+
   final String peerSeatId;
 
   /// The preview display name, from the roster row or the chat byline.
@@ -52,6 +59,7 @@ class PlayerActionsSheet extends StatefulWidget {
     required String serverUrl,
     required String mySeatId,
     required String myName,
+    required String myCredential,
     required String peerSeatId,
     required String peerName,
     FriendClient? friendClientForTest,
@@ -66,6 +74,7 @@ class PlayerActionsSheet extends StatefulWidget {
         serverUrl: serverUrl,
         mySeatId: mySeatId,
         myName: myName,
+        myCredential: myCredential,
         peerSeatId: peerSeatId,
         peerName: peerName,
         friendClientForTest: friendClientForTest,
@@ -102,7 +111,8 @@ class _PlayerActionsSheetState extends State<PlayerActionsSheet> {
   bool _working = false;
 
   FriendClient get _c => _client ??=
-      widget.friendClientForTest ?? FriendClient(serverUrl: widget.serverUrl);
+      widget.friendClientForTest ??
+      FriendClient(serverUrl: widget.serverUrl, credential: widget.myCredential);
 
   @override
   void initState() {

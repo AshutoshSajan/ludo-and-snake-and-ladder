@@ -13,6 +13,7 @@ import 'package:shelf/shelf.dart' as shelf;
 import 'package:sqlite3/sqlite3.dart' show sqlite3;
 
 import 'package:game_club/server/admin_store.dart';
+import 'package:game_club/server/auth.dart' show hashToken;
 import 'package:game_club/server/friend_store.dart';
 import 'package:game_club/server/report_store.dart';
 
@@ -40,17 +41,43 @@ import '../bin/server.dart'
         resetFeedbackAttempts,
         resetFriendAttempts;
 
-shelf.Request _get(String path, {Map<String, String>? query}) => shelf.Request(
-  'GET',
-  Uri.parse('http://localhost/$path').replace(queryParameters: query),
-);
+/// Deterministic per-seat device credentials for the run. `_serve` mints
+/// one per seat (stable within a test) and every friends request that
+/// names a seat presents its token as `Authorization: Bearer` — the same
+/// wire shape `_headers()` in the client builds. Cleared per test in
+/// [main]'s setUp, so a leftover credential cannot leak an identity.
+final Map<String, String> _tokens = {};
 
-shelf.Request _post(String path, Map<String, dynamic> body) => shelf.Request(
-  'POST',
-  Uri.parse('http://localhost/$path'),
-  headers: {'content-type': 'application/json'},
-  body: Stream.fromIterable([utf8.encode(jsonEncode(body))]),
-);
+shelf.Request _get(String path, {Map<String, String>? query, String? token}) {
+  final q = query ?? const <String, String>{};
+  final credential = token ?? _tokens[q['seatId']];
+  return shelf.Request(
+    'GET',
+    Uri.parse('http://localhost/$path').replace(queryParameters: q),
+    headers: {
+      if (credential != null && credential.isNotEmpty)
+        'authorization': 'Bearer $credential',
+    },
+  );
+}
+
+shelf.Request _post(
+  String path,
+  Map<String, dynamic> body, {
+  String? token,
+}) {
+  final credential = token ?? _tokens[body['seatId'] as String?];
+  return shelf.Request(
+    'POST',
+    Uri.parse('http://localhost/$path'),
+    headers: {
+      'content-type': 'application/json',
+      if (credential != null && credential.isNotEmpty)
+        'authorization': 'Bearer $credential',
+    },
+    body: Stream.fromIterable([utf8.encode(jsonEncode(body))]),
+  );
+}
 
 Future<Map<String, dynamic>> _json(shelf.Response r) async =>
     jsonDecode(await r.readAsString()) as Map<String, dynamic>;
@@ -83,15 +110,19 @@ Future<shelf.Response> _call(String path, shelf.Request req) => switch (path) {
   _ => throw StateError('no handler wired for $path'),
 };
 
-/// Registers (or re-serves) a profile via the state endpoint, which is
-/// not throttled by design.
-Future<Map<String, dynamic>> _serve(String seatId, [String? name]) async =>
-    _json(
-      await _call(
-        'friends/state',
-        _post('friends/state', {'seatId': seatId, 'name': name ?? seatId}),
-      ),
-    );
+/// Registers (or re-serves) a profile via the state endpoint — the bind
+/// point. The first call mints the seat's deterministic test credential
+/// and presents it, mirroring what the device client does on its first
+/// friends call after an update.
+Future<Map<String, dynamic>> _serve(String seatId, [String? name]) async {
+  _tokens[seatId] ??= '$seatId/device-credential';
+  return _json(
+    await _call(
+      'friends/state',
+      _post('friends/state', {'seatId': seatId, 'name': name ?? seatId}),
+    ),
+  );
+}
 
 Future<shelf.Response> _state(String seatId) => _call(
   'friends/state',
@@ -120,6 +151,7 @@ void main() {
     adminToken = 'secret';
     resetFriendAttempts();
     resetFeedbackAttempts();
+    _tokens.clear();
     addTearDown(() {
       friendStore.close();
       friendStore = savedFriend;
@@ -151,7 +183,20 @@ void main() {
 
   group('state bundle', () {
     test('serves the profile and empty trays', () async {
-      final r = await _state('p1');
+      // The first state call is the registration: it presents a fresh
+      // device credential and binds it (like the updated client does).
+      final credential = _tokens.putIfAbsent(
+        'p1',
+        () => 'p1/device-credential',
+      );
+      final r = await _call(
+        'friends/state',
+        _post(
+          'friends/state',
+          {'seatId': 'p1', 'name': 'p1'},
+          token: credential,
+        ),
+      );
       expect(r.statusCode, 200);
       final body = await _json(r);
       expect(body['ok'], isTrue);
@@ -279,6 +324,9 @@ void main() {
     });
 
     test('unknown target maps to a readable 400', () async {
+      // The sender is a registered, credential-bound player; the UNKNOWN
+      // half is the target — the store refuses with its own wording.
+      await _serve('p1');
       final r = await _call(
         'friends/request',
         _post('friends/request', {
@@ -339,7 +387,9 @@ void main() {
 
   group('DMs over HTTP', () {
     test('send → read → like, and non-friends are refused', () async {
-      // Not friends: the send is refused with the store's wording.
+      // The sender exists (credential-bound) but is NOT friends: the
+      // send is refused with the store's wording, not an auth wall.
+      await _serve('p1');
       final refused = await _call(
         'friends/chat/send',
         _post('friends/chat/send', {'seatId': 'p1', 'to': 'p2', 'body': 'hi'}),
@@ -619,6 +669,220 @@ void main() {
         ((await _json(r))['text'] as String),
         contains('too many friend actions'),
       );
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // The credential gate: the seat id is public and carries NO authority.
+  // Every acting endpoint derives its identity from the Authorization
+  // bearer token's stored binding, so a caller can no longer select
+  // another player's seat id to read their thread or act as them.
+  group('credential gate (CWE-287 fix)', () {
+    /// The seat a token is bound to, via the store's own lookup — the
+    /// same call the handlers run under the hood.
+    Future<String?> boundTo(String token) =>
+        friendStore.seatForCredential(hashToken(token));
+
+    test('every acting endpoint refuses a tokenless request', () async {
+      await _serve('p1'); // attacker has nothing to present for THEMSELVES
+      final checks = <(String, shelf.Request)>[
+        (
+          'friends/state',
+          _post('friends/state', {
+            'seatId': 'p1',
+            'name': 'p1',
+          }, token: ''),
+        ),
+        (
+          'friends/chat',
+          _get('friends/chat', query: {'seatId': 'p1', 'peer': 'p2'},
+              token: ''),
+        ),
+        (
+          'friends/chat/send',
+          _post('friends/chat/send', {
+            'seatId': 'p1',
+            'to': 'p2',
+            'body': 'hi',
+          }, token: ''),
+        ),
+        (
+          'friends/chat/like',
+          _post('friends/chat/like', {
+            'seatId': 'p1',
+            'messageId': 1,
+          }, token: ''),
+        ),
+        (
+          'friends/request',
+          _post('friends/request', {
+            'seatId': 'p1',
+            'name': 'p1',
+            'target': 'p2',
+          }, token: ''),
+        ),
+        (
+          'friends/respond',
+          _post('friends/respond', {'seatId': 'p1', 'id': 1}, token: ''),
+        ),
+        (
+          'friends/remove',
+          _post('friends/remove', {
+            'seatId': 'p1',
+            'target': 'p2',
+          }, token: ''),
+        ),
+        (
+          'friends/block',
+          _post('friends/block', {
+            'seatId': 'p1',
+            'target': 'p2',
+          }, token: ''),
+        ),
+        (
+          'friends/unblock',
+          _post('friends/unblock', {
+            'seatId': 'p1',
+            'target': 'p2',
+          }, token: ''),
+        ),
+        (
+          'friends/invite',
+          _post('friends/invite', {
+            'seatId': 'p1',
+            'name': 'p1',
+            'to': 'p2',
+            'game': 'ludo',
+          }, token: ''),
+        ),
+        (
+          'friends/invite/respond',
+          _post('friends/invite/respond', {
+            'seatId': 'p1',
+            'id': 1,
+            'accept': true,
+          }, token: ''),
+        ),
+        (
+          'friends/report',
+          _post('friends/report', {
+            'seatId': 'p1',
+            'target': 'p2',
+            'reason': 'abusive',
+          }, token: ''),
+        ),
+      ];
+      for (final (path, req) in checks) {
+        final r = await _call(path, req);
+        expect(r.statusCode, 401, reason: '$path answered a bearer-less call');
+        expect(
+          (await _json(r))['text'],
+          contains('update Game Club'),
+          reason: '$path must word the fix, not just the refusal',
+        );
+      }
+    });
+
+    test('an unbound token is refused until its state sign-in', () async {
+      final r = await _call(
+        'friends/chat',
+        _get('friends/chat', query: {'seatId': 'p1', 'peer': 'p2'},
+            token: 'never-registered-token'),
+      );
+      expect(r.statusCode, 401);
+      expect((await _json(r))['text'], contains('Friends sign-in'));
+    });
+
+    test('a seat id claimed with a foreign credential cannot act', () async {
+      // Victim owns pVictim; the attacker registered their OWN seat.
+      await _serve('pVictim');
+      await _serve('attacker');
+      final took = await boundTo('pVictim/device-credential');
+      expect(took, 'pVictim');
+
+      // Reading the victim's thread with the attacker's token: refused.
+      final read = await _call(
+        'friends/chat',
+        _get('friends/chat', query: {'seatId': 'pVictim', 'peer': 'pub1'},
+            token: 'attacker/device-credential'),
+      );
+      expect(read.statusCode, 401);
+      expect(
+        (await _json(read))['text'],
+        contains('belongs to another device'),
+      );
+
+      // Writing as the victim — a DM the victim would own — is refused
+      // BEFORE the store touches anything.
+      final sent = await _call(
+        'friends/chat/send',
+        _post('friends/chat/send', {
+          'seatId': 'pVictim',
+          'to': 'pub1',
+          'body': 'sent from nowhere',
+        }, token: 'attacker/device-credential'),
+      );
+      expect(sent.statusCode, 401);
+      final victimState = await _json(await _state('pVictim'));
+      expect(victimState['outgoing'], isEmpty);
+      final attackerState = await _json(await _state('attacker'));
+      expect((attackerState['outgoing'] as List), isEmpty);
+    });
+
+    test(
+        'state re-registration with a different token is rejected (first '
+        'binder wins)', () async {
+      await _serve('p1');
+      final stolen = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'p1', 'name': 'p1'},
+            token: 'other-device-token'),
+      );
+      expect(stolen.statusCode, 401);
+      expect((await _json(stolen))['text'], contains('another device'));
+      // The original binding still answers its own device.
+      final same = await _json(await _state('p1'));
+      expect(same['ok'], isTrue);
+    });
+
+    test('friends/lookup stays public (it needs no acting seat)', () async {
+      final detail = await _serve('pCodeOwner', 'Code Owner');
+      final r = await _call(
+        'friends/lookup',
+        _post('friends/lookup', {'target': detail['me']['code']}),
+      );
+      expect(r.statusCode, 200);
+      expect(((await _json(r))['profile'] as Map)['seatId'], 'pCodeOwner');
+      // And a miss is a 404, not an auth wall, exactly as before.
+      final miss = await _call(
+        'friends/lookup',
+        _post('friends/lookup', {'target': 'ZZZZZZ'}),
+      );
+      expect(miss.statusCode, 404);
+    });
+
+    test('a banned seat never binds or regains access', () async {
+      await adminStore.ban(seatId: 'p1', reason: 'test ban', by: 'tester');
+      final r = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'p1', 'name': 'p1'},
+            token: 'p1/device-credential'),
+      );
+      expect(r.statusCode, 403);
+      expect(await boundTo('p1/device-credential'), isNull);
+    });
+
+    test(
+        'the credential presents on every endpoint except the public '
+        'lookup', () async {
+      await _serve('p1');
+      await _serve('p2', 'Second');
+      // A credentialed, correct-seat request rides through on state.
+      final ok = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'p1', 'name': 'p1'}),
+      );
+      expect(ok.statusCode, 200);
     });
   });
 }
