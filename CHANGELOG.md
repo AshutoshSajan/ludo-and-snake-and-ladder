@@ -7,6 +7,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(release): dispatch with legs= to re-test only failed builds
 - Feat(ui): redesign the club around a green-room identity
 - Feat(lobby): chime when a player takes an online seat
 - Feat(snakes): show seat strikes, warn the clock, and slim the home rail
@@ -52,6 +53,12 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(release): RPM relation and AppImage Exec-name staging
+- Fix(release): emit per-leg booleans for the legs filter
+- Fix(release): legs filter without split() — concat-padded contains
+- Fix(release): repair the escaped sparse-checkout values on the Linux legs
+- Fix(release): unblock Ubuntu 22.04 legs and fail fast on missing keystore
+- Fix(release): converge the first real pipeline run
 - Fix(release): drop the F-Droid Changelog link that CI wraps
 - Fix(ui): restore gold-and-green theme and repair admin screens
 - Fix(ci): always regenerate the changelog on release prep
@@ -133,6 +140,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 ### Performance
 - Perf(board): smooth mobile web play and reachable pawn taps
 ### Testing
+- Test(release): pin the AppImage staging to the renamed Exec path
 - Test(ludo): pin the manual-tap race against the forced move
 ## [v1.2.1] - 2026-10-02
 ### Fixed
