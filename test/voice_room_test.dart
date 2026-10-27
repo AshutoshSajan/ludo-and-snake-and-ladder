@@ -188,6 +188,39 @@ void main() {
   });
 
   test(
+    'removeSeat revokes exactly the named seat, silently',
+    () async {
+      room.updateSeats({'a', 'b', 'c'}, 'a');
+      await room.enable();
+      final peerB = backend.livePeers
+          .singleWhere((p) => p.peerId == 'b')
+        ..simulateSpeaking(true);
+      expect(room.speaking, {'b'});
+
+      wire.clear();
+      room.removeSeat('b');
+      expect(peerB.closed, isTrue, reason: 'the departed seat loses its peer');
+      expect(
+        wire,
+        isEmpty,
+        reason: 'the departure ended its socket; nobody to say goodbye to',
+      );
+      expect(room.peers, {'c'}, reason: 'the surviving seats stay mounted');
+      expect(
+        room.speaking,
+        isEmpty,
+        reason: 'the departed seat leaves the speaking chips with its peer',
+      );
+
+      // Revoking an unknown or already-closed seat is inert — no crash,
+      // no change notification churn.
+      expect(room.peers, {'c'});
+      room.removeSeat('nobody');
+      expect(room.peers, {'c'});
+    },
+  );
+
+  test(
     'every peer mounts its audio under its own seat and frees it there',
     () async {
       // The old code attached every remote stream under one shared 'pc'

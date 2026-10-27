@@ -969,9 +969,11 @@ class OnlineClient extends ChangeNotifier {
         // Where the voice mesh follows the roster — but only for a join in
         // progress: pre-arming peers without a mic grants nothing and would
         // burn an RTCPeerConnection per seat for players who never speak.
+        // The set is eligibility-filtered: seats marked left lost their
+        // membership and must not regain a listening peer here (CWE-863).
         final v = _voice;
         if (v != null && v.enabled) {
-          v.updateSeats(lobbySeats.map((s) => s.seatId).toSet(), seatId);
+          v.updateSeats(voiceEligibleSeats, seatId);
         }
       case 'voice':
         // Signalling for a session I joined; a client that never enabled
@@ -1009,6 +1011,16 @@ class OnlineClient extends ChangeNotifier {
               if ((s as Map)['misses'] is num)
                 (s['seatId'] as String): (s['misses'] as num).toInt(),
           });
+        // The voice mesh follows this feed too. `seats` ships on every
+        // seat change and carries the `left` marks the roster keeps
+        // until the room ends, so this — not the sparser lobby
+        // broadcast — is normally the first reconciliation to keep a
+        // departed seat's peer from hanging on to the table's audio
+        // (CWE-863). Eligibility-filtered, like everywhere else.
+        final v = _voice;
+        if (v != null && v.enabled) {
+          v.updateSeats(voiceEligibleSeats, seatId);
+        }
         onSeats?.call();
       case 'left':
         // Worth a line of its own: without it a departing player's pieces
@@ -1033,6 +1045,14 @@ class OnlineClient extends ChangeNotifier {
                   ? 'You were removed — five turns missed'
                   : '$gone was removed — five turns missed')
             : (mine ? 'You left the game' : '$gone left the game');
+        // Membership ended authoritatively, so the departed seat's
+        // listening access ends here — its live mesh peer is closed at
+        // once instead of waiting for the next roster feed to notice
+        // (CWE-863). No hangup goes out: the walk-out already ended that
+        // player's socket, so there is nobody left to deliver it to.
+        // Older frames can omit the seat id entirely; the next roster
+        // feed reconciles those.
+        _voice?.removeSeat(goneSeat);
         onLeft?.call(leftNotice!);
       case 'turnMissed':
         // Deliberately silent: the strike dots on the missed seat's corner
@@ -1223,16 +1243,27 @@ class OnlineClient extends ChangeNotifier {
     onChanged: notifyListeners,
   );
 
+  /// Seat ids the voice mesh may sit on: every roster line that carries a
+  /// seat id and has not walked out.
+  ///
+  /// Historical `left` entries persist in both feeds until the room ends,
+  /// so any reconciliation that feeds ids straight from [lobbySeats]
+  /// authorizes listening access for people no longer at the table
+  /// (CWE-863). This is the one place the eligibility line is drawn, and
+  /// every reconcile site goes through it.
+  Set<String> get voiceEligibleSeats => {
+    for (final s in lobbySeats)
+      if (s.seatId.isNotEmpty && s.status != SeatStatus.left) s.seatId,
+  };
+
   /// Joins the table voice. False when the mic was refused — the caller
   /// surfaces that rather than flipping the button into a silent state.
   Future<bool> joinVoice() async {
     if (_spectating) return false;
     // The seat roster must be known before offers are elected; feeding it
-    // here ensures a join during a lagging lobby feed still meshes.
-    voice.updateSeats(
-      lobbySeats.map((s) => s.seatId).where((id) => id.isNotEmpty).toSet(),
-      seatId,
-    );
+    // here ensures a join during a lagging lobby feed still meshes — and
+    // only for seats the roster currently authorizes (CWE-863).
+    voice.updateSeats(voiceEligibleSeats, seatId);
     return voice.enable();
   }
 

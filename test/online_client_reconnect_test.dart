@@ -560,6 +560,168 @@ void main() {
         expect(now, voiceCount);
       });
     });
+
+    test(
+      "an authoritative left closes the departed seat's peer at once, and "
+      'says nothing on the wire',
+      () {
+        fakeAsync((async) {
+          final factory = FakeChannelFactory();
+          final backend = FakeBackend();
+          final client = OnlineClient('ws://test/ws',
+              seatId: 'p1',
+              name: 'A',
+              voiceBackend: backend,
+              channelFactory: factory.create);
+          client.connect();
+          async.flushMicrotasks();
+          factory.last.serverAdd({
+            'type': 'joined', 'code': 'CODE', 'color': 'red',
+          });
+          factory.last.serverAdd({
+            'type': 'lobby',
+            'code': 'CODE',
+            'started': false,
+            'seats': [
+              {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+              {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+              {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+            ],
+            'spectators': [],
+          });
+          async.flushMicrotasks();
+          client.joinVoice();
+          async.flushMicrotasks();
+          expect(client.voicePeers, containsAll(['p2', 'p3']));
+
+          // B walks out. Membership ends authoritatively, so the peer
+          // closes here rather than waiting for the next roster feed —
+          // and no goodbye goes out, since B's socket is already gone.
+          factory.last.serverAdd({
+            'type': 'left',
+            'name': 'B',
+            'seatId': 'p2',
+            'reason': 'walked',
+          });
+          async.flushMicrotasks();
+
+          expect(client.voicePeers, ['p3'],
+              reason: 'the departed seat loses the mic, survivors stay up');
+          expect(
+            factory.last.sent
+                .whereType<Map>()
+                .where((m) => m['type'] == 'voice' && m['k'] == 'hangup'),
+            isEmpty,
+            reason: "the walk-out ended B's socket; a hangup has no "
+                "recipient left",
+          );
+          expect(client.voiceJoined, isTrue,
+              reason: 'my session keeps running for the remaining seats');
+        });
+      },
+    );
+
+    test(
+      'the seats feed prunes a left-marked seat, and no feed re-mounts it',
+      () {
+        fakeAsync((async) {
+          final factory = FakeChannelFactory();
+          final backend = FakeBackend();
+          final client = OnlineClient('ws://test/ws',
+              seatId: 'p1',
+              name: 'A',
+              voiceBackend: backend,
+              channelFactory: factory.create);
+          client.connect();
+          async.flushMicrotasks();
+          factory.last.serverAdd({
+            'type': 'joined', 'code': 'CODE', 'color': 'red',
+          });
+          factory.last.serverAdd({
+            'type': 'lobby',
+            'code': 'CODE',
+            'started': false,
+            'seats': [
+              {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+              {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+              {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+            ],
+            'spectators': [],
+          });
+          async.flushMicrotasks();
+          client.joinVoice();
+          async.flushMicrotasks();
+          expect(client.voicePeers, containsAll(['p2', 'p3']));
+
+          // B's forever line rides the seat feed; the reconcile keyed on
+          // exactly this feed must close that peer.
+          final afterBLeft = [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2', 'left': true},
+            {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+          ];
+          factory.last.serverAdd({'type': 'seats', 'seats': afterBLeft});
+          async.flushMicrotasks();
+          expect(client.voicePeers, ['p3'],
+              reason: 'the historical entry loses the peer, C stays mounted');
+
+          // The line keeps riding both feeds until the room ends; neither
+          // one may re-authorize a listening peer for it.
+          factory.last.serverAdd({'type': 'seats', 'seats': afterBLeft});
+          factory.last.serverAdd({
+            'type': 'lobby',
+            'code': 'CODE',
+            'started': true,
+            'seats': afterBLeft,
+            'spectators': [],
+          });
+          async.flushMicrotasks();
+          expect(client.voicePeers, ['p3'],
+              reason: 'a left entry is not an eligible seat on any feed');
+        });
+      },
+    );
+
+    test('joining voice finds no peer behind a left-marked seat', () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final backend = FakeBackend();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1',
+            name: 'A',
+            voiceBackend: backend,
+            channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+        factory.last.serverAdd({
+          'type': 'joined', 'code': 'CODE', 'color': 'red',
+        });
+        factory.last.serverAdd({
+          'type': 'lobby',
+          'code': 'CODE',
+          'started': false,
+          'seats': [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2', 'left': true},
+            {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+          ],
+          'spectators': [],
+        });
+        async.flushMicrotasks();
+        client.joinVoice();
+        async.flushMicrotasks();
+
+        expect(client.voiceJoined, isTrue);
+        expect(client.voicePeers, ['p3'],
+            reason: 'only the seats still at the table mount');
+        final offers = factory.last.sent
+            .whereType<Map>()
+            .where((m) => m['type'] == 'voice' && m['k'] == 'offer')
+            .map((m) => m['to']);
+        expect(offers, {'p3'},
+            reason: 'the departed seat is offered nothing to listen to');
+      });
+    });
   });
 
   group('the walk-out of my own seat (turn-timer eviction)', () {
