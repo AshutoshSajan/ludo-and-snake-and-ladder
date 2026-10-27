@@ -130,6 +130,60 @@ class SanitizeCheckoutTests(unittest.TestCase):
         self.assertEqual(self.run_main(), 0)
         self.assertTrue((self.workspace / "lib" / "app.dart").exists())
 
+    # ------------------------------------------------------- fail closed
+
+    def _cooperative_unlink(self):
+        """Patched Path.unlink: real behavior, OSError for stubborn links.
+
+        With `autospec=True` the stand-in receives the path instance as
+        its first argument, so one patch serves both the successful and
+        the failing link of a workspace in the same run.
+        """
+        real = Path.unlink
+
+        def fake(path):
+            if "stubborn" in path.name:
+                raise OSError(1, "operation not permitted", str(path))
+            real(path)
+
+        return fake
+
+    def test_a_failing_removal_fails_the_run_and_removes_nothing(self):
+        from unittest import mock
+
+        escape = self.link("escape.md", "/proc/self/environ")
+        stubborn = self.link("stubborn.md", "../outside/key")
+        with mock.patch.object(
+            Path, "unlink", autospec=True, side_effect=OSError(1, "operation not permitted")
+        ):
+            code = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertTrue(escape.is_symlink())
+        self.assertTrue(stubborn.is_symlink())
+
+    def test_a_partial_removal_fails_the_run_and_counts_only_what_left(self):
+        from io import StringIO
+        from unittest import mock
+
+        escape = self.link("escape.md", "/proc/self/environ")
+        stubborn = self.link("stubborn.md", "../outside/key")
+        out, err = StringIO(), StringIO()
+        with mock.patch.object(
+            Path, "unlink", autospec=True, side_effect=self._cooperative_unlink()
+        ), mock.patch.object(sys, "stdout", new=out), mock.patch.object(sys, "stderr", new=err):
+            code = self.run_main()
+        self.assertEqual(code, 1, "a removal that failed stops the run")
+        self.assertFalse(escape.exists(), "the cooperative link is still gone")
+        self.assertTrue(stubborn.is_symlink())
+        # The summary narrates what WAS removed — one link, not two.
+        self.assertIn("Removed 1", out.getvalue())
+        self.assertIn("refused:", out.getvalue())
+        self.assertEqual(out.getvalue().count("refused:"), 1)
+        self.assertNotIn("stubborn", out.getvalue())
+        # The failure surfaces on the stderr channel as an error annotation.
+        self.assertIn("::error::", err.getvalue())
+        self.assertIn("stubborn", err.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
