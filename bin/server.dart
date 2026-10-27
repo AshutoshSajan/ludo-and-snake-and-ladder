@@ -859,8 +859,13 @@ Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
   );
 }
 
-/// True when [req] carries the configured admin bearer token. Empty
-/// [adminToken] disables the whole admin surface (deny-all).
+/// True when [req] carries the configured admin bearer token. An empty
+/// [adminToken] deny-alls THIS legacy path (and first-run setup), not
+/// the credential surface: admin users log in with email+password and
+/// their DB-backed sessions are independent of the token (see
+/// ADMIN_TOKEN in .env.example). Clearing the token contains the token
+/// itself — it neither revokes live sessions nor disables interactive
+/// login; revocation is the logout/user-management path.
 bool _legacyTokenMatch(shelf.Request req) {
   if (adminToken.isEmpty) return false;
   final header = req.headers['authorization'] ?? '';
