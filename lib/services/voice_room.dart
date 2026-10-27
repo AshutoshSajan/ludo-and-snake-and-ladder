@@ -245,6 +245,18 @@ class VoiceRoom {
     onChanged?.call();
   }
 
+  /// Tears down exactly one peer, sending no hangup.
+  ///
+  /// The authoritative word that a seat's membership has ended (its
+  /// departure already closed that player's socket, so a goodbye has
+  /// nobody left to reach — the same reasoning [abandoned] uses). Feeds
+  /// that still list the departed seat are handled by reconciliation;
+  /// this is for the instant close when the exit itself is announced.
+  void removeSeat(String seat) {
+    if (!_peers.containsKey(seat)) return;
+    _closePeer(seat);
+  }
+
   /// One relayed signal from [from]. Creates the peer if the seats feed
   /// was slower than the signalling (a fast joiner can offer before the
   /// lobby message lands) — the mesh self-heals instead of dropping the
