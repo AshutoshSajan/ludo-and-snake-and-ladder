@@ -8,6 +8,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -16,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import publish_review
 import review_lib
 from review_lib import (
+    REVIEW_MARKER_RE,
+    _remove_review_markers,
     Finding,
     ParseError,
     build_error_body,
@@ -109,6 +112,53 @@ class SanitizeTextTests(unittest.TestCase):
         once = sanitize_text("@alice <opencode_</opencode_review>review>", 100)
         self.assertNotIn("<opencode_review>", once)
         self.assertEqual(sanitize_text(once, 100), once)
+
+    def test_marker_removal_matches_the_loop_semantics(self):
+        # The linear scanner must strip exactly what the old
+        # repeat-the-regex loop stripped, shape for shape — green prose,
+        # full markers, nestings of both orientations, odd casings, and
+        # adjacency traps that only LOOK like the marker names.
+        def loop(text):
+            while True:
+                stripped = REVIEW_MARKER_RE.sub("", text)
+                if stripped == text:
+                    return text
+                text = stripped
+
+        shapes = [
+            "plain prose",
+            "<opencode_review>",
+            "</opencode_review>",
+            "<opencode_</opencode_review>review>",
+            "a<opencode_</opencode_review>review>b",
+            "x</opencode_review><opencode_</opencode_review>review>>y",
+            "<opencode_re<vie</opencode_review>w>>",
+            "</opencode_review>>",
+            "<opencode_review><opencode_review>",
+            "</opencode_review></opencode_review>",
+            "<opencode_review><opencode_review></opencode_review>",
+            "<opencode_review><opencode_</opencode_review>review>",
+            "nested<opencode_<opencode_review>review>review>",
+            "<opencode_the_review>b",
+            "<opencode_the>review>b",
+            "review>the",
+            "opencode_review",
+            "A<OPencode_review>",
+            "<OPENCODE_</OPENCODE_REVIEW>rEVIEW>",
+        ]
+        for shape in shapes:
+            self.assertEqual(_remove_review_markers(shape), loop(shape), shape)
+
+    def test_marker_removal_is_linear_under_the_depth_cascade(self):
+        # A crafted stack of nested openers makes the regex loop re-scan
+        # the whole remaining input per reassembled marker: quadratic
+        # work on uncapped text (validate_findings bodies can be
+        # megabytes). The scanner pops each marker once, linear — this
+        # flood is impossible for the old loop at any timeout.
+        cascade = "<opencode_" * 40_000 + "</opencode_review>" + "review>" * 40_000
+        started = time.perf_counter()
+        self.assertEqual(_remove_review_markers(cascade), "")
+        self.assertLess(time.perf_counter() - started, 2.0)
 
     def test_does_not_touch_email_like_text(self):
         # The mention guard is deliberately broad; it only targets @ followed

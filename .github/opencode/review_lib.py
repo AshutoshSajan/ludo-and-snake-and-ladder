@@ -95,7 +95,7 @@ def sanitize_text(text: str, limit: int) -> str:
     if not isinstance(text, str):
         return ""
     value = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
-    value = _remove_to_fixpoint(value, REVIEW_MARKER_RE)
+    value = _remove_review_markers(value)
     value = MENTION_RE.sub("@\u200b", value)
     value = value.strip()
     if len(value) > limit:
@@ -103,24 +103,52 @@ def sanitize_text(text: str, limit: int) -> str:
     return value
 
 
-def _remove_to_fixpoint(text: str, pattern: re.Pattern[str]) -> str:
-    """Strip every match of [pattern], repeating until one pass changes nothing.
+def _remove_review_markers(text: str) -> str:
+    """Strip every review-envelope marker, including nested re-assemblies.
 
-    A single substitution pass can leave a marker behind as residue when
-    two are nested: ``<opencode_</opencode_review>review>`` loses the
-    inner one and re-assembles the outer from its parts — the machinery a
-    later transformation needs to join an '@' with the name that sat
-    after the nesting (CWE-116). Each pass that changes anything removed
-    at least one whole marker, so the length strictly shrinks and the
-    loop is finite; ordinary input converges on the first pass, and the
-    crafted worst case is bounded by the scan cap either way.
+    One marker pass can leave another marker behind as residue when two
+    nest: ``<opencode_</opencode_review>review>`` loses the inner one
+    and re-assembles the outer from its parts (CWE-116), so the removal
+    must keep going past the first pass. The replacement for the old
+    repeat-the-regex-to-fixpoint loop is a **single linear pass**: a
+    fixed-size tail window is checked at each ``>`` and a pop collapses
+    the recognized marker outright, so removal joins can re-assemble
+    something only at the newly written tail — where it is checked
+    immediately. Nothing is rescanned: every byte is appended once and
+    dropped at most once, making the cost plain O(len) — the old loop
+    re-scanned the whole remaining input per pass and, since
+    [sanitize_text] is reachable with uncapped values (a single crafted
+    finding body can be megabytes, the artifact caps the whole output
+    but not a body), that loop was a quadratic-work door on
+    untrusted model output.
+
+    Case folding matches [REVIEW_MARKER_RE], the pattern this replaces,
+    so an oddly-capitalized marker cannot slip through either way.
     """
 
-    while True:
-        stripped = pattern.sub("", text)
-        if stripped == text:
-            return text
-        text = stripped
+    buf: list[str] = []
+    open_marker = "<opencode_review>"
+    close_marker = "</opencode_review>"
+
+    def _pop_if_complete(ch: str) -> None:
+        if ch != ">":
+            return
+        size = len(buf)
+        if (
+            size >= len(close_marker)
+            and "".join(buf[-len(close_marker):]).lower() == close_marker
+        ):
+            del buf[-len(close_marker):]
+            return
+        if size < len(open_marker):
+            return
+        if "".join(buf[-len(open_marker):]).lower() == open_marker:
+            del buf[-len(open_marker):]
+
+    for ch in text:
+        buf.append(ch)
+        _pop_if_complete(ch)
+    return "".join(buf)
 
 
 def normalize_path(path: Any) -> str | None:
