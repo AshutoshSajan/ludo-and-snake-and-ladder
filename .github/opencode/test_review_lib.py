@@ -82,6 +82,34 @@ class SanitizeTextTests(unittest.TestCase):
     def test_neutralises_mentions(self):
         self.assertEqual(sanitize_text("hi @team and @org/team", 100), "hi @\u200bteam and @\u200borg/team")
 
+    def test_removes_nested_markers_to_a_fixpoint(self):
+        # One pass deletes the inner marker and re-assembles the outer
+        # from its leftover pieces ("<opencode_" + "review>"); iterating
+        # until stable leaves nothing for a later pass to scaffold on.
+        self.assertEqual(
+            sanitize_text("a<opencode_</opencode_review>review>b", 100), "ab"
+        )
+        self.assertEqual(
+            sanitize_text(
+                "x</opencode_review><opencode_</opencode_review>review>>y", 100
+            ),
+            "x>y",
+        )
+
+    def test_neutralises_a_mention_assembled_by_marker_removal(self):
+        # The '@' sat next to '<' until the nested markers were deleted,
+        # which joined it with the name that followed. The neutralisation
+        # must run after that join, not before it (CWE-116).
+        self.assertEqual(
+            sanitize_text("@<opencode_</opencode_review>review>victim", 100),
+            "@\u200bvictim",
+        )
+
+    def test_sanitize_is_idempotent(self):
+        once = sanitize_text("@alice <opencode_</opencode_review>review>", 100)
+        self.assertNotIn("<opencode_review>", once)
+        self.assertEqual(sanitize_text(once, 100), once)
+
     def test_does_not_touch_email_like_text(self):
         # The mention guard is deliberately broad; it only targets @ followed
         # by an alphanumeric character, which is what GitHub turns into a ping.

@@ -302,6 +302,22 @@ class ReplyTests(unittest.TestCase):
                         "postprocessing must stay inside the command budget")
         self.assertIn("_(truncated)_", reply)
 
+    def test_clean_reply_defuses_the_nested_marker_mention_assembly(self):
+        # CWE-116 regression: markers nested inside themselves survive a
+        # single removal pass as re-assemblable residue; the fixpoint and
+        # the neutralize-after-every-join ordering close it.
+        reply = clean_reply("@<opencode_</opencode_review>review>victim")
+        self.assertNotIn("@victim", reply)
+        self.assertIn("@\u200bvictim", reply)
+        self.assertNotIn("<opencode_review>", reply)
+
+    def test_clean_reply_neutralises_mentions_joined_by_comment_removal(self):
+        # Comment deletion joins characters; the mention pass runs after
+        # that join, so an '@' assembled against a name still cannot ping.
+        reply = clean_reply("see <!-- ok -->@<!-- x -->victim")
+        self.assertNotIn("@victim", reply)
+        self.assertIn("@\u200bvictim", reply)
+
     def test_with_footer_marks_the_comment(self):
         body = with_footer("hello", model="opencode/model", run_url="https://example.test/run")
         self.assertIn("hello", body)
