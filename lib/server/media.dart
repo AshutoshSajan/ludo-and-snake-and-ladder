@@ -92,9 +92,13 @@ class MediaNoteStore {
   final Map<String, Map<MediaKind, Map<String, MediaNote>>> _rooms = {};
   int _totalBytes = 0;
 
-  /// Stores one note. Null when any door says no: id shape, size cap of
-  /// its kind, the duration sanity for a voice note, the per-room cap,
-  /// or the running byte budget.
+  /// Stores a note, sweeping expired notes and evicting the oldest notes
+  /// as needed for the room and byte budgets. Returns null for an invalid
+  /// id, empty room code, empty or oversized data, or a voice duration
+  /// outside the inclusive range of 100 to 60,000 milliseconds.
+  ///
+  /// An occupied (room, kind, id) returns null without changing the store,
+  /// even if that note has expired but has not yet been swept.
   MediaNote? put({
     required MediaKind kind,
     required String code,
@@ -258,6 +262,13 @@ class MediaNoteStore {
 /// Shared upload validation: the room must be live on this instance —
 /// uploads ride the room's chat, so a note for a room that does not
 /// exist here has nowhere to be announced.
+///
+/// Checks [mimeOk] before reading and optional [bodyOk] after reading a
+/// size-limited body. Success returns the stored URL and, for voice, the
+/// duration in milliseconds. Returns 405 for other methods, 404 for an
+/// unknown room, 409 for an already occupied id, 413 for oversized data,
+/// or 400 for validation/store rejection (including a racing duplicate).
+/// Request stream and validation callback errors propagate.
 Future<shelf.Response> _uploadNote(
   shelf.Request req, {
   required MediaKind kind,
@@ -355,8 +366,8 @@ Future<shelf.Response> voiceNoteUpload(
 /// image) inserted from the mobile keyboard, uploaded before it is
 /// announced as a normal `'gif'` chat line. Same room-gating as voice.
 ///
-/// Only inert raster formats are accepted (CWE-79), on both gates what
-/// can reach the serve path:
+/// Acceptance requires both an allowed raster content type and a matching
+/// signature from any allowed raster format:
 ///
 /// * the content type must name one of the four formats the
 ///   keyboard-content client actually sends ([_imageNoteMimes] — which
@@ -365,7 +376,8 @@ Future<shelf.Response> voiceNoteUpload(
 ///   serving would execute it as one);
 /// * the bytes themselves must begin with a real raster signature
 ///   ([_startsAsRaster]) — a label claiming `image/gif` never earns a
-///   stored `<?xml …` or `<script>` body.
+///   stored `<?xml …` or `<script>` body. These are prefix checks, not
+///   full image decoding or validation of the remaining bytes.
 Future<shelf.Response> imageNoteUpload(
   shelf.Request req, {
   required MediaNoteStore store,
@@ -395,12 +407,12 @@ const Set<String> _imageNoteMimes = {
 };
 
 /// True when [bytes] begins with the signature of one of the four raster
-/// formats [_imageNoteMimes] allows — anything else, active documents
-/// and markup included, starts differently and is refused before it can
-/// be stored. The keyboard contract may under-label the format (an IME
+/// formats [_imageNoteMimes] allows. The keyboard contract may under-label
+/// the format (an IME
 /// that omits its mime type is sent as `image/gif` whatever the picture
 /// is — see `_safeMime`'s default), so the body need not match its own
-/// label's family; it only must be *some* verified inert raster.
+/// label's family. Only the prefix is checked; the rest is not decoded or
+/// validated as an image.
 bool _startsAsRaster(Uint8List bytes) {
   bool has(int at, List<int> sig) {
     if (bytes.length - at < sig.length) return false;

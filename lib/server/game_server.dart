@@ -312,7 +312,8 @@ class Room {
   }
 
   /// One JSON payload to every member and spectator — the loop every
-  /// broadcast lane shares.
+  /// broadcast lane shares. Sink errors are ignored so remaining recipients
+  /// still receive the payload.
   void broadcastJson(String json) {
     for (final m in [...members.values, ...spectators.values]) {
       try {
@@ -323,6 +324,8 @@ class Room {
     }
   }
 
+  /// Encodes and sends [message] to all players and spectators.
+  /// JSON encoding errors propagate; individual sink errors are ignored.
   void broadcast(Map<String, dynamic> message) =>
       broadcastJson(jsonEncode(message));
 
@@ -605,7 +608,8 @@ class GameAuthority {
   /// bin/server.dart for how fresh rooms get claimed). When [capacity] is
   /// set, only rooms close to the same table size are considered: a
   /// two-player quick match must not land in a host's four-seat room that
-  /// is still waiting for friends.
+  /// is still waiting for friends. Previously admitted seat ids must pass
+  /// [joinRoom]'s check with their room-issued [credential].
   Room? matchExisting(
     ServerMember member, {
     String game = 'ludo',
@@ -625,6 +629,8 @@ class GameAuthority {
   /// Quick match: seats [member] in the first waiting (unstarted, not full)
   /// room playing [game], creating a fresh room when none fits. Waiting
   /// players thus pair up automatically instead of trading room codes.
+  /// [credential] verifies a returning seat in an existing room; a fresh
+  /// room binds a new credential.
   Room findMatch(
     ServerMember member, {
     String game = 'ludo',
@@ -679,6 +685,13 @@ class GameAuthority {
     room.seatCredentials[seatId] ??= _newSeatCredential();
   }
 
+  /// Seats [member] in an unstarted room, returning the room or null if
+  /// it is missing, full, already holds this seat id, or rejects the claim.
+  /// A previously admitted seat requires its room-issued [credential].
+  ///
+  /// Assigns a free corner (opposite the first player for a Ludo pair),
+  /// disambiguates the name, removes any spectator entry for the seat, and
+  /// cancels abandonment. First admission creates a reconnect credential.
   Room? joinRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null || room.full || room.started) return null;
@@ -740,8 +753,11 @@ class GameAuthority {
     return room;
   }
 
-  /// Attempts to seat [member] with a preferred color; picks the first
-  /// free clockwise corner otherwise. Returns the room or null.
+  /// Seats [member] with its existing color when [color] is available.
+  /// Callers should initialize the member with the preferred [color].
+  /// An occupied color or forfeited seat falls back to [joinRoom] seating.
+  /// Returns null for a missing, full, or started room, a duplicate player
+  /// seat id, or a previously admitted seat without its [credential].
   Room? joinWithColor(
     String code,
     ServerMember member,
@@ -774,7 +790,8 @@ class GameAuthority {
   /// lobby and, crucially, mid-game: the seat survives the disconnect, so the
   /// game state (whose turn, tokens) keeps pointing at the same seatId. Any
   /// stale half-open connection for that seat is evicted. Returns null when
-  /// the room is gone or the seatId never sat there (no seat stealing).
+  /// the room is gone, the seatId never sat there, the seat forfeited, or
+  /// [credential] does not match the seat's stored reconnect credential.
   Room? rejoinRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null) return null;
@@ -810,7 +827,10 @@ class GameAuthority {
   /// Adds [member] as a read-only spectator of an existing room — lobby or
   /// mid-game. Spectators never claim seats and their intents are ignored
   /// by [handleIntent]. Returns null only when the room is gone, or when
-  /// [member] is already seated as a player in it.
+  /// [member] is already seated as a player in it, or a previously admitted
+  /// seat presents an incorrect or missing [credential]. Successful admission
+  /// replaces any spectator connection for that seat and binds a credential
+  /// on first admission.
   Room? spectateRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null) return null;

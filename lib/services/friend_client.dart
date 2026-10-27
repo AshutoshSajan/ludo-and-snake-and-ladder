@@ -295,6 +295,8 @@ class FriendState {
 }
 
 class FriendClient {
+  /// Creates a client that presents [credential] on friends requests.
+  /// An injected [httpClient] remains owned by the caller.
   FriendClient({
     required this.serverUrl,
     required this.credential,
@@ -341,7 +343,9 @@ class FriendClient {
     return _unwrap(resp);
   }
 
-  /// GET ferry for chat paging (the only friends read route).
+  /// Fetches a chat page with the device credential and query parameters.
+  /// Throws [FriendException] for transport errors, invalid JSON, a non-200
+  /// response, or a response without `ok: true`.
   Future<Map<String, dynamic>> _get(
     String path,
     Map<String, String> query,
@@ -365,9 +369,10 @@ class FriendClient {
     }
   }
 
-  /// Unwraps `{ok: true, ...}` with failures as [FriendException], or
-  /// passes a 200 `ok: false` through for endpoints whose false VALUES
-  /// are answers, not errors (unblock says "nothing was blocked").
+  /// Posts with the device credential and returns the decoded object,
+  /// regardless of HTTP status or `ok`, so callers can interpret false
+  /// results. Throws [FriendException] for transport or JSON decoding/cast
+  /// failures; server error objects pass through unchanged.
   Future<Map<String, dynamic>> _postLoose(
     String path,
     Map<String, dynamic> body,

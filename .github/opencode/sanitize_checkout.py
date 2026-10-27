@@ -29,7 +29,10 @@ from pathlib import Path
 
 
 def is_inside(target: Path, root: Path) -> bool:
-    """True when the canonical [target] cannot leave the workspace [root]."""
+    """Return whether target is lexically within root, including root itself.
+
+    Callers must canonicalize both paths first; this does not resolve symlinks.
+    """
     return target.is_relative_to(root)
 
 
@@ -61,6 +64,12 @@ def find_escaped_links(workspace: Path) -> list[tuple[Path, Path]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Remove escaping links from --workspace and return zero.
+
+    argv defaults to the process arguments. Invalid arguments or a workspace
+    that is not a directory raise SystemExit. Unlink failures are reported as
+    warnings and do not prevent attempts to remove the remaining links.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", required=True, type=Path)
     args = parser.parse_args(argv)

@@ -1098,7 +1098,8 @@ const _credentialForeignText =
 /// The raw credential from the request, presented as
 /// `Authorization: Bearer <token>` (the same scheme the admin sessions
 /// use, on disjoint routes). Null when it is absent or malformed — a
-/// bearer-less call carries no identity at all.
+/// bearer-less call carries no identity at all. The scheme must be exactly
+/// `Bearer ` and the trimmed token must contain 1 to 256 characters.
 String? _friendCredential(shelf.Request req) {
   final header = req.headers['authorization'] ?? '';
   const prefix = 'Bearer ';
@@ -1116,7 +1117,7 @@ String? _friendCredential(shelf.Request req) {
 /// parameter may only *agree* with it, so the public id can no longer
 /// stand in for a credential (the friends chat reads, DM sends, request/
 /// respond/remove, block/unblock, invites and reports all route through
-/// this gate).
+/// this gate). Store lookup errors propagate rather than becoming a 401.
 Future<shelf.Response?> _friendIdentity(
   shelf.Request req,
   String seatId,
@@ -1135,7 +1136,13 @@ Future<shelf.Response?> _friendIdentity(
   return null;
 }
 
-/// poll coarsely.
+/// Registers or refreshes a profile and returns its friends, requests,
+/// invites, blocks, and current tablemates, with latest message ids.
+///
+/// POST requires a nonempty seat id and name plus a Bearer credential.
+/// The first call binds the credential hash to the seat; conflicting or
+/// missing credentials return 401, and banned seats return 403. Friend
+/// store errors propagate; failures recording admin presence are ignored.
 Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1227,6 +1234,9 @@ Future<shelf.Response> friendsLookupHandler(shelf.Request req) async {
 
 /// Sends (or matches, when the reverse request is standing) a friend
 /// request.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsRequestHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1272,7 +1282,10 @@ Future<shelf.Response> friendsRequestHandler(shelf.Request req) async {
   }
 }
 
-/// Accepts / declines a request, withdraws a sent one, or breaks up.
+/// Accepts or declines a request, or withdraws a sent one.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsRespondHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1309,6 +1322,9 @@ Future<shelf.Response> friendsRespondHandler(shelf.Request req) async {
 }
 
 /// Un-friends. Seat id + target seat id; one either side ends the pair.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsRemoveHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1332,6 +1348,9 @@ Future<shelf.Response> friendsRemoveHandler(shelf.Request req) async {
 
 /// Blocks a player: severs the friendship, drops pendings between them,
 /// and denies all contact both ways until unblocked.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsBlockHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1363,6 +1382,9 @@ Future<shelf.Response> friendsBlockHandler(shelf.Request req) async {
 
 /// Lifts the caller's block on a player. `ok: true` only when one
 /// actually existed — the settings screen reads it as "unblocked".
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsUnblockHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1384,6 +1406,9 @@ Future<shelf.Response> friendsUnblockHandler(shelf.Request req) async {
 /// with the 'player' category. The caller's seat id lands in `seatId`
 /// (who reported) and the accused's name + seat id + the free-text reason
 /// ride in the message, so admins see the pair at a glance.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsReportHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1439,6 +1464,9 @@ Future<String> reportStoreLookupName(String seatId, String fallback) async {
 /// DM history. GET: polling readers pass `seatId`, `peer`, and optionally
 /// `since` (a message id) to pay bytes only for the gap. Unread work on
 /// the client stores [FriendChatPage.latestId] as its read marker.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsChatHandler(shelf.Request req) async {
   if (req.method == 'POST') {
     return _friendBadRequest(
@@ -1472,6 +1500,9 @@ Future<shelf.Response> friendsChatHandler(shelf.Request req) async {
 }
 
 /// Sends a DM (with an optional reply quote the caller picked).
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsChatSendHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1512,6 +1543,9 @@ Future<shelf.Response> friendsChatSendHandler(shelf.Request req) async {
 }
 
 /// Likes (or unlikes) a DM. Either participant may act.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsChatLikeHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1544,6 +1578,9 @@ Future<shelf.Response> friendsChatLikeHandler(shelf.Request req) async {
 /// table" invite that gets its code later — no, it never does: the flow
 /// creates the room first and links it here, so a code-less invite is a
 /// rider the client made deliberately (tests, future flows).
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsInviteHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1592,6 +1629,9 @@ Future<shelf.Response> friendsInviteHandler(shelf.Request req) async {
 
 /// The invitee answers. Accept returns the room code (when the invite
 /// carried one) so the app can join directly; decline closes it.
+///
+/// Requires a Bearer credential bound to the acting `seatId`; missing,
+/// unbound, or mismatched credentials return 401.
 Future<shelf.Response> friendsInviteRespondHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
@@ -1669,6 +1709,7 @@ String clientIpWithForwarding(String peer, String? xff, Set<String> trusted) {
 Set<String> trustedProxiesFromEnv(String? value) =>
     _trustedProxySet(value) ?? const {'127.0.0.1', '::1'};
 
+/// Parses trimmed, lowercase proxy entries; null if none remain.
 Set<String>? _trustedProxySet(String? value) {
   final raw = (value ?? '').trim();
   if (raw.isEmpty) return null;
@@ -1679,6 +1720,8 @@ Set<String>? _trustedProxySet(String? value) {
   return set.isEmpty ? null : set;
 }
 
+/// Returns the client address using [trustedProxies] for forwarding.
+/// Missing or unreadable connection information falls back to `unknown`.
 String _clientIp(shelf.Request req) {
   final info = req.context['shelf.io.connection_info'];
   try {
