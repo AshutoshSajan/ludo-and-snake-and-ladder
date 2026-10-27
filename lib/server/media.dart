@@ -15,10 +15,16 @@
 /// the announcement both land on the instance that owns that room — so
 /// nothing here ever needs shared storage. Caps keep a bad actor (or a
 /// bug) from turning the server into a hosting farm: a note is capped
-/// per its kind ([maxVoiceNoteBytes] for recordings, [maxImageNoteBytes]
-/// for keyboard images), a room keeps at most [maxPerRoom] of them
-/// (oldest-first eviction), the whole store stays under [maxBytes], and
-/// everything older than [ttl] is swept away lazily.
+/// per its kind ([maxVoiceNoteBytes] for recordings,
+/// [maxImageNoteBytes] for keyboard images), a room keeps at most
+/// [maxPerRoom] of them (oldest-first eviction), the whole store stays
+/// under [maxBytes], and everything older than [ttl] is swept away
+/// lazily. Eviction leaves the id reserved (also for [ttl], counted from
+/// the moment the note left): a chat line's URL answered its author's
+/// bytes for the note's whole life, so no further upload can mount
+/// different bytes onto that id while history quoting the URL can still
+/// be pulled — the eviction side of the announced-media immutability
+/// (CWE-639).
 library;
 
 import 'dart:convert';
@@ -85,6 +91,9 @@ class MediaNoteStore {
   final int maxPerRoom;
   final int maxBytes;
 
+  /// How many evicted ids stay reserved per (room, kind): see [_retired].
+  static const maxReservationsPerKind = 128;
+
   int maxNoteBytesFor(MediaKind kind) =>
       kind == MediaKind.voice ? maxVoiceNoteBytes : maxImageNoteBytes;
 
@@ -92,13 +101,29 @@ class MediaNoteStore {
   final Map<String, Map<MediaKind, Map<String, MediaNote>>> _rooms = {};
   int _totalBytes = 0;
 
+  /// Ids whose bytes left the store — evicted by a cap, a budget or the
+  /// sweep — so an announced URL stays attached to its author's bytes
+  /// even after the store stops holding them (CWE-639 is the immutability
+  /// side of announcements; this is the eviction side). The timestamp is
+  /// when the note LEFT (not when it was stored), and the entry ages out
+  /// with the same [ttl] the notes age out with: by then the URL has been
+  /// unresolvable for the full note ttl already, so no id can be
+  /// resurrected while its bytes could still be pulled. Per (room, kind)
+  /// the window is capped at [maxReservationsPerKind] — a genuine
+  /// reservation never rotates out within a normal room's life, while a
+  /// fabricated id flood cannot grow this map unboundedly.
+  final Map<String, Map<MediaKind, Map<String, DateTime>>> _retired = {};
+
   /// Stores a note, sweeping expired notes and evicting the oldest notes
   /// as needed for the room and byte budgets. Returns null for an invalid
   /// id, empty room code, empty or oversized data, or a voice duration
   /// outside the inclusive range of 100 to 60,000 milliseconds.
   ///
   /// An occupied (room, kind, id) returns null without changing the store,
-  /// even if that note has expired but has not yet been swept.
+  /// even if that note has expired but has not yet been swept — and so does
+  /// a (room, kind, id) whose note was evicted or swept: the id stays
+  /// reserved while its announced URL could still have been pulled, so
+  /// new bytes cannot mount themselves onto history.
   MediaNote? put({
     required MediaKind kind,
     required String code,
@@ -120,12 +145,18 @@ class MediaNoteStore {
     // same (room, kind, id) is either a retry or an attempt to swap the
     // bytes under a live message. Refused before anything moves —
     // no sweep, no eviction, no byte bookkeeping — so the original note
-    // survives exactly as its author held it.
-    final slot = _rooms[code]?[kind];
-    if (slot != null && slot.containsKey(id)) return null;
-
+    // survives exactly as its author held it. The refusal reaches past
+    // eviction too: an evicted id stays reserved (see [_retired]), so a
+    // flood that pushes an announced note out of a room cannot re-mount
+    // new bytes on the history's URL. An expired note lands here as that
+    // fresh reservation: a day dead, its id is still not available —
+    // until the [ttl] ages the reservation out (by then the URL has been
+    // unresolvable for a whole note lifetime).
     final t = _now();
     _sweep(t);
+    final slot = _rooms[code]?[kind];
+    if (slot != null && slot.containsKey(id)) return null;
+    if (_retired[code]?[kind]?.containsKey(id) ?? false) return null;
 
     final room = _rooms.putIfAbsent(code, () => {});
     // Room full: the oldest note of any kind yields its place first.
@@ -135,6 +166,7 @@ class MediaNoteStore {
       final victim = _oldestInRoom(room);
       if (victim == null) break;
       _totalBytes -= room[victim.$1]!.remove(victim.$2)!.data.length;
+      _retire(code, victim.$1, victim.$2, t);
     }
     // Budget over: walk rooms oldest-first, dropping their oldest notes.
     while (_totalBytes + data.length > maxBytes) {
@@ -149,6 +181,7 @@ class MediaNoteStore {
         _rooms[victimRoom]!.remove(victimKind);
       }
       if (_rooms[victimRoom]!.isEmpty) _rooms.remove(victimRoom);
+      _retire(victimRoom, victimKind, victimId, t);
     }
 
     final note = MediaNote(
@@ -171,12 +204,16 @@ class MediaNoteStore {
   /// pointed 409 instead of the generic 400. Reporting, never authority:
   /// across the handler's awaits a racing upload can slip in, so [put]
   /// re-verifies the same rule atomically and always has the last word.
+  /// A reserved (evicted) id answers the same: the wording's fix — send
+  /// it under a fresh id — is what an evicted id's author's old chat
+  /// line needs anyway.
   bool exists({
     required MediaKind kind,
     required String code,
     required String id,
   }) =>
-      _rooms[code]?[kind]?.containsKey(id) ?? false;
+      (_rooms[code]?[kind]?.containsKey(id) ?? false) ||
+      (_retired[code]?[kind]?.containsKey(id) ?? false);
 
   /// Fetches one note, sweeping expired ones first — the lookup itself is
   /// the cheapest place to age things out, since a pull after a day is
@@ -235,6 +272,27 @@ class MediaNoteStore {
     return pick;
   }
 
+  /// Reserves an id after its note left the store — the eviction twin of
+  /// the immutability gate in [put]: from the moment the bytes were
+  /// announced they spell one (room, kind, id), so the id they freed is
+  /// not available to mount different bytes under the same URL. Capped
+  /// FIFO per (room, kind): the oldest reservation yields when a room's
+  /// kind space exhausts [maxReservationsPerKind], which protects the
+  /// store from a fabricated-id flood while keeping every reservation a
+  /// real room's churn produces.
+  void _retire(String code, MediaKind kind, String id, DateTime t) {
+    final perKind = _retired
+        .putIfAbsent(code, () => {})
+        .putIfAbsent(kind, () => {});
+    perKind[id] = t;
+    // Plain insertion-order FIFO: reservations land one per eviction, so
+    // the first key is the oldest, and a flood that outruns the cap
+    // opens its own old ids back up — never the room's recent history.
+    while (perKind.length > maxReservationsPerKind) {
+      perKind.remove(perKind.keys.first);
+    }
+  }
+
   void _sweep(DateTime t) {
     final deadRooms = <String>[];
     for (final room in _rooms.entries) {
@@ -248,6 +306,7 @@ class MediaNoteStore {
         }
         for (final id in deadIds) {
           slot.value.remove(id);
+          _retire(room.key, slot.key, id, t);
         }
       }
       room.value.removeWhere((_, notes) => notes.isEmpty);
@@ -255,6 +314,27 @@ class MediaNoteStore {
     }
     for (final c in deadRooms) {
       _rooms.remove(c);
+    }
+    // Reservations age out with the notes' own ttl: a whole [ttl] has
+    // passed since the note left, so its URL has been unresolvable that
+    // long already — nothing announces or pulls it anymore, and the id
+    // returns to the free pool.
+    final deadReservationRooms = <String>[];
+    for (final room in _retired.entries) {
+      for (final slot in room.value.entries) {
+        final stale = [
+          for (final e in slot.value.entries)
+            if (t.difference(e.value) > ttl) e.key,
+        ];
+        for (final id in stale) {
+          slot.value.remove(id);
+        }
+      }
+      room.value.removeWhere((_, reserved) => reserved.isEmpty);
+      if (room.value.isEmpty) deadReservationRooms.add(room.key);
+    }
+    for (final c in deadReservationRooms) {
+      _retired.remove(c);
     }
   }
 }
@@ -266,8 +346,10 @@ class MediaNoteStore {
 /// Checks [mimeOk] before reading and optional [bodyOk] after reading a
 /// size-limited body. Success returns the stored URL and, for voice, the
 /// duration in milliseconds. Returns 405 for other methods, 404 for an
-/// unknown room, 409 for an already occupied id, 413 for oversized data,
-/// or 400 for validation/store rejection (including a racing duplicate).
+/// unknown room, 409 for an already occupied id — live or reserved by a
+/// past note's eviction, so history's URLs cannot be remounted — 413 for
+/// oversized data, or 400 for validation/store rejection (including a
+/// racing duplicate).
 /// Request stream and validation callback errors propagate.
 Future<shelf.Response> _uploadNote(
   shelf.Request req, {
@@ -303,7 +385,6 @@ Future<shelf.Response> _uploadNote(
   if (mime.isEmpty || !mimeOk(mime)) {
     return _json(400, mimeError);
   }
-
   int durMs = 0;
   if (kind == MediaKind.voice) {
     durMs = int.tryParse(req.headers['x-voice-duration'] ?? '') ?? 0;

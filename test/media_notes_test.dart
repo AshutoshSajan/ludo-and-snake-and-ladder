@@ -400,6 +400,188 @@ void main() {
       expect(store.roomsStats, isEmpty);
       expect(store.totalBytes, 0);
     });
+
+    test('an evicted id stays reserved: its announced history cannot be '
+        'remounted with other bytes', () {
+      // The reviewer's exact shape: fill the per-room cap, evict an
+      // announced note, then try to upload different bytes onto its id.
+      // The eviction freed the bytes, not the id (CWE-639's eviction
+      // side): the chat line that carried the URL keeps naming the
+      // author's note, so the id belongs to that note.
+      final store = _store(_Clock(), maxPerRoom: 2);
+      final original = store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'aaaaaa',
+        data: Uint8List.fromList([1]),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(original, isNotNull);
+      // Two more fills the 2-cap and evicts aaaa — then removes the
+      // middle one so the cap has room for the attack again.
+      store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'bbbbbb',
+        data: Uint8List.fromList([2]),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'cccccc',
+        data: Uint8List.fromList([3]),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(store.get(MediaKind.voice, 'ROOM', 'aaaaaa'), isNull,
+          reason: 'the original was evicted as the oldest');
+      // The attack: same (room, kind, id), different bytes.
+      final swap = store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'aaaaaa',
+        data: Uint8List.fromList([9, 9, 9]),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(swap, isNull, reason: 'the evicted id is reserved');
+      // The reserve leaves the frees intact: the two live notes keep
+      // serving, the totals did not shift.
+      expect(store.get(MediaKind.voice, 'ROOM', 'bbbbbb'), isNotNull);
+      expect(store.get(MediaKind.voice, 'ROOM', 'cccccc'), isNotNull);
+      expect(store.roomsStats['ROOM'], 2);
+      // And the upload handler's 409 fast path sees the same thing.
+      expect(
+        store.exists(kind: MediaKind.voice, code: 'ROOM', id: 'aaaaaa'),
+        isTrue,
+      );
+    });
+
+    test('a budget-evicted id and an expired id stay reserved too', () {
+      final clock = _Clock();
+      final store = _store(clock, maxBytes: 8);
+      store.put(
+        kind: MediaKind.voice,
+        code: 'R1',
+        id: 'aaaaaa',
+        data: Uint8List(4),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      store.put(
+        kind: MediaKind.voice,
+        code: 'R2',
+        id: 'bbbbbb',
+        data: Uint8List(4),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      // The 8-byte budget holds one more 4-byte note only after
+      // evicting the oldest anywhere — R1 loses its bytes.
+      store.put(
+        kind: MediaKind.voice,
+        code: 'R3',
+        id: 'cccccc',
+        data: Uint8List(4),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(store.get(MediaKind.voice, 'R1', 'aaaaaa'), isNull,
+          reason: 'the bytes were budget-evicted');
+      final swap = store.put(
+        kind: MediaKind.voice,
+        code: 'R1',
+        id: 'aaaaaa',
+        data: Uint8List(4),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(swap, isNull, reason: 'the budget-evicted id stays reserved');
+
+      // A swept-away id keeps the same stain: the ttl (not the sweep)
+      // opens ids back up, because that also means the URL is a day
+      // unresolvable already.
+      clock.now = clock.now.add(const Duration(hours: 10));
+      final swept = store.put(
+        kind: MediaKind.voice,
+        code: 'R9',
+        id: 'fff000',
+        data: Uint8List(4),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(swept, isNotNull);
+      clock.now = clock.now.add(const Duration(hours: 25));
+      expect(store.get(MediaKind.voice, 'R9', 'fff000'), isNull,
+          reason: 'swept by ttl');
+      final reuse = store.put(
+        kind: MediaKind.voice,
+        code: 'R9',
+        id: 'fff000',
+        data: Uint8List(4),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(reuse, isNull, reason: 'reserved while its URL could still '
+          'have been pulled');
+      // Still a day later, past the reservation ttl, the id frees up —
+      // every pull of the old URL has long been a 404.
+      clock.now = clock.now.add(const Duration(hours: 25));
+      final freed = store.put(
+        kind: MediaKind.voice,
+        code: 'R9',
+        id: 'fff000',
+        data: Uint8List(4),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(freed, isNotNull, reason: 'the reservation expired with ttl');
+    });
+
+    test('the reservation window is cap-bounded: real rooms keep their '
+        'ids forever', () {
+      // A 2-note room with every put evicting its oldest: the flood below
+      // mints 132 notes — 130 evictions — enough to push the 128-deep
+      // reservation window past its two oldest entries, after which the
+      // oldest reservations yield. A real room never churns near this.
+      final store = _store(_Clock(), maxPerRoom: 2);
+      String idFor(int i) => 'x${i.toRadixString(36).padLeft(5, '0')}a';
+      for (var i = 0; i < 132; i++) {
+        store.put(
+          kind: MediaKind.voice,
+          code: 'R',
+          id: idFor(i),
+          data: Uint8List.fromList([1]),
+          mime: 'audio/mp4',
+          durMs: 500,
+        );
+      }
+      // The first two reservations were rotated out by the cap.
+      // The in-window id is checked FIRST: the freed-but-that-works put
+      // below evicts a note of its own, which rotates the window once
+      // more — sequencing matters when the window is this tight.
+      final inWindow = store.put(
+        kind: MediaKind.voice,
+        code: 'R',
+        id: idFor(2),
+        data: Uint8List.fromList([7]),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(inWindow, isNull, reason: 'still inside the 128-deep window');
+      final freed = store.put(
+        kind: MediaKind.voice,
+        code: 'R',
+        id: idFor(0),
+        data: Uint8List.fromList([7]),
+        mime: 'audio/mp4',
+        durMs: 500,
+      );
+      expect(freed, isNotNull, reason: 'the oldest reservation yielded');
+    });
   });
 
   group('voiceNoteUpload', () {
