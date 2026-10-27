@@ -331,6 +331,26 @@ class FriendClient {
     );
   }
 
+  /// The credential is the private half of the seat identity. Plain
+  /// HTTP can carry it only to the machine itself (loopback), where no
+  /// third hop can read the wire; anywhere else the request is refused
+  /// *before* it sends, and the specific refusal is thrown outside
+  /// [_attempt]'s catch-all so it never becomes a generic
+  /// reachability error.
+  void _guardCredentialChannel() {
+    if (credential.isEmpty) return; // nothing private rides the wire
+    final base = _uri('');
+    if (base.scheme != 'http') return; // https/wss is not plaintext
+    final host = base.host;
+    final onLoopback =
+        host == 'localhost' || host == '127.0.0.1' || host == '::1';
+    if (onLoopback) return;
+    throw FriendException(
+      'Your friends credential cannot be sent over plain HTTP — '
+      'use a wss:// server address',
+    );
+  }
+
   /// One JSON POST; unwraps `{ok: true, ...}` and maps every failure to
   /// [FriendException] with the server's wording.
   Future<Map<String, dynamic>> _post(
@@ -360,6 +380,7 @@ class FriendClient {
   }
 
   Future<http.Response> _attempt(Future<http.Response> Function() send) async {
+    _guardCredentialChannel();
     try {
       return await send();
     } catch (_) {
