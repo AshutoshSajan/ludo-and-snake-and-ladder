@@ -318,6 +318,30 @@ class ReplyTests(unittest.TestCase):
         self.assertNotIn("@victim", reply)
         self.assertIn("@\u200bvictim", reply)
 
+    def test_clean_reply_removes_a_comment_rejoined_from_stripped_pieces(self):
+        # Comment-reformation trace 1: the comment sweep deletes `<!--a-->`
+        # and its join re-forms `<!--secret tail-->` from the `<!` it left
+        # behind — content a single sweep by original indexes never
+        # rescans. The pair loop removes it again, so nothing hidden-side
+        # reaches the posted comment.
+        reply = clean_reply("ok <!<!--a-->--secret tail-->(rest)")
+        self.assertNotIn("<!--", reply)
+        self.assertNotIn("secret", reply)
+        self.assertIn("ok", reply)
+        self.assertIn("(rest)", reply)
+
+    def test_clean_reply_removes_a_comment_rejoined_from_marker_pieces(self):
+        # Comment-reformation trace 2: the marker sweep deletes
+        # `<opencode_review>` and its join re-forms `<!--mention me-->`
+        # across the marker's borders. The loop sweeps again and both the
+        # formed comment and its payload are gone.
+        reply = clean_reply("fine <!<opencode_review>--mention me-->kept")
+        self.assertNotIn("<!--", reply)
+        self.assertNotIn("<opencode_review>", reply)
+        self.assertNotIn("mention me", reply)
+        self.assertIn("fine", reply)
+        self.assertIn("kept", reply)
+
     def test_with_footer_marks_the_comment(self):
         body = with_footer("hello", model="opencode/model", run_url="https://example.test/run")
         self.assertIn("hello", body)
