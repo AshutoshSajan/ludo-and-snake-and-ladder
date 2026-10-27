@@ -80,6 +80,7 @@ jobs:
             trusted/.github/opencode/reviewer-agent.json \
             trusted/.github/opencode/review-prompt.md \
             trusted/.github/opencode/prepare_review.py \
+            trusted/.github/opencode/sanitize_checkout.py \
             trusted/.github/opencode/publish_review.py; do
             if [ ! -f "$file" ]; then
               echo "::notice::The base commit does not contain $file yet; skipping. Reviews start once this change is on the target branch."
@@ -108,6 +109,21 @@ jobs:
       # Pinned release + sha256, the same mold as the osv-scanner and git-cliff
       # installs. The tarball is the platform binary, not an npm install: CI
       # needs one executable, not a node_modules tree.
+      # The model process carries its provider key (only) as an environment
+      # variable, which its tools' child processes inherit. Its grep follows
+      # checkout symlinks after the lexical-path authorization, so a PR
+      # could commit one link into /proc/self/environ and read the key back
+      # through a permitted search (CWE-61). The boundary has to hold on
+      # canonical targets: before anything runs here, trusted code removes
+      # every symlink whose final target leaves the workspace — nothing
+      # outside it is read or written in the process, and in-workspace
+      # links (including dangling ones) are kept.
+      - name: Reject checkout symlinks that leave the workspace
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          python3 trusted/.github/opencode/sanitize_checkout.py --workspace workspace
+
       - name: Install OpenCode (pinned)
         if: steps.gate.outputs.configured == 'true'
         env:

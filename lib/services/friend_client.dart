@@ -3,9 +3,11 @@
 /// Mirrors `report_client.dart`: the ws(s) server URL is rewritten to
 /// http(s), every failure becomes a [FriendException] whose text is the
 /// server's user-presentable wording, and a per-test injectable
-/// `http.Client` keeps tests off the wire. The server is
-/// unauthenticated by design — identity is the seat id the WS `hello`
-/// path already asserts, bounded by per-IP throttles and per-seat caps.
+/// `http.Client` keeps tests off the wire. Every call carries the device's
+/// friends credential (`Authorization: Bearer`) — the private half of the
+/// seat identity, bound to its public seat id server-side on first
+/// registration. Reads/writes are no longer seat-claim games: the server
+/// derives the acting seat from the credential.
 ///
 /// The server's shape knowledge lives here in one place: every row lands
 /// as the store's `toJson()`, so the fromJson factories below take an
@@ -293,20 +295,59 @@ class FriendState {
 }
 
 class FriendClient {
-  FriendClient({required this.serverUrl, http.Client? httpClient})
-    : _client = httpClient ?? http.Client(),
-      _ownsClient = httpClient == null;
+  /// Creates a client that presents [credential] on friends requests.
+  /// An injected [httpClient] remains owned by the caller.
+  FriendClient({
+    required this.serverUrl,
+    required this.credential,
+    http.Client? httpClient,
+  }) : _client = httpClient ?? http.Client(),
+       _ownsClient = httpClient == null;
 
   /// Same-origin game server URL (ws(s)://host/ws form, as everywhere).
   final String serverUrl;
+
+  /// The device's friends credential — the private half of the identity
+  /// the server binds to the seat id. Presented as
+  /// `Authorization: Bearer` on every call; empty only in tests that
+  /// exercise request shapes below the auth plane.
+  final String credential;
+
   final http.Client _client;
   final bool _ownsClient;
+
+  /// Headers every friends request rides with: JSON body encoding plus
+  /// the credential when the client holds one.
+  Map<String, String> _headers() => {
+    'content-type': 'application/json',
+    if (credential.isNotEmpty) 'authorization': 'Bearer $credential',
+  };
 
   Uri _uri(String path) {
     final base = Uri.parse(serverUrl);
     return base.replace(
       scheme: base.scheme == 'wss' ? 'https' : 'http',
       path: '/$path',
+    );
+  }
+
+  /// The credential is the private half of the seat identity. Plain
+  /// HTTP can carry it only to the machine itself (loopback), where no
+  /// third hop can read the wire; anywhere else the request is refused
+  /// *before* it sends, and the specific refusal is thrown outside
+  /// [_attempt]'s catch-all so it never becomes a generic
+  /// reachability error.
+  void _guardCredentialChannel() {
+    if (credential.isEmpty) return; // nothing private rides the wire
+    final base = _uri('');
+    if (base.scheme != 'http') return; // https/wss is not plaintext
+    final host = base.host;
+    final onLoopback =
+        host == 'localhost' || host == '127.0.0.1' || host == '::1';
+    if (onLoopback) return;
+    throw FriendException(
+      'Your friends credential cannot be sent over plain HTTP — '
+      'use a wss:// server address',
     );
   }
 
@@ -317,27 +358,29 @@ class FriendClient {
     Map<String, dynamic> body,
   ) async {
     final resp = await _attempt(
-      () => _client.post(
-        _uri(path),
-        headers: {'content-type': 'application/json'},
-        body: jsonEncode(body),
-      ),
+      () => _client.post(_uri(path), headers: _headers(), body: jsonEncode(body)),
     );
     return _unwrap(resp);
   }
 
-  /// GET ferry for chat paging (the only friends read route).
+  /// Fetches a chat page with the device credential and query parameters.
+  /// Throws [FriendException] for transport errors, invalid JSON, a non-200
+  /// response, or a response without `ok: true`.
   Future<Map<String, dynamic>> _get(
     String path,
     Map<String, String> query,
   ) async {
     final resp = await _attempt(
-      () => _client.get(_uri(path).replace(queryParameters: {...query})),
+      () => _client.get(
+        _uri(path).replace(queryParameters: {...query}),
+        headers: _headers(),
+      ),
     );
     return _unwrap(resp);
   }
 
   Future<http.Response> _attempt(Future<http.Response> Function() send) async {
+    _guardCredentialChannel();
     try {
       return await send();
     } catch (_) {
@@ -347,19 +390,16 @@ class FriendClient {
     }
   }
 
-  /// Unwraps `{ok: true, ...}` with failures as [FriendException], or
-  /// passes a 200 `ok: false` through for endpoints whose false VALUES
-  /// are answers, not errors (unblock says "nothing was blocked").
+  /// Posts with the device credential and returns the decoded object,
+  /// regardless of HTTP status or `ok`, so callers can interpret false
+  /// results. Throws [FriendException] for transport or JSON decoding/cast
+  /// failures; server error objects pass through unchanged.
   Future<Map<String, dynamic>> _postLoose(
     String path,
     Map<String, dynamic> body,
   ) async {
     final resp = await _attempt(
-      () => _client.post(
-        _uri(path),
-        headers: {'content-type': 'application/json'},
-        body: jsonEncode(body),
-      ),
+      () => _client.post(_uri(path), headers: _headers(), body: jsonEncode(body)),
     );
     try {
       return jsonDecode(resp.body) as Map<String, dynamic>;

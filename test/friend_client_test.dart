@@ -1,6 +1,6 @@
 /// FriendClient contract: URL building off the ws(s) server URL, the
 /// server's row shapes parsed into client-side views (peer picking,
-/// mine/them, reply snapshots), failure mapping to人人-readable
+/// mine/them, reply snapshots), failure mapping to human-readable
 /// FriendException texts, and the lookup-miss that stays null.
 library;
 
@@ -15,7 +15,12 @@ import 'package:game_club/services/friend_client.dart';
 const serverUrl = 'wss://ludo.test/ws';
 
 FriendClient clientWith(http.Client mock) =>
-    FriendClient(serverUrl: serverUrl, httpClient: mock);
+    FriendClient(
+      serverUrl: serverUrl,
+      // Tests ride the same bearer shape the wire uses: `_headers` covers it.
+      credential: 'test-credential',
+      httpClient: mock,
+    );
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -129,6 +134,25 @@ void main() {
   });
 
   group('requests ride the right URLs and bodies', () {
+    test('every request presents the device credential as Bearer', () async {
+      final headers = <Map<String, String>>[];
+      final mock = MockClient((req) async {
+        headers.add(req.headers);
+        return http.Response(jsonEncode({'ok': true}), 200);
+      });
+      final client = clientWith(mock);
+      // A POST (the family's default) and the single GET route both
+      // carry the header — the server refuses bearer-less friends calls,
+      // so a missing one would strand the whole screen on 401s.
+      await client.remove(seatId: 'p1', target: 'p2');
+      await client.chat(seatId: 'p1', peer: 'p2');
+      expect(
+        headers.where((h) => h['authorization'] == 'Bearer test-credential'),
+        hasLength(2),
+        reason: 'POST and GET must both present the credential header',
+      );
+    });
+
     test('send POSTs friends/request with the target', () async {
       late String path;
       late Map<String, dynamic> sent;
@@ -289,6 +313,62 @@ void main() {
         isNull,
         reason: 'a decline has no code',
       );
+    });
+  });
+
+  group('credential channel guard', () {
+    /// Where the request landed and its specific refusal wording.
+    Future<(bool sent, String status)> experience(String url, {bool credential = true}) async {
+      var sent = false;
+      final mock = MockClient(
+        (req) async {
+          sent = true;
+          return http.Response(jsonEncode({'ok': true}), 200);
+        },
+      );
+      final client = FriendClient(
+        serverUrl: url,
+        credential: credential ? 'test-credential' : '',
+        httpClient: mock,
+      );
+      try {
+        await client.state(seatId: 'p1', name: 'Swift Otter');
+        return (sent, 'answered');
+      } on FriendException catch (e) {
+        return (sent, e.text);
+      }
+    }
+
+    test('a credential never rides plain HTTP to a non-loopback host', () async {
+      final (sent, status) = await experience('http://203.0.113.5:5000/ws');
+      expect(sent, isFalse, reason: 'refused before anything is sent');
+      expect(status, contains('plain HTTP'));
+      expect(status, contains('wss://'));
+      expect(status, isNot(contains('reach the server')),
+          reason: 'a broken-transport refusal, not a reachability one');
+    });
+
+    test('loopback HTTP and secure transports still carry the credential',
+        () async {
+      for (final url in [
+        'http://127.0.0.1:5000/ws',
+        'http://localhost:5000/ws',
+        'http://[::1]:5000/ws',
+        serverUrl, // the wss:// base the production client points at
+      ]) {
+        final (sent, status) = await experience(url);
+        expect(sent, isTrue, reason: url);
+        expect(status, 'answered');
+      }
+    });
+
+    test('an empty credential has nothing to leak and rides plain HTTP', () async {
+      final (sent, status) = await experience(
+        'http://203.0.113.5:5000/ws',
+        credential: false,
+      );
+      expect(sent, isTrue, reason: 'the below-auth shapes stay exercised');
+      expect(status, 'answered');
     });
   });
 }

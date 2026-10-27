@@ -151,6 +151,14 @@ class AdminClient {
   Future<void> unban(String seatId) =>
       _post('/admin/unban', {'seatId': seatId});
 
+  /// The friends-credential recovery path: clears the seat's stored
+  /// friends binding, so a seat hijacked by a first-bind takeover
+  /// (attacker's token bound before the owner's first sign-in) becomes
+  /// signable again by the owner's own device. See the bind point in
+  /// `bin/server.dart` for why a first bind carries no control proof.
+  Future<void> friendsUnbind(String seatId) =>
+      _post('/admin/friends/unbind', {'seatId': seatId});
+
   Future<void> rename(String seatId, String name) =>
       _post('/admin/rename', {'seatId': seatId, 'name': name});
 

@@ -8,14 +8,19 @@
 /// profile and shown in the Friends screen, because display names are not
 /// unique but every profile owns exactly one code.
 ///
-/// Trust model, stated plainly: a friends call asserts the caller's seat
-/// id, exactly as the WebSocket `hello` does when a player claims a seat.
-/// There is no account system to authenticate against, so these calls are
-/// as "authenticated" as playing a game as yourself — the shared,
-/// pre-existing identity plane. Abuse is bounded by the handler's per-IP
-/// throttles, the store's per-seat caps, and admin bans (banned players
-/// are refused on every friends endpoint). If accounts arrive, the right
-/// fix is authenticating these handlers and keying the tables on user ids.
+/// Authorization is the friends credential: a device-held secret (the
+/// private half of the identity) generated beside the seat id and never
+/// broadcast. The first friends registration binds its stored SHA-256
+/// hash to the seat ("first binder wins"); from then on the hash to seat
+/// lookup is *the* acting identity, so every request presenting the
+/// token derives its seat from the store's answer instead of trusting
+/// the request's public `seatId` parameter. The plane is still
+/// guest-class — no account system — but impersonation now costs a
+/// 256-bit credential instead of a public id. First-bind and per-seat
+/// caps bound what a registry race can do, and an admin ban still
+/// refuses every friends endpoint regardless of the credential. If
+/// accounts arrive, the tables key on user ids and the credential table
+/// retires.
 library;
 
 import 'package:sqlite3/sqlite3.dart';
@@ -333,6 +338,36 @@ abstract interface class FriendStore {
   /// friend code is minted on first sight and never re-issued.
   Future<FriendProfile> serve(String seatId, String name);
 
+  /// The friends credential, the authorization half of identity:
+  ///
+  /// * [bindCredential] — the first friends registration binds the
+  ///   request-presented token hash to [seatId]. "First binder wins":
+  ///   once a seat is bound, only the matching hash (or [clearCredential])
+  ///   keeps access. True iff the seat is now bound to exactly this hash
+  ///   — an idempotent re-bind same-token answers true; a seat already
+  ///   held by another token (or a hash already held by another seat's
+  ///   UNIQUE rule) answers false instead of surfacing a uniqueness
+  ///   error. Registration lives in one place — `/friends/state` — so
+  ///   every other endpoint only ever resolves tokens.
+  /// * [seatForCredential] — the seat a verified hash belongs to; null
+  ///   when unregistered or unknown. This lookup is what the HTTP layer
+  ///   *derives* the acting seat from, so the request's public `seatId`
+  ///   parameter never authenticates anything.
+  /// * [clearCredential] — operator relief: frees the seat for a fresh
+  ///   bind when its device lost the secret. Recovery tooling only; the
+  ///   HTTP surface never calls it.
+  ///
+  /// Trims [seatId] and throws [ArgumentError] if it is empty. [tokenHash]
+  /// must be hashed by the caller; the store does not hash it.
+  Future<bool> bindCredential(String seatId, String tokenHash);
+
+  /// Returns the seat bound to the exact [tokenHash], or null if unknown.
+  Future<String?> seatForCredential(String tokenHash);
+
+  /// Removes the trimmed [seatId]'s binding, allowing its seat and hash to
+  /// bind again. Does nothing when no binding exists.
+  Future<void> clearCredential(String seatId);
+
   /// The profile for [seatId], if that player ever registered.
   Future<FriendProfile?> profile(String seatId);
 
@@ -551,6 +586,11 @@ class SqliteFriendStore implements FriendStore {
       );
       CREATE INDEX IF NOT EXISTS idx_friend_blocks_blocker
           ON friend_blocks(blocker);
+      CREATE TABLE IF NOT EXISTS friend_credentials (
+        seat_id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_ms INTEGER NOT NULL
+      );
     ''');
   }
 
@@ -565,6 +605,7 @@ class SqliteFriendStore implements FriendStore {
       'friend_messages',
       'friend_invites',
       'friend_blocks',
+      'friend_credentials',
     ]) {
       _db.execute('DELETE FROM $t');
     }
@@ -656,6 +697,58 @@ class SqliteFriendStore implements FriendStore {
     final looksLikeCode =
         t.length == 6 && RegExp(r'^[2-9A-HJ-NP-Z]+$').hasMatch(t);
     return looksLikeCode ? profileByCode(t) : profile(t);
+  }
+
+  static const _bindCredentialSql =
+      'INSERT INTO friend_credentials (seat_id, token_hash, created_ms) '
+      'SELECT ?, ?, ? WHERE NOT EXISTS ('
+      'SELECT 1 FROM friend_credentials WHERE seat_id = ?)';
+
+  /// Binds a caller-hashed token using [FriendStore.bindCredential]'s rules.
+  /// Insert-time [SqliteException]s return false; read errors propagate.
+  @override
+  Future<bool> bindCredential(String seatId, String tokenHash) async {
+    final id = seatId.trim();
+    if (id.isEmpty) throw ArgumentError('seatId required');
+    // A hash may belong to only one seat (UNIQUE). Checking the hash's
+    // owner first keeps a same-token re-bind of its own seat idempotent
+    // instead of colliding with an insert that can never succeed.
+    final bound = _db.select(
+      'SELECT seat_id FROM friend_credentials WHERE token_hash = ?',
+      [tokenHash],
+    );
+    if (bound.isNotEmpty) return bound.first['seat_id'] == id;
+    try {
+      _db.execute(_bindCredentialSql, [id, tokenHash, _nowMs, id]);
+    } on SqliteException {
+      // A concurrent first bind took the seat, or the hash belongs to
+      // another seat — either way this caller does not get it.
+      return false;
+    }
+    // The row read back is the verdict: fresh binds and racing inserts
+    // only "took" when this exact hash ended up owning the seat.
+    final rows = _db.select(
+      'SELECT token_hash FROM friend_credentials WHERE seat_id = ?',
+      [id],
+    );
+    return rows.isNotEmpty && rows.first['token_hash'] == tokenHash;
+  }
+
+  @override
+  Future<String?> seatForCredential(String tokenHash) async {
+    final rows = _db.select(
+      'SELECT seat_id FROM friend_credentials WHERE token_hash = ?',
+      [tokenHash],
+    );
+    return rows.isEmpty ? null : rows.first['seat_id'] as String;
+  }
+
+  @override
+  Future<void> clearCredential(String seatId) async {
+    _db.execute(
+      'DELETE FROM friend_credentials WHERE seat_id = ?',
+      [seatId.trim()],
+    );
   }
 
   static const _codeChars =

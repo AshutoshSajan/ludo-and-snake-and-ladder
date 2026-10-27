@@ -127,8 +127,10 @@ class _TableChatPanelState extends State<TableChatPanel> {
   /// can retint the friend profile with a tagged display name.
   Future<void> _countRequests() async {
     try {
-      final state = await FriendClient(serverUrl: widget.client.serverUrl)
-          .state(seatId: widget.client.seatId, name: widget.client.name);
+      final state = await FriendClient(
+        serverUrl: widget.client.serverUrl,
+        credential: widget.client.credential,
+      ).state(seatId: widget.client.seatId, name: widget.client.name);
       if (!mounted) return;
       setState(() => _pendingRequests = state.incoming.length);
     } on FriendException {
@@ -157,6 +159,7 @@ class _TableChatPanelState extends State<TableChatPanel> {
         serverUrl: widget.client.serverUrl,
         mySeatId: widget.client.seatId,
         myName: widget.client.name,
+        myCredential: widget.client.credential,
         peerSeatId: line.seatId,
         peerName: line.from,
       ),

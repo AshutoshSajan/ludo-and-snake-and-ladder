@@ -107,13 +107,15 @@ Future<void> _openSheet(
                 context: context,
                 backgroundColor: Colors.white,
                 builder: (_) => PlayerActionsSheet(
-                  serverUrl: 'ws://table.test/ws',
+                  serverUrl: 'wss://table.test/ws',
                   mySeatId: mySeatId,
                   myName: myName,
+                  myCredential: 'test-credential',
                   peerSeatId: peerSeatId,
                   peerName: peerName,
                   friendClientForTest: FriendClient(
-                    serverUrl: 'ws://table.test/ws',
+                    serverUrl: 'wss://table.test/ws',
+                    credential: 'test-credential',
                     httpClient: wire.client(),
                   ),
                 ),

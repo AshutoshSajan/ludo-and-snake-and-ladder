@@ -15,6 +15,10 @@ Security posture:
     variables, no project config. It may only read, glob, and grep.
   * All discussion text, file content, and model output is untrusted. The
     reply is sanitised and capped; raw output goes only to the run artifact.
+    The reply pipeline scans bounded text with linear passes, so untrusted
+    input cannot buy unbounded CPU inside this process — the model
+    subprocess has its own [TIMEOUT_SECONDS] budget, and the postprocessing
+    after it stays a constant multiple of the reply cap.
   * The model never resolves, approves, merges, edits, or runs a command. A
     trusted human owns those actions.
 """
@@ -42,7 +46,7 @@ from github_api import (
     graphql,
     log,
 )
-from review_lib import limit_diff, sanitize_text
+from review_lib import limit_diff, remove_review_markers, sanitize_text
 
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 COMMAND_MARKER = "<!-- opencode-command -->"
@@ -53,6 +57,28 @@ RESOLVE_RE = re.compile(
     r"^\s*(?:@opencode|/opencode)\s+resolve\s*[.!]?\s*$", re.IGNORECASE
 )
 MAX_REPLY_CHARS = 8_000
+
+# How much raw model output postprocessing will pattern-scan at all.
+# The reply itself is capped at [MAX_REPLY_CHARS]; scanning four times
+# that in raw text means a reply whose bulk is comments can lose them
+# and still carry a full cap of prose, while everything after the cap
+# is a cut, not a scan — so the reply pipeline's CPU is bounded even
+# when the model prints megabytes of adversarial filler.
+MAX_REPLY_SCAN_CHARS = 4 * MAX_REPLY_CHARS
+
+# How many times the comment/marker removal pair in [clean_reply] sweeps
+# a reply. Neither pass alone is enough: deleting an HTML comment joins
+# its borders (``<!`` + leftover bytes) into text the marker pass must
+# see, and deleting a marker joins its borders into an HTML comment the
+# comment pass must see — regressions pin both. The pair sweeps until the
+# text stops changing; every non-final sweep deletes at least one byte or
+# the loop has already ended, which terminates it on its own. The bound
+# exists for cost only (CWE-1333): at most this many sweeps each costing
+# one scan of [MAX_REPLY_SCAN_CHARS] keeps the total removal work a fixed
+# multiple of the budget every other pass costs. Four is far past the two
+# sweeps any tested trace needs; a reply still changing afterwards is
+# simply posted as-is through the final [sanitize_text], best-effort.
+MAX_REPLY_PASSES = 4
 MAX_PR_BODY_CHARS = 8_000
 MAX_REQUEST_CHARS = 6_000
 MAX_MESSAGE_CHARS = 3_000
@@ -417,15 +443,72 @@ def run_model(
         shutil.rmtree(home, ignore_errors=True)
 
 
+def strip_html_comments(text: str) -> str:
+    """Remove ``<!-- ... -->`` comments in one linear pass.
+
+    Mirrors the lazy-regex semantics it replaces: a comment runs from its
+    opener to the *first* ``-->`` (nested openers are swallowed with it),
+    and an opener that never closes stays as literal text — no ``-->``
+    after it means no further opener can ever match, so the rest of the
+    input passes through untouched. What it does NOT mirror is the work:
+    ``re.sub(r"<!--.*?-->", ...)`` rescans a whole suffix per unmatched
+    opener, so bounded-but-real comment starters could drive quadratic
+    postprocessing CPU on the command process — this scanner visits each
+    byte a constant number of times instead.
+    """
+
+    out = []
+    i = 0
+    size = len(text)
+    while i < size:
+        opener = text.find("<!--", i)
+        if opener < 0:
+            out.append(text[i:])
+            break
+        out.append(text[i:opener])
+        closer = text.find("-->", opener + 4)
+        if closer < 0:
+            # No deeper candidate can match from here: without a later
+            # ``-->`` the remainder is commentless prose plus the opener
+            # the regex would have left in place.
+            out.append(text[opener:])
+            break
+        i = closer + 3
+    return "".join(out)
+
+
 def clean_reply(text: str) -> str:
-    """Turn untrusted model prose into a bounded Markdown reply."""
+    """Return sanitized Markdown, or an empty string for non-string input.
+
+    Limit the input before removal work, then sweep HTML comments and
+    review markers together until the text stops changing — either pass
+    can join its borders into content the other pass would have removed,
+    and a single pass through both leaves whichever formed last behind.
+    Mention neutralization and truncation stay with [sanitize_text], after
+    the loop, so no deletion can assemble a live ``@ping`` (CWE-116).
+    Truncated replies include a notice in addition to the MAX_REPLY_CHARS
+    content limit.
+    """
 
     if not isinstance(text, str):
         return ""
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
-    text = sanitize_text(text, MAX_REPLY_CHARS)
-    text = re.sub(r"</?opencode_review>", "", text, flags=re.IGNORECASE)
-    return text.strip()
+    # Postprocessing runs after the model subprocess's
+    # [TIMEOUT_SECONDS] has stopped applying, on output that may hold
+    # untrusted discussion text or copied diff content. Bound the scan
+    # before any pattern work ([cap_text] also normalizes newlines and
+    # drops NULs first, so no outside join feeds the sweeps) and strip
+    # comments with the linear [strip_html_comments]: every pass below is
+    # then a constant multiple of the reply cap no matter what the model
+    # printed (CWE-1333). [MAX_REPLY_SCAN_CHARS] is four times the reply
+    # cap so a reply whose bulk is comments can drop them and still leave
+    # a full cap of prose.
+    text = cap_text(text, MAX_REPLY_SCAN_CHARS)
+    for _ in range(MAX_REPLY_PASSES):
+        swept = remove_review_markers(strip_html_comments(text))
+        if swept == text:
+            break
+        text = swept
+    return sanitize_text(text, MAX_REPLY_CHARS)
 
 
 def safe_run_url(value: str) -> str:

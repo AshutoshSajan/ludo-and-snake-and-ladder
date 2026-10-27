@@ -87,6 +87,43 @@ void main() {
     });
   });
 
+  test('a granted credential rides the reconnect hello, not the first one', () {
+    fakeAsync((async) {
+      final factory = FakeChannelFactory();
+      final client = OnlineClient('ws://test/ws',
+          seatId: 'p3', name: 'C', channelFactory: factory.create);
+
+      client.connect();
+      async.flushMicrotasks();
+      // Before the seat exists there is nothing to present: the field is
+      // omitted entirely, never an empty string.
+      expect(factory.last.sent.first['credential'], isNull);
+
+      // The server seats us and grants the seat's private reclaim
+      // credential inside 'joined' — the only channel it ever leaves by.
+      factory.last.serverAdd({
+        'type': 'joined',
+        'code': 'GRNT',
+        'color': 'red',
+        'game': 'ludo',
+        'credential': 'cred-1',
+      });
+      async.flushMicrotasks();
+      expect(client.seatCredential, 'cred-1');
+
+      factory.last.dropConnection();
+      async.flushMicrotasks();
+      async.elapse(const Duration(milliseconds: 501));
+      expect(factory.channels, hasLength(2));
+      expect(
+        factory.last.sent
+            .firstWhere((m) => m['type'] == 'hello')['credential'],
+        'cred-1',
+        reason: 'the reconnect presents the granted claim to reclaim the seat',
+      );
+    });
+  });
+
   test('backoff doubles between failed attempts', () {
     fakeAsync((async) {
       final factory = FakeChannelFactory();
@@ -521,6 +558,168 @@ void main() {
             .where((m) => m['type'] == 'voice')
             .length;
         expect(now, voiceCount);
+      });
+    });
+
+    test(
+      "an authoritative left closes the departed seat's peer at once, and "
+      'says nothing on the wire',
+      () {
+        fakeAsync((async) {
+          final factory = FakeChannelFactory();
+          final backend = FakeBackend();
+          final client = OnlineClient('ws://test/ws',
+              seatId: 'p1',
+              name: 'A',
+              voiceBackend: backend,
+              channelFactory: factory.create);
+          client.connect();
+          async.flushMicrotasks();
+          factory.last.serverAdd({
+            'type': 'joined', 'code': 'CODE', 'color': 'red',
+          });
+          factory.last.serverAdd({
+            'type': 'lobby',
+            'code': 'CODE',
+            'started': false,
+            'seats': [
+              {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+              {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+              {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+            ],
+            'spectators': [],
+          });
+          async.flushMicrotasks();
+          client.joinVoice();
+          async.flushMicrotasks();
+          expect(client.voicePeers, containsAll(['p2', 'p3']));
+
+          // B walks out. Membership ends authoritatively, so the peer
+          // closes here rather than waiting for the next roster feed —
+          // and no goodbye goes out, since B's socket is already gone.
+          factory.last.serverAdd({
+            'type': 'left',
+            'name': 'B',
+            'seatId': 'p2',
+            'reason': 'walked',
+          });
+          async.flushMicrotasks();
+
+          expect(client.voicePeers, ['p3'],
+              reason: 'the departed seat loses the mic, survivors stay up');
+          expect(
+            factory.last.sent
+                .whereType<Map>()
+                .where((m) => m['type'] == 'voice' && m['k'] == 'hangup'),
+            isEmpty,
+            reason: "the walk-out ended B's socket; a hangup has no "
+                "recipient left",
+          );
+          expect(client.voiceJoined, isTrue,
+              reason: 'my session keeps running for the remaining seats');
+        });
+      },
+    );
+
+    test(
+      'the seats feed prunes a left-marked seat, and no feed re-mounts it',
+      () {
+        fakeAsync((async) {
+          final factory = FakeChannelFactory();
+          final backend = FakeBackend();
+          final client = OnlineClient('ws://test/ws',
+              seatId: 'p1',
+              name: 'A',
+              voiceBackend: backend,
+              channelFactory: factory.create);
+          client.connect();
+          async.flushMicrotasks();
+          factory.last.serverAdd({
+            'type': 'joined', 'code': 'CODE', 'color': 'red',
+          });
+          factory.last.serverAdd({
+            'type': 'lobby',
+            'code': 'CODE',
+            'started': false,
+            'seats': [
+              {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+              {'name': 'B', 'color': 'blue', 'seatId': 'p2'},
+              {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+            ],
+            'spectators': [],
+          });
+          async.flushMicrotasks();
+          client.joinVoice();
+          async.flushMicrotasks();
+          expect(client.voicePeers, containsAll(['p2', 'p3']));
+
+          // B's forever line rides the seat feed; the reconcile keyed on
+          // exactly this feed must close that peer.
+          final afterBLeft = [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2', 'left': true},
+            {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+          ];
+          factory.last.serverAdd({'type': 'seats', 'seats': afterBLeft});
+          async.flushMicrotasks();
+          expect(client.voicePeers, ['p3'],
+              reason: 'the historical entry loses the peer, C stays mounted');
+
+          // The line keeps riding both feeds until the room ends; neither
+          // one may re-authorize a listening peer for it.
+          factory.last.serverAdd({'type': 'seats', 'seats': afterBLeft});
+          factory.last.serverAdd({
+            'type': 'lobby',
+            'code': 'CODE',
+            'started': true,
+            'seats': afterBLeft,
+            'spectators': [],
+          });
+          async.flushMicrotasks();
+          expect(client.voicePeers, ['p3'],
+              reason: 'a left entry is not an eligible seat on any feed');
+        });
+      },
+    );
+
+    test('joining voice finds no peer behind a left-marked seat', () {
+      fakeAsync((async) {
+        final factory = FakeChannelFactory();
+        final backend = FakeBackend();
+        final client = OnlineClient('ws://test/ws',
+            seatId: 'p1',
+            name: 'A',
+            voiceBackend: backend,
+            channelFactory: factory.create);
+        client.connect();
+        async.flushMicrotasks();
+        factory.last.serverAdd({
+          'type': 'joined', 'code': 'CODE', 'color': 'red',
+        });
+        factory.last.serverAdd({
+          'type': 'lobby',
+          'code': 'CODE',
+          'started': false,
+          'seats': [
+            {'name': 'A', 'color': 'red', 'seatId': 'p1'},
+            {'name': 'B', 'color': 'blue', 'seatId': 'p2', 'left': true},
+            {'name': 'C', 'color': 'green', 'seatId': 'p3'},
+          ],
+          'spectators': [],
+        });
+        async.flushMicrotasks();
+        client.joinVoice();
+        async.flushMicrotasks();
+
+        expect(client.voiceJoined, isTrue);
+        expect(client.voicePeers, ['p3'],
+            reason: 'only the seats still at the table mount');
+        final offers = factory.last.sent
+            .whereType<Map>()
+            .where((m) => m['type'] == 'voice' && m['k'] == 'offer')
+            .map((m) => m['to']);
+        expect(offers, {'p3'},
+            reason: 'the departed seat is offered nothing to listen to');
       });
     });
   });

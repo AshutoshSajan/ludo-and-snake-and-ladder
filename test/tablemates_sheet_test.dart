@@ -73,7 +73,8 @@ void main() {
                   context,
                   client: client,
                   friendClientForTest: FriendClient(
-                    serverUrl: 'ws://x/ws',
+                    serverUrl: 'wss://x/ws',
+                    credential: 'test-credential',
                     httpClient: MockClient((req) async {
                       onCall(req);
                       return http.Response(

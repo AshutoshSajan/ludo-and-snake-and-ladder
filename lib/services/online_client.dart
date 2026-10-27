@@ -375,6 +375,8 @@ class OnlineClient extends ChangeNotifier {
     this.serverUrl, {
     required this.seatId,
     required this.name,
+    this.initialSeatCredential = '',
+    this.credential = '',
     this.gameType = 'ludo',
     this.quickMatch = false,
     this.capacity = 4,
@@ -386,6 +388,34 @@ class OnlineClient extends ChangeNotifier {
   final String serverUrl;
   final String seatId; // profile id — our identity across reconnects
   final String name;
+
+  /// The seat's private reconnect credential restored from storage, so a
+  /// restart mid-game can present the same claim the device held before it
+  /// died (the server refuses a seat rewrite without it). Refreshed from
+  /// every `joined` response; empty until the first grant arrives. Not the
+  /// friends-plane [credential]: this one proves a game-seat claim to the
+  /// game server, minted there and granted in `joined`.
+  final String initialSeatCredential;
+
+  /// The private reconnect credential granted for this client's seat, kept
+  /// separate from the public roster identity (CWE-287 fix). Anything the
+  /// server broadcasts — lobby, seats, state — never contains it.
+  String _seatCredential = '';
+
+  /// The latest nonempty server grant, or [initialSeatCredential] until one
+  /// arrives. Presented in the WebSocket hello when nonempty.
+  String get seatCredential =>
+      _seatCredential.isEmpty ? initialSeatCredential : _seatCredential;
+
+  /// The friends credential paired with [seatId] — the device's private
+  /// identity half. The friends server binds it to the seat id, so the
+  /// friends calls this client's screens make carry it as `Authorization:
+  /// Bearer`; the seat id alone stays the public roster value and proves
+  /// nothing. Empty in the older constructions and most tests, which
+  /// never touch the friends HTTP plane. Distinct from the game seat's
+  /// reclaim credential ([seatCredential]), which the game server grants
+  /// per room and this client replays through the WebSocket hello.
+  final String credential;
 
   /// Which game to play when creating a room ('ludo' | 'snakes'). Joiners
   /// have their value overwritten by the room's real game type on 'joined'.
@@ -719,6 +749,11 @@ class OnlineClient extends ChangeNotifier {
         'seatId': seatId,
         'name': name,
         'game': gameType,
+        // The private reconnect credential, presented when this device
+        // holds one: the server re-verifies the claim on a widen-before
+        // ever installing a connection under a seen-before seat id.
+        // First-time joins have none yet and the field is omitted.
+        if (seatCredential.isNotEmpty) 'credential': seatCredential,
         if (quickMatch && (_joinCode == null || _joinCode!.isEmpty))
           'match': true,
         // Room creators (and quick match, which creates too) name the table
@@ -904,6 +939,15 @@ class OnlineClient extends ChangeNotifier {
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
         myColor = colorName == null ? null : LudoColor.values.byName(colorName);
+        // The seat's private reconnect credential rides the joined response
+        // and nothing else — the server minted it for this admission and
+        // every later hello presents it, so a reclaim verifies the claimant
+        // instead of the publicly-visible seat id (CWE-287). Absent before
+        // the first grant; a regrant overwrites, an absent field keeps.
+        final granted = msg['credential'] as String?;
+        if (granted != null && granted.isNotEmpty) {
+          _seatCredential = granted;
+        }
         // A (re)join is a clean slate: whatever eviction this client saw
         // last belongs to the room we just left.
         _mySeatEvicted = false;
@@ -928,9 +972,11 @@ class OnlineClient extends ChangeNotifier {
         // Where the voice mesh follows the roster — but only for a join in
         // progress: pre-arming peers without a mic grants nothing and would
         // burn an RTCPeerConnection per seat for players who never speak.
+        // The set is eligibility-filtered: seats marked left lost their
+        // membership and must not regain a listening peer here (CWE-863).
         final v = _voice;
         if (v != null && v.enabled) {
-          v.updateSeats(lobbySeats.map((s) => s.seatId).toSet(), seatId);
+          v.updateSeats(voiceEligibleSeats, seatId);
         }
       case 'voice':
         // Signalling for a session I joined; a client that never enabled
@@ -968,6 +1014,16 @@ class OnlineClient extends ChangeNotifier {
               if ((s as Map)['misses'] is num)
                 (s['seatId'] as String): (s['misses'] as num).toInt(),
           });
+        // The voice mesh follows this feed too. `seats` ships on every
+        // seat change and carries the `left` marks the roster keeps
+        // until the room ends, so this — not the sparser lobby
+        // broadcast — is normally the first reconciliation to keep a
+        // departed seat's peer from hanging on to the table's audio
+        // (CWE-863). Eligibility-filtered, like everywhere else.
+        final v = _voice;
+        if (v != null && v.enabled) {
+          v.updateSeats(voiceEligibleSeats, seatId);
+        }
         onSeats?.call();
       case 'left':
         // Worth a line of its own: without it a departing player's pieces
@@ -992,6 +1048,14 @@ class OnlineClient extends ChangeNotifier {
                   ? 'You were removed — five turns missed'
                   : '$gone was removed — five turns missed')
             : (mine ? 'You left the game' : '$gone left the game');
+        // Membership ended authoritatively, so the departed seat's
+        // listening access ends here — its live mesh peer is closed at
+        // once instead of waiting for the next roster feed to notice
+        // (CWE-863). No hangup goes out: the walk-out already ended that
+        // player's socket, so there is nobody left to deliver it to.
+        // Older frames can omit the seat id entirely; the next roster
+        // feed reconciles those.
+        _voice?.removeSeat(goneSeat);
         onLeft?.call(leftNotice!);
       case 'turnMissed':
         // Deliberately silent: the strike dots on the missed seat's corner
@@ -1182,16 +1246,27 @@ class OnlineClient extends ChangeNotifier {
     onChanged: notifyListeners,
   );
 
-  /// Joins the table voice. False when the mic was refused — the caller
-  /// surfaces that rather than flipping the button into a silent state.
+  /// Seat ids the voice mesh may sit on: every roster line that carries a
+  /// seat id and has not walked out.
+  ///
+  /// Historical `left` entries persist in both feeds until the room ends,
+  /// so any reconciliation that feeds ids straight from [lobbySeats]
+  /// authorizes listening access for people no longer at the table
+  /// (CWE-863). This is the one place the eligibility line is drawn, and
+  /// every reconcile site goes through it.
+  Set<String> get voiceEligibleSeats => {
+    for (final s in lobbySeats)
+      if (s.seatId.isNotEmpty && s.status != SeatStatus.left) s.seatId,
+  };
+
+  /// Joins the table voice after reconciling eligible peers. Returns false
+  /// for spectators or when the mic is refused, so callers can show failure.
   Future<bool> joinVoice() async {
     if (_spectating) return false;
     // The seat roster must be known before offers are elected; feeding it
-    // here ensures a join during a lagging lobby feed still meshes.
-    voice.updateSeats(
-      lobbySeats.map((s) => s.seatId).where((id) => id.isNotEmpty).toSet(),
-      seatId,
-    );
+    // here ensures a join during a lagging lobby feed still meshes — and
+    // only for seats the roster currently authorizes (CWE-863).
+    voice.updateSeats(voiceEligibleSeats, seatId);
     return voice.enable();
   }
 

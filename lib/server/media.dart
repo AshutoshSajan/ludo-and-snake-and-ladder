@@ -15,10 +15,16 @@
 /// the announcement both land on the instance that owns that room — so
 /// nothing here ever needs shared storage. Caps keep a bad actor (or a
 /// bug) from turning the server into a hosting farm: a note is capped
-/// per its kind ([maxVoiceNoteBytes] for recordings, [maxImageNoteBytes]
-/// for keyboard images), a room keeps at most [maxPerRoom] of them
-/// (oldest-first eviction), the whole store stays under [maxBytes], and
-/// everything older than [ttl] is swept away lazily.
+/// per its kind ([maxVoiceNoteBytes] for recordings,
+/// [maxImageNoteBytes] for keyboard images), a room keeps at most
+/// [maxPerRoom] of them (oldest-first eviction), the whole store stays
+/// under [maxBytes], and everything older than [ttl] is swept away
+/// lazily. Eviction leaves the id reserved (also for [ttl], counted from
+/// the moment the note left): a chat line's URL answered its author's
+/// bytes for the note's whole life, so no further upload can mount
+/// different bytes onto that id while history quoting the URL can still
+/// be pulled — the eviction side of the announced-media immutability
+/// (CWE-639).
 library;
 
 import 'dart:convert';
@@ -85,6 +91,9 @@ class MediaNoteStore {
   final int maxPerRoom;
   final int maxBytes;
 
+  /// How many evicted ids stay reserved per (room, kind): see [_retired].
+  static const maxReservationsPerKind = 128;
+
   int maxNoteBytesFor(MediaKind kind) =>
       kind == MediaKind.voice ? maxVoiceNoteBytes : maxImageNoteBytes;
 
@@ -92,9 +101,29 @@ class MediaNoteStore {
   final Map<String, Map<MediaKind, Map<String, MediaNote>>> _rooms = {};
   int _totalBytes = 0;
 
-  /// Stores one note. Null when any door says no: id shape, size cap of
-  /// its kind, the duration sanity for a voice note, the per-room cap,
-  /// or the running byte budget.
+  /// Ids whose bytes left the store — evicted by a cap, a budget or the
+  /// sweep — so an announced URL stays attached to its author's bytes
+  /// even after the store stops holding them (CWE-639 is the immutability
+  /// side of announcements; this is the eviction side). The timestamp is
+  /// when the note LEFT (not when it was stored), and the entry ages out
+  /// with the same [ttl] the notes age out with: by then the URL has been
+  /// unresolvable for the full note ttl already, so no id can be
+  /// resurrected while its bytes could still be pulled. Per (room, kind)
+  /// the window is capped at [maxReservationsPerKind] — a genuine
+  /// reservation never rotates out within a normal room's life, while a
+  /// fabricated id flood cannot grow this map unboundedly.
+  final Map<String, Map<MediaKind, Map<String, DateTime>>> _retired = {};
+
+  /// Stores a note, sweeping expired notes and evicting the oldest notes
+  /// as needed for the room and byte budgets. Returns null for an invalid
+  /// id, empty room code, empty or oversized data, or a voice duration
+  /// outside the inclusive range of 100 to 60,000 milliseconds.
+  ///
+  /// An occupied (room, kind, id) returns null without changing the store,
+  /// even if that note has expired but has not yet been swept — and so does
+  /// a (room, kind, id) whose note was evicted or swept: the id stays
+  /// reserved while its announced URL could still have been pulled, so
+  /// new bytes cannot mount themselves onto history.
   MediaNote? put({
     required MediaKind kind,
     required String code,
@@ -111,9 +140,23 @@ class MediaNoteStore {
     if (kind == MediaKind.voice && (durMs < 100 || durMs > 60_000)) {
       return null;
     }
-
+    // Announced media is immutable (CWE-639): the chat line that carried
+    // this URL keeps its author's attribution, so a second upload onto the
+    // same (room, kind, id) is either a retry or an attempt to swap the
+    // bytes under a live message. Refused before anything moves —
+    // no sweep, no eviction, no byte bookkeeping — so the original note
+    // survives exactly as its author held it. The refusal reaches past
+    // eviction too: an evicted id stays reserved (see [_retired]), so a
+    // flood that pushes an announced note out of a room cannot re-mount
+    // new bytes on the history's URL. An expired note lands here as that
+    // fresh reservation: a day dead, its id is still not available —
+    // until the [ttl] ages the reservation out (by then the URL has been
+    // unresolvable for a whole note lifetime).
     final t = _now();
     _sweep(t);
+    final slot = _rooms[code]?[kind];
+    if (slot != null && slot.containsKey(id)) return null;
+    if (_retired[code]?[kind]?.containsKey(id) ?? false) return null;
 
     final room = _rooms.putIfAbsent(code, () => {});
     // Room full: the oldest note of any kind yields its place first.
@@ -123,6 +166,7 @@ class MediaNoteStore {
       final victim = _oldestInRoom(room);
       if (victim == null) break;
       _totalBytes -= room[victim.$1]!.remove(victim.$2)!.data.length;
+      _retire(code, victim.$1, victim.$2, t);
     }
     // Budget over: walk rooms oldest-first, dropping their oldest notes.
     while (_totalBytes + data.length > maxBytes) {
@@ -137,6 +181,7 @@ class MediaNoteStore {
         _rooms[victimRoom]!.remove(victimKind);
       }
       if (_rooms[victimRoom]!.isEmpty) _rooms.remove(victimRoom);
+      _retire(victimRoom, victimKind, victimId, t);
     }
 
     final note = MediaNote(
@@ -152,6 +197,23 @@ class MediaNoteStore {
     _totalBytes += data.length;
     return note;
   }
+
+  /// Whether a note already occupies this exact (room, kind, id) slot.
+  ///
+  /// The upload handler's fast path for answering a duplicate with a
+  /// pointed 409 instead of the generic 400. Reporting, never authority:
+  /// across the handler's awaits a racing upload can slip in, so [put]
+  /// re-verifies the same rule atomically and always has the last word.
+  /// A reserved (evicted) id answers the same: the wording's fix — send
+  /// it under a fresh id — is what an evicted id's author's old chat
+  /// line needs anyway.
+  bool exists({
+    required MediaKind kind,
+    required String code,
+    required String id,
+  }) =>
+      (_rooms[code]?[kind]?.containsKey(id) ?? false) ||
+      (_retired[code]?[kind]?.containsKey(id) ?? false);
 
   /// Fetches one note, sweeping expired ones first — the lookup itself is
   /// the cheapest place to age things out, since a pull after a day is
@@ -210,6 +272,27 @@ class MediaNoteStore {
     return pick;
   }
 
+  /// Reserves an id after its note left the store — the eviction twin of
+  /// the immutability gate in [put]: from the moment the bytes were
+  /// announced they spell one (room, kind, id), so the id they freed is
+  /// not available to mount different bytes under the same URL. Capped
+  /// FIFO per (room, kind): the oldest reservation yields when a room's
+  /// kind space exhausts [maxReservationsPerKind], which protects the
+  /// store from a fabricated-id flood while keeping every reservation a
+  /// real room's churn produces.
+  void _retire(String code, MediaKind kind, String id, DateTime t) {
+    final perKind = _retired
+        .putIfAbsent(code, () => {})
+        .putIfAbsent(kind, () => {});
+    perKind[id] = t;
+    // Plain insertion-order FIFO: reservations land one per eviction, so
+    // the first key is the oldest, and a flood that outruns the cap
+    // opens its own old ids back up — never the room's recent history.
+    while (perKind.length > maxReservationsPerKind) {
+      perKind.remove(perKind.keys.first);
+    }
+  }
+
   void _sweep(DateTime t) {
     final deadRooms = <String>[];
     for (final room in _rooms.entries) {
@@ -223,6 +306,7 @@ class MediaNoteStore {
         }
         for (final id in deadIds) {
           slot.value.remove(id);
+          _retire(room.key, slot.key, id, t);
         }
       }
       room.value.removeWhere((_, notes) => notes.isEmpty);
@@ -231,12 +315,42 @@ class MediaNoteStore {
     for (final c in deadRooms) {
       _rooms.remove(c);
     }
+    // Reservations age out with the notes' own ttl: a whole [ttl] has
+    // passed since the note left, so its URL has been unresolvable that
+    // long already — nothing announces or pulls it anymore, and the id
+    // returns to the free pool.
+    final deadReservationRooms = <String>[];
+    for (final room in _retired.entries) {
+      for (final slot in room.value.entries) {
+        final stale = [
+          for (final e in slot.value.entries)
+            if (t.difference(e.value) > ttl) e.key,
+        ];
+        for (final id in stale) {
+          slot.value.remove(id);
+        }
+      }
+      room.value.removeWhere((_, reserved) => reserved.isEmpty);
+      if (room.value.isEmpty) deadReservationRooms.add(room.key);
+    }
+    for (final c in deadReservationRooms) {
+      _retired.remove(c);
+    }
   }
 }
 
 /// Shared upload validation: the room must be live on this instance —
 /// uploads ride the room's chat, so a note for a room that does not
 /// exist here has nowhere to be announced.
+///
+/// Checks [mimeOk] before reading and optional [bodyOk] after reading a
+/// size-limited body. Success returns the stored URL and, for voice, the
+/// duration in milliseconds. Returns 405 for other methods, 404 for an
+/// unknown room, 409 for an already occupied id — live or reserved by a
+/// past note's eviction, so history's URLs cannot be remounted — 413 for
+/// oversized data, or 400 for validation/store rejection (including a
+/// racing duplicate).
+/// Request stream and validation callback errors propagate.
 Future<shelf.Response> _uploadNote(
   shelf.Request req, {
   required MediaKind kind,
@@ -245,6 +359,8 @@ Future<shelf.Response> _uploadNote(
   required String verb,
   required bool Function(String mime) mimeOk,
   required String mimeError,
+  bool Function(Uint8List bytes)? bodyOk,
+  String? bodyError,
 }) async {
   if (req.method != 'POST') {
     return _json(405, 'Use POST to upload a $verb');
@@ -255,12 +371,20 @@ Future<shelf.Response> _uploadNote(
   if (!roomIsLive(code)) {
     return _json(404, 'No such room to leave a $verb in');
   }
+  // Announced media is immutable (CWE-639): a chat line already pointing
+  // at this id keeps its author's attribution, so a second upload onto it
+  // is refused with the fix named — send it under a fresh id. The check is
+  // the wording fast path only; across the body-read awaits a racing
+  // upload can still slip past, and [MediaNoteStore.put] re-verifies the
+  // same rule atomically with the final say.
+  if (store.exists(kind: kind, code: code, id: id)) {
+    return _json(409, 'A $verb with this id already exists — send it under a fresh id');
+  }
 
   final mime = (req.headers['content-type'] ?? '').split(';').first.trim();
   if (mime.isEmpty || !mimeOk(mime)) {
     return _json(400, mimeError);
   }
-
   int durMs = 0;
   if (kind == MediaKind.voice) {
     durMs = int.tryParse(req.headers['x-voice-duration'] ?? '') ?? 0;
@@ -274,11 +398,21 @@ Future<shelf.Response> _uploadNote(
       return _json(413, '${verb[0].toUpperCase()}${verb.substring(1)} too large');
     }
   }
+  final data = bytes.toBytes();
+  // The label alone is not proof of format: check what actually arrives
+  // before anything is stored. Stored notes are announce-and-immutable
+  // (the CWE-639 contract above), so a body that never should have been
+  // accepted could not be corrected later — the gate must run here,
+  // after the cap has bounded the materialization and before
+  // [MediaNoteStore.put].
+  if (bodyOk != null && !bodyOk(data)) {
+    return _json(400, bodyError ?? '$verb rejected (unsupported body)');
+  }
   final note = store.put(
     kind: kind,
     code: code,
     id: id,
-    data: bytes.toBytes(),
+    data: data,
     mime: mime,
     durMs: durMs,
   );
@@ -312,26 +446,88 @@ Future<shelf.Response> voiceNoteUpload(
 /// Handles `POST /media/image?room=CODE&id=xxx` — a GIF (or a still
 /// image) inserted from the mobile keyboard, uploaded before it is
 /// announced as a normal `'gif'` chat line. Same room-gating as voice.
+///
+/// Acceptance requires both an allowed raster content type and a matching
+/// signature from any allowed raster format:
+///
+/// * the content type must name one of the four formats the
+///   keyboard-content client actually sends ([_imageNoteMimes] — which
+///   is exactly why `image/svg+xml`, which `image/*` used to pass, is
+///   out: an SVG file is an XML *document*, not a picture, and inline
+///   serving would execute it as one);
+/// * the bytes themselves must begin with a real raster signature
+///   ([_startsAsRaster]) — a label claiming `image/gif` never earns a
+///   stored `<?xml …` or `<script>` body. These are prefix checks, not
+///   full image decoding or validation of the remaining bytes.
 Future<shelf.Response> imageNoteUpload(
   shelf.Request req, {
   required MediaNoteStore store,
   required bool Function(String code) roomIsLive,
 }) {
-  bool imageMime(String mime) => mime.startsWith('image/');
   return _uploadNote(
     req,
     kind: MediaKind.image,
     store: store,
     roomIsLive: roomIsLive,
     verb: 'image note',
-    mimeOk: imageMime,
-    mimeError: 'A keyboard image must be a picture',
+    mimeOk: _imageNoteMimes.contains,
+    mimeError: 'Only GIF, PNG, JPEG or WebP images are accepted — '
+        'SVG is a document, not a picture',
+    bodyOk: _startsAsRaster,
+    bodyError: 'That file does not start like a GIF, PNG, JPEG or WebP picture',
   );
 }
+
+/// The raster mimes the keyboard-content flow can produce
+/// (lib/ui/shared/keyboard_content.dart's allow-list mirrored here).
+const Set<String> _imageNoteMimes = {
+  'image/gif',
+  'image/webp',
+  'image/png',
+  'image/jpeg',
+};
+
+/// True when [bytes] begins with the signature of one of the four raster
+/// formats [_imageNoteMimes] allows. The keyboard contract may under-label
+/// the format (an IME
+/// that omits its mime type is sent as `image/gif` whatever the picture
+/// is — see `_safeMime`'s default), so the body need not match its own
+/// label's family. Only the prefix is checked; the rest is not decoded or
+/// validated as an image.
+bool _startsAsRaster(Uint8List bytes) {
+  bool has(int at, List<int> sig) {
+    if (bytes.length - at < sig.length) return false;
+    for (var i = 0; i < sig.length; i++) {
+      if (bytes[at + i] != sig[i]) return false;
+    }
+    return true;
+  }
+
+  return has(0, _gif87aSignature) ||
+      has(0, _gif89aSignature) ||
+      has(0, _pngSignature) ||
+      has(0, _jpegSignature) ||
+      (has(0, _riffSignature) && has(8, _webpSignature));
+}
+
+const List<int> _gif87aSignature = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61];
+const List<int> _gif89aSignature = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+const List<int> _pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const List<int> _jpegSignature = [0xff, 0xd8, 0xff];
+const List<int> _riffSignature = [0x52, 0x49, 0x46, 0x46];
+const List<int> _webpSignature = [0x57, 0x45, 0x42, 0x50];
 
 /// Handles `GET /media/<kind>/<code>/<id>` — the raw bytes, no-store
 /// because notes die with the room and a cached ghost is worse than a
 /// 404.
+///
+/// The bytes are untrusted uploads, so they get served as inert as the
+/// web can make them (CWE-79): `content-security-policy: sandbox` gives
+/// a document load of this URL a unique opaque origin with scripting
+/// disabled, and `x-content-type-options: nosniff` refuses the browser
+/// any second opinion about the bytes' type. Inline mounting — the only
+/// way a played note actually appears — is unaffected: those
+/// directives bind document contexts, not `<img>`/`<audio>` embeds.
 shelf.Response mediaNoteServe(
   shelf.Request req, {
   required MediaNoteStore store,
@@ -356,6 +552,8 @@ shelf.Response mediaNoteServe(
       'content-type': note.mime,
       'cache-control': 'no-store',
       'accept-ranges': 'none',
+      'content-security-policy': 'sandbox',
+      'x-content-type-options': 'nosniff',
     },
   );
 }

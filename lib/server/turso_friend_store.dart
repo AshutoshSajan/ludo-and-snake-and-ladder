@@ -159,6 +159,10 @@ class TursoFriendStore implements FriendStore {
         'UNIQUE(blocker, blocked))',
     'CREATE INDEX IF NOT EXISTS idx_friend_blocks_blocker '
         'ON friend_blocks(blocker)',
+    'CREATE TABLE IF NOT EXISTS friend_credentials ('
+        'seat_id TEXT PRIMARY KEY, '
+        'token_hash TEXT NOT NULL UNIQUE, '
+        'created_ms INTEGER NOT NULL)',
   ];
 
   /// Columns added after the first remote databases were created. SQLite
@@ -402,6 +406,78 @@ class TursoFriendStore implements FriendStore {
     final looksLikeCode =
         t.length == 6 && RegExp(r'^[2-9A-HJ-NP-Z]+$').hasMatch(t);
     return looksLikeCode ? profileByCode(t) : profile(t);
+  }
+
+  static const _bindCredentialSql =
+      'INSERT INTO friend_credentials (seat_id, token_hash, created_ms) '
+      'SELECT ?, ?, ? WHERE NOT EXISTS ('
+      'SELECT 1 FROM friend_credentials WHERE seat_id = ?)';
+
+  /// Binds a caller-hashed token using [FriendStore.bindCredential]'s rules.
+  /// Unique-constraint failures during insertion return false; other
+  /// [TursoFriendStoreException]s propagate, including lookup/schema failures.
+  @override
+  Future<bool> bindCredential(String seatId, String tokenHash) async {
+    final id = seatId.trim();
+    if (id.isEmpty) throw ArgumentError('seatId required');
+    await _ensureSchema();
+    // Same verdict rule as the SQLite store: a hash with an owner keeps
+    // it (idempotent re-bind of the same seat), a fresh hash binds only
+    // while the seat is free, and a UNIQUE clash (hash or race) is a no.
+    final boundToSeat = await _pipeline([
+      _execute('SELECT seat_id FROM friend_credentials WHERE token_hash = ?', [
+        tokenHash,
+      ]),
+      _close,
+    ]);
+    final bound = boundToSeat.first;
+    if (bound.rows.isNotEmpty) {
+      return bound.rowMap(bound.rows.first)['seat_id'] == id;
+    }
+    try {
+      final tables = await _pipeline([
+        _execute(_bindCredentialSql, [id, tokenHash, _nowMs, id]),
+        _execute(
+          'SELECT token_hash FROM friend_credentials WHERE seat_id = ?',
+          [id],
+        ),
+        _close,
+      ]);
+      final table = tables[1];
+      if (table.rows.isEmpty) return false;
+      return table.rowMap(table.rows.first)['token_hash'] == tokenHash;
+    } on TursoFriendStoreException catch (e) {
+      // A concurrent first bind or a hash stolen by another seat.
+      if (!_isUniqueViolation(e)) rethrow;
+      return false;
+    }
+  }
+
+  @override
+  Future<String?> seatForCredential(String tokenHash) async {
+    await _ensureSchema();
+    final tables = await _pipeline([
+      _execute('SELECT seat_id FROM friend_credentials WHERE token_hash = ?', [
+        tokenHash,
+      ]),
+      _close,
+    ]);
+    final table = tables.first;
+    return table.rows.isEmpty
+        ? null
+        : table.rowMap(table.rows.first)['seat_id'] as String;
+  }
+
+  @override
+  Future<void> clearCredential(String seatId) async {
+    await _ensureSchema();
+    await _pipeline([
+      _execute(
+        'DELETE FROM friend_credentials WHERE seat_id = ?',
+        [seatId.trim()],
+      ),
+      _close,
+    ]);
   }
 
   Future<FriendProfile?> _singleProfile(String sql, List<Object?> args) async {

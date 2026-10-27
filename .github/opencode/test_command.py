@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -271,6 +272,75 @@ class ReplyTests(unittest.TestCase):
     def test_clean_reply_caps(self):
         reply = clean_reply("x" * (command.MAX_REPLY_CHARS + 100))
         self.assertIn("_(truncated)_", reply)
+
+    def test_clean_reply_strips_nested_opener_with_first_closer(self):
+        # Lazy-regex parity: a comment runs from its opener to the first
+        # "-->", swallowing any nested opener on the way.
+        reply = clean_reply("pre <!-- a <!-- b --> mid")
+        self.assertNotIn("<!--", reply)
+        self.assertIn("pre", reply)
+        self.assertIn("mid", reply)
+
+    def test_clean_reply_keeps_an_unterminated_opener_as_text(self):
+        # Parity with the regex's failure mode: without a later "-->" the
+        # opener stays literal and the prose after it is untouched.
+        reply = clean_reply("lead-in <!-- never closed, no closer anywhere")
+        self.assertIn("lead-in", reply)
+        self.assertIn("<!-- never closed", reply)
+
+    def test_clean_reply_is_linear_under_unclosed_opener_flood(self):
+        # CWE-1333: thousands of "<!--" openers with no closer once made
+        # the regex rescans overlapping suffixes — quadratic CPU outside
+        # the model subprocess budget. The scanner is a constant number
+        # of finds over a bounded cap; this assert is generous but would
+        # never hold for the old quadratic pass.
+        text = "<!-- flood\n" * 60_000
+        started = time.perf_counter()
+        reply = clean_reply(text)
+        elapsed = time.perf_counter() - started
+        self.assertLess(elapsed, 1.0,
+                        "postprocessing must stay inside the command budget")
+        self.assertIn("_(truncated)_", reply)
+
+    def test_clean_reply_defuses_the_nested_marker_mention_assembly(self):
+        # CWE-116 regression: markers nested inside themselves survive a
+        # single removal pass as re-assemblable residue; the fixpoint and
+        # the neutralize-after-every-join ordering close it.
+        reply = clean_reply("@<opencode_</opencode_review>review>victim")
+        self.assertNotIn("@victim", reply)
+        self.assertIn("@\u200bvictim", reply)
+        self.assertNotIn("<opencode_review>", reply)
+
+    def test_clean_reply_neutralises_mentions_joined_by_comment_removal(self):
+        # Comment deletion joins characters; the mention pass runs after
+        # that join, so an '@' assembled against a name still cannot ping.
+        reply = clean_reply("see <!-- ok -->@<!-- x -->victim")
+        self.assertNotIn("@victim", reply)
+        self.assertIn("@\u200bvictim", reply)
+
+    def test_clean_reply_removes_a_comment_rejoined_from_stripped_pieces(self):
+        # Comment-reformation trace 1: the comment sweep deletes `<!--a-->`
+        # and its join re-forms `<!--secret tail-->` from the `<!` it left
+        # behind — content a single sweep by original indexes never
+        # rescans. The pair loop removes it again, so nothing hidden-side
+        # reaches the posted comment.
+        reply = clean_reply("ok <!<!--a-->--secret tail-->(rest)")
+        self.assertNotIn("<!--", reply)
+        self.assertNotIn("secret", reply)
+        self.assertIn("ok", reply)
+        self.assertIn("(rest)", reply)
+
+    def test_clean_reply_removes_a_comment_rejoined_from_marker_pieces(self):
+        # Comment-reformation trace 2: the marker sweep deletes
+        # `<opencode_review>` and its join re-forms `<!--mention me-->`
+        # across the marker's borders. The loop sweeps again and both the
+        # formed comment and its payload are gone.
+        reply = clean_reply("fine <!<opencode_review>--mention me-->kept")
+        self.assertNotIn("<!--", reply)
+        self.assertNotIn("<opencode_review>", reply)
+        self.assertNotIn("mention me", reply)
+        self.assertIn("fine", reply)
+        self.assertIn("kept", reply)
 
     def test_with_footer_marks_the_comment(self):
         body = with_footer("hello", model="opencode/model", run_url="https://example.test/run")

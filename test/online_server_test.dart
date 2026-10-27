@@ -36,6 +36,7 @@ import '../bin/server.dart'
         corsMiddleware,
         jsonErrorMiddleware,
         wsHandler,
+        maxIncomingMessageChars,
         leaderboardHandler,
         leaderboardStore,
         authority,
@@ -87,6 +88,27 @@ Map<String, dynamic>? _seatIn(Map<String, dynamic>? seatsFeed, String seatId) {
     if (s['seatId'] == seatId) return s;
   }
   return null;
+}
+
+/// The deliberate-silence check: drains whatever already shipped, waits
+/// [wait] for the socket to settle, then asserts no [type] message
+/// arrived meanwhile — the "did the noise re-ship anything?" side of the
+/// change-only lobby lane. Every other reading of a buffer is a
+/// consume-on-match; this one listens for absence.
+Future<void> expectQuiet(
+  List<Map<String, dynamic>> buf,
+  String type, {
+  Duration wait = const Duration(milliseconds: 300),
+}) async {
+  // What is already in the buffer predates the check; the question is
+  // about what arrives from here on.
+  buf.clear();
+  await Future<void>.delayed(wait);
+  expect(
+    [for (final m in buf) m['type']],
+    isNot(contains(type)),
+    reason: 'no "$type" is expected while nothing changed',
+  );
 }
 
 /// Cluster-registry stub that refuses the first claim — as if another
@@ -743,6 +765,84 @@ void main() {
         line['note'],
         isNull,
         reason: 'no key for an unexplained audio url',
+      );
+    });
+  });
+
+  group('GameAuthority: change-only lobby lane (CWE-400 fix)', () {
+    /// The `lobby` payloads the room has shipped so far, decoded.
+    List<Map<String, dynamic>> lobbies(List<String> raw) => [
+      for (final j in raw)
+        if ((jsonDecode(j) as Map<String, dynamic>)['type'] == 'lobby')
+          jsonDecode(j) as Map<String, dynamic>,
+    ];
+
+    test('an unchanged roster ships once and stays quiet; every real change '
+        're-ships immediately', () {
+      final hostLog = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: hostLog.add));
+
+      // The host's ship — the same thing hello does at the transport.
+      room.broadcastLobbyIfChanged();
+      expect(lobbies(hostLog), hasLength(1));
+      expect((lobbies(hostLog).single)['capacity'], 4);
+
+      // Identical contents: nothing new on the wire.
+      room.broadcastLobbyIfChanged();
+      expect(
+        lobbies(hostLog),
+        hasLength(1),
+        reason: 'a no-op intent must not re-serialize the roster',
+      );
+
+      // A real seat change (what a join does before shipping the lane).
+      auth.joinWithColor(
+        room.code,
+        _member(LudoColor.blue, id: 'guest', seatId: 'guest'),
+        LudoColor.blue,
+      );
+      room.broadcastLobbyIfChanged();
+      expect(
+        (lobbies(hostLog)[1]['seats'] as List).length,
+        2,
+        reason: 'a roster change ships immediately',
+      );
+
+      // Back to quiet.
+      room.broadcastLobbyIfChanged();
+      expect(lobbies(hostLog), hasLength(2));
+
+      // The started flag is part of the payload, so a start ships too.
+      room.start();
+      room.broadcastLobbyIfChanged();
+      expect((lobbies(hostLog).last)['started'], isTrue);
+
+      // And a watcher changes the spectator list.
+      auth.spectateRoom(
+        room.code,
+        _member(LudoColor.green, id: 'watcher', seatId: 'watcher'),
+      );
+      room.broadcastLobbyIfChanged();
+      expect((lobbies(hostLog).last)['spectators'], contains('Green'));
+    });
+
+    test('dedupe state dies with the room, so a new room starts shipping', () {
+      final raw = <String>[];
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: raw.add));
+      room.broadcastLobbyIfChanged();
+      expect(lobbies(raw), hasLength(1));
+      // Room removed and a fresh one minted under the same code: the new
+      // room has never shipped, so its first call must not be swallowed
+      // by the dead room's last payload.
+      room.removed = true;
+      final fresh = auth.createRoom(_member(LudoColor.blue, on: raw.add));
+      fresh.broadcastLobbyIfChanged();
+      expect(
+        lobbies(raw).last['capacity'],
+        4,
+        reason: 'the fresh room ships its own first feed',
       );
     });
   });
@@ -1565,6 +1665,10 @@ void main() {
         isFalse,
         reason: 'spectators claim no corner',
       );
+      // The watcher's own lobby roster names them — shipped the moment
+      // they joined, when the roster actually gained a watcher.
+      final roster = await nextMsg(buf, 'lobby');
+      expect(roster['spectators'], contains('Watcher'));
       final snapshot = await nextMsg(buf, 'state');
       expect((snapshot['state'] as Map)['players'], hasLength(2));
 
@@ -1576,11 +1680,213 @@ void main() {
         after['state']['rollSeq'],
         (snapshot['state'] as Map)['rollSeq'] + 1,
       );
-      // The watcher's own lobby roster names them.
-      final roster = await nextMsg(buf, 'lobby');
-      expect(roster['spectators'], contains('Watcher'));
+      // Dead letters no longer re-ship rosters — nothing on it changed, so
+      // the junk intent arrives as nothing at all (the change-only lobby
+      // lane; junk must not be roster-serialization ammunition).
+      await expectQuiet(buf, 'lobby');
 
       await watcher.sink.close();
+    });
+
+    // ------------------------------------------------------------
+    // The connection budget (CWE-400 fix): identity strings retained by
+    // a hello are clamped before anything keeps them, inbound frames are
+    // size-bounded before any parse work, and the lobby lane ships only
+    // on real roster changes — junk must not be serialization ammunition.
+    group('connection budget', () {
+      WebSocketChannel opener() =>
+          WebSocketChannel.connect(Uri.parse('ws://127.0.0.1:${srv.port}/ws'));
+
+      Future<({WebSocketChannel socket, List<Map<String, dynamic>> buf})>
+      connectListened() async {
+        final socket = opener();
+        await socket.ready;
+        final buf = <Map<String, dynamic>>[];
+        socket.stream.listen(
+          (d) => buf.add(jsonDecode(d as String) as Map<String, dynamic>),
+        );
+        return (socket: socket, buf: buf);
+      }
+
+      test(
+        'an oversized hello name is clamped before it is retained',
+        () async {
+          final hello = await connectListened();
+          addTearDown(hello.socket.sink.close);
+          hello.socket.sink.add(
+            jsonEncode({
+              'type': 'hello',
+              'seatId': 'clamp-name',
+              // Passes the frame bound, fails the retention bound: the
+              // roster rides every broadcast, so retention is the clamp.
+              'name': 'B' * 50_000,
+            }),
+          );
+          await nextMsg(hello.buf, 'joined');
+          final member = authority.rooms.values
+              .expand((r) => r.members.values)
+              .firstWhere((m) => m.seatId == 'clamp-name');
+          expect(
+            member.name.length,
+            ServerMember.maxNameChars,
+            reason: 'a hello name is retained only within the bound',
+          );
+        },
+      );
+
+      test('an oversized seat id is clamped before it is retained', () async {
+        final hello = await connectListened();
+        addTearDown(hello.socket.sink.close);
+        hello.socket.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'id' * 25_000, 'name': 'Bo'}),
+        );
+        await nextMsg(hello.buf, 'joined');
+        final member = authority.rooms.values
+            .expand((r) => r.members.values)
+            .firstWhere((m) => m.name == 'Bo');
+        expect(
+          member.seatId.length,
+          ServerMember.maxSeatIdChars,
+          reason: 'a seat id is a bounded identifier, not freely stored data',
+        );
+      });
+
+      test('a frame beyond the per-connection bound is refused; the connection '
+          'lives on', () async {
+        final stranger = await connectListened();
+        addTearDown(stranger.socket.sink.close);
+        stranger.socket.sink.add('x' * (maxIncomingMessageChars + 1));
+        final err = await nextMsg(stranger.buf, 'error');
+        expect(err['text'], 'message too large');
+        // The bound refuses the message, not the connection: a normal
+        // heartbeat from the same socket still answers.
+        stranger.socket.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'cap-1', 'name': 'Cap'}),
+        );
+        expect(await nextMsg(stranger.buf, 'joined'), isNotNull);
+      });
+
+      test('junk intents and refused hellos re-ship zero rosters; a real join '
+          'ships one', () async {
+        final host = await connectListened();
+        addTearDown(host.socket.sink.close);
+        host.socket.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 'amp-host', 'name': 'Amp'}),
+        );
+        final joined = await nextMsg(host.buf, 'joined');
+        final code = joined['code'] as String;
+        // The join itself shipped their roster exactly once — arrivals
+        // always do, and the count baseline is what "zero more from the
+        // junk" is measured against.
+        final afterJoin = [
+          for (final m in host.buf)
+            if (m['type'] == 'lobby') m,
+        ].length;
+        expect(afterJoin, 1);
+
+        // Twenty junk intents, exactly one word each: with the old
+        // "re-ship after every parsed object" rule this was twenty
+        // full-roster serializations for free.
+        for (var i = 0; i < 20; i++) {
+          host.socket.sink.add(jsonEncode({'type': 'blorp'}));
+        }
+        await expectQuiet(host.buf, 'lobby');
+
+        // A refused spectator hello (nowhere to watch) is also not a
+        // roster change.
+        final refused = await connectListened();
+        addTearDown(refused.socket.sink.close);
+        refused.socket.sink.add(
+          jsonEncode({
+            'type': 'hello',
+            'seatId': 'amp-peek',
+            'name': 'Peek',
+            'spectate': true,
+            'code': 'ZZZZ',
+          }),
+        );
+        await nextMsg(refused.buf, 'error');
+        await expectQuiet(host.buf, 'lobby');
+
+        // A REAL roster change still ships immediately.
+        final guest = await connectListened();
+        addTearDown(guest.socket.sink.close);
+        guest.socket.sink.add(
+          jsonEncode({
+            'type': 'hello',
+            'seatId': 'amp-guest',
+            'name': 'Paired',
+            'code': code,
+          }),
+        );
+        await nextMsg(guest.buf, 'joined');
+        final ship = await nextMsg(host.buf, 'lobby');
+        expect(
+          (ship['seats'] as List).map((s) => s['name']),
+          contains('Paired'),
+        );
+      });
+
+      test('a rejoining player still receives one lobby feed despite an '
+          'unchanged roster', () async {
+        final host = await connectListened();
+        addTearDown(host.socket.sink.close);
+        host.socket.sink.add(
+          jsonEncode({'type': 'hello', 'seatId': 're-host', 'name': 'Reh'}),
+        );
+        final code = (await nextMsg(host.buf, 'joined'))['code'] as String;
+
+        final guest = await connectListened();
+        guest.socket.sink.add(
+          jsonEncode({
+            'type': 'hello',
+            'seatId': 're-guest',
+            'name': 'Reg',
+            'code': code,
+          }),
+        );
+        // The guest's first join carries the seat's private credential.
+        final guestCredential =
+            (await nextMsg(guest.buf, 'joined'))['credential'] as String;
+        expect(guestCredential, isNotEmpty);
+        // Their arrival is a roster change, so the first ship is the
+        // ordinary change-only lane, not this test's subject.
+        await nextMsg(guest.buf, 'lobby');
+
+        // The link drops and the same profile reconnects, presenting the
+        // private seat credential its first join was granted: the claimant
+        // is verified, not merely the publicly-visible seat id (CWE-287).
+        // The seat is reclaimed one-for-one, so the rebuilt roster reads
+        // exactly what the room last shipped. The NEW connection has still
+        // never seen a feed — it must get its one copy anyway, or a
+        // rejoin (the reconnect UX this server leans on) would wait on
+        // a silent table until the next real roster change.
+        await guest.socket.sink.close();
+        // Let the transport's onDone run so the rejoin replaces a
+        // genuinely departed connection the way a real reconnect does.
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+
+        final again = await connectListened();
+        addTearDown(again.socket.sink.close);
+        again.socket.sink.add(
+          jsonEncode({
+            'type': 'hello',
+            'seatId': 're-guest',
+            'name': 'Reg',
+            'code': code,
+            'credential': guestCredential,
+          }),
+        );
+        await nextMsg(again.buf, 'joined');
+        final feed = await nextMsg(again.buf, 'lobby');
+        expect(
+          (feed['seats'] as List).map((s) => s['name']),
+          containsAll(const ['Reh', 'Reg']),
+        );
+        // Exactly the one copy: the reconnect must not open a faucet,
+        // only refill the new connection's missing first feed.
+        await expectQuiet(again.buf, 'lobby');
+      });
     });
 
     test('joining a bogus room code yields an error message', () async {
@@ -1618,7 +1924,11 @@ void main() {
       guest.sink.add(
         jsonEncode({'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}),
       );
-      await nextMsg(guestBuf, 'joined');
+      // The joined response carries the seat's private reconnect credential
+      // — the one thing a later reconnect must present (CWE-287).
+      final guestCredential =
+          (await nextMsg(guestBuf, 'joined'))['credential'] as String;
+      expect(guestCredential, isNotEmpty);
       host.sink.add(jsonEncode({'type': 'start'}));
       final before =
           (await nextMsg(hostBuf, 'state'))['state'] as Map<String, dynamic>;
@@ -1628,7 +1938,8 @@ void main() {
       await guest.sink.close();
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      // Same profile comes back on a fresh socket.
+      // Same profile comes back on a fresh socket, presenting the credential
+      // its first admission was granted.
       final guest2 = WebSocketChannel.connect(
         Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
       );
@@ -1638,7 +1949,13 @@ void main() {
         (d) => guest2Buf.add(jsonDecode(d as String) as Map<String, dynamic>),
       );
       guest2.sink.add(
-        jsonEncode({'type': 'hello', 'seatId': 'g', 'name': 'G', 'code': code}),
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'g',
+          'name': 'G',
+          'code': code,
+          'credential': guestCredential,
+        }),
       );
       await nextMsg(guest2Buf, 'joined');
       // The rejoining client immediately receives the current snapshot.
@@ -1653,6 +1970,65 @@ void main() {
           (await nextMsg(guest2Buf, 'state'))['state'] as Map<String, dynamic>;
       expect(after['rollSeq'], 1);
       await guest2.sink.close();
+    });
+
+    test("a replayed public seat id without its credential can't take a seat",
+        () async {
+      host.sink.add(jsonEncode({'type': 'hello', 'seatId': 'cr1', 'name': 'H'}));
+      final code = (await nextMsg(hostBuf, 'joined'))['code'] as String;
+      guest.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'seatId': 'cr2',
+          'name': 'G',
+          'code': code,
+        }),
+      );
+      await nextMsg(guestBuf, 'joined');
+      host.sink.add(jsonEncode({'type': 'start'}));
+      await nextMsg(hostBuf, 'state');
+
+      // A third socket claims the seat the roster broadcasts, against the
+      // room code, presenting no credential.
+      Future<WebSocketChannel> attacker(String? credential) async {
+        final hello = {
+          'type': 'hello',
+          'seatId': 'cr1',
+          'name': 'Evil',
+          'code': code,
+        };
+        if (credential != null) hello['credential'] = credential;
+        final ch = WebSocketChannel.connect(
+          Uri.parse('ws://127.0.0.1:${srv.port}/ws'),
+        );
+        await ch.ready;
+        ch.sink.add(jsonEncode(hello));
+        return ch;
+      }
+
+      final thiefBuf = <Map<String, dynamic>>[];
+      final thief = await attacker(null);
+      thief.stream.listen(
+        (d) => thiefBuf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      expect((await nextMsg(thiefBuf, 'error'))['text'], isNotNull);
+      await thief.sink.close();
+
+      // A guessed credential spends the same refusal.
+      final thief2Buf = <Map<String, dynamic>>[];
+      final thief2 = await attacker('guessed');
+      thief2.stream.listen(
+        (d) => thief2Buf.add(jsonDecode(d as String) as Map<String, dynamic>),
+      );
+      expect((await nextMsg(thief2Buf, 'error'))['text'], isNotNull);
+      await thief2.sink.close();
+
+      // The live holder keeps their seat and connection: hello turns into a
+      // relayed chat exactly as before the attacks.
+      host.sink.add(jsonEncode({'type': 'chat', 'text': 'still here'}));
+      final chat = await nextMsg(hostBuf, 'chat');
+      expect(chat['text'], 'still here');
+      await guest.sink.close();
     });
   });
 
@@ -1901,7 +2277,10 @@ void main() {
 
       // Coming back resumes the paused turn instead of finding it moved on.
       final back = _member(LudoColor.red, seatId: 'red', id: 'c9');
-      expect(auth.rejoinRoom(room.code, back), same(room));
+      expect(
+        auth.rejoinRoom(room.code, back, credential: room.seatCredentials['red']),
+        same(room),
+      );
       await Future<void>.delayed(const Duration(milliseconds: 150));
       expect(
         room.state.rollSeq,
@@ -2142,7 +2521,10 @@ void main() {
         // what the room recorded for the seat instead of assuming a color.
         final seatedColor = room.seatRegistry['g'];
         final back = _member(LudoColor.yellow, seatId: 'g', id: 'c9');
-        expect(auth.rejoinRoom(room.code, back), same(room));
+        expect(
+          auth.rejoinRoom(room.code, back, credential: room.seatCredentials['g']),
+          same(room),
+        );
         expect(
           back.color,
           seatedColor,
@@ -2170,7 +2552,8 @@ void main() {
       auth.leaveRoom(room.code, 'red');
       expect(room.members, hasLength(1));
 
-      // red returns on a new connection and gets the same corner back.
+      // red returns on a new connection, flanked by the seat's private
+      // credential, and gets the same corner back.
       final sinkJson = <String>[];
       final rejoining = _member(
         LudoColor.green,
@@ -2178,7 +2561,11 @@ void main() {
         id: 'c9',
         on: sinkJson.add,
       );
-      final rejoined = auth.rejoinRoom(room.code, rejoining);
+      final rejoined = auth.rejoinRoom(
+        room.code,
+        rejoining,
+        credential: room.seatCredentials['red'],
+      );
       expect(rejoined, same(room));
       expect(
         rejoining.color,
@@ -2215,8 +2602,144 @@ void main() {
       // Simulate a half-open socket the server never saw close.
       room.members['ghost'] = _member(LudoColor.red, id: 'ghost');
       final fresh = _member(LudoColor.red, id: 'c1');
-      expect(auth.rejoinRoom(room.code, fresh), same(room));
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          fresh,
+          credential: room.seatCredentials['red'],
+        ),
+        same(room),
+      );
       expect(room.members.keys, ['c1']);
+    });
+
+    test('a seat claim without the seat credential cannot replace a holder',
+        () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+
+      // A claimant who read the roster broadcasts (the seat id is public)
+      // arrives with the room code, but no credential: the claim stops before
+      // anything is moved, and the live holder keeps their connection.
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'red', id: 'thief'),
+        ),
+        isNull,
+        reason: 'a public seat id alone is not a seat claim',
+      );
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'red', id: 'thief'),
+          credential: 'guessed',
+        ),
+        isNull,
+        reason: 'a wrong credential is no claim either',
+      );
+      expect(room.members.keys, contains('red'),
+          reason: 'the holder is untouched');
+      expect(room.members['red']!.color, LudoColor.red);
+      expect(room.members.keys, isNot(contains('thief')));
+
+      // Positive control: presenting the minted claim IS the holder — the
+      // fresh connection they arrive on replaces their own seat (the same
+      // rule the stale-socket eviction above exercises).
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'red', id: 'real'),
+          credential: room.seatCredentials['red'],
+        ),
+        same(room),
+      );
+      expect(
+        room.members.keys,
+        containsAll(['real', 'blue']),
+        reason: 'the true claim replaced the holder seat, once',
+      );
+      expect(room.members.keys, isNot(contains('red')));
+    });
+
+    test('a returning room seats a freed lobby corner only with the claim',
+        () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.joinRoom(room.code, _member(LudoColor.blue));
+      auth.leaveRoom(room.code, 'red');
+
+      // 'red' turns up reborn as a new profile id: a join with the same
+      // publicly-known seat id is a reclaim now, and needs the credential.
+      expect(
+        auth.joinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'red', id: 'reborn'),
+        ),
+        isNull,
+      );
+      expect(
+        auth.joinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'red', id: 'reborn'),
+          credential: room.seatCredentials['red'],
+        ),
+        isNotNull,
+        reason: 'the real holder reclaiming a freed corner goes through',
+      );
+    });
+
+    test('the seat credential never rides a broadcast roster payload', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.spectateRoom(
+        room.code,
+        _member(LudoColor.blue, seatId: 'watch', id: 'w1'),
+      );
+      final credential = room.seatCredentials['red']!;
+
+      // The only place the credential leaves the server is its owner's
+      // private 'joined' response. Rosters are broadcast every seat change:
+      // they must carry the seat ids, and nothing else secret.
+      expect(
+        jsonEncode(room.seatsJson()),
+        isNot(contains(credential)),
+        reason: 'the roster broadcast never leaks the seat credential',
+      );
+    });
+
+    test('a watcher replacement needs the watcher seat credential', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red));
+      auth.spectateRoom(
+        room.code,
+        _member(LudoColor.blue, seatId: 'watch', id: 'w1'),
+      );
+      final credential = room.seatCredentials['watch']!;
+      expect(credential, isNotEmpty);
+
+      // Same watcher seat id on a new connection, no credential: refused,
+      // and the live reader stays attached.
+      expect(
+        auth.spectateRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'watch', id: 'w2'),
+        ),
+        isNull,
+      );
+      expect(room.spectators.keys, contains('w1'));
+
+      // The holder of the watcher claim reconnects cleanly.
+      expect(
+        auth.spectateRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'watch', id: 'w2'),
+          credential: credential,
+        ),
+        same(room),
+      );
+      expect(room.spectators.keys, ['w2']);
     });
 
     test(
@@ -2271,6 +2794,7 @@ void main() {
       auth.rejoinRoom(
         room.code,
         _member(LudoColor.red, seatId: 'red', id: 'c1'),
+        credential: room.seatCredentials['red'],
       );
       await Future<void>.delayed(const Duration(milliseconds: 60));
       expect(

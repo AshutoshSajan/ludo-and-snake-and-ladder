@@ -26,6 +26,13 @@ MAX_FOLDED_CHARS = 800
 MAX_DIFF_BYTES = 200_000
 MAX_DIFF_FILES = 200
 
+# The review envelope the model must not be able to forge or smuggle, and
+# the mention pattern the neutralisation pass watches for (both used in
+# [sanitize_text]; the marker pass itself is [remove_review_markers], run
+# separately by command.py's reply flow inside its own fixpoint).
+REVIEW_MARKER_RE = re.compile(r"<opencode_review>|</opencode_review>", re.IGNORECASE)
+MENTION_RE = re.compile(r"@(?=[A-Za-z0-9])")
+
 _REVIEW_BLOCK = re.compile(
     r"<opencode_review>\s*(.*?)\s*</opencode_review>",
     re.IGNORECASE | re.DOTALL,
@@ -78,23 +85,71 @@ def sanitize_text(text: str, limit: int) -> str:
 
     - normalise newlines and drop NULs;
     - remove the review envelope markers so a model cannot forge a second
-      review block inside a comment;
-    - neutralise @mentions with a zero-width space so a prompt-injected diff
-      cannot ping people or teams;
+      review block inside a comment — to a fixpoint, because nested
+      markers can re-assemble from the pieces one pass leaves behind;
+    - neutralise @mentions with a zero-width space only AFTER every
+      text-deleting pass, since deletion joins characters and a joined
+      '@name' is a live ping (CWE-116);
     - cap the size.
     """
 
     if not isinstance(text, str):
         return ""
     value = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
-    value = re.sub(
-        r"<opencode_review>|</opencode_review>", "", value, flags=re.IGNORECASE
-    )
-    value = re.sub(r"@(?=[A-Za-z0-9])", "@\u200b", value)
+    value = remove_review_markers(value)
+    value = MENTION_RE.sub("@\u200b", value)
     value = value.strip()
     if len(value) > limit:
         value = value[:limit].rstrip() + "\n\n_(truncated)_"
     return value
+
+
+def remove_review_markers(text: str) -> str:
+    """Strip every review-envelope marker, including nested re-assemblies.
+
+    One marker pass can leave another marker behind as residue when two
+    nest: ``<opencode_</opencode_review>review>`` loses the inner one
+    and re-assembles the outer from its parts (CWE-116), so the removal
+    must keep going past the first pass. The replacement for the old
+    repeat-the-regex-to-fixpoint loop is a **single linear pass**: a
+    fixed-size tail window is checked at each ``>`` and a pop collapses
+    the recognized marker outright, so removal joins can re-assemble
+    something only at the newly written tail — where it is checked
+    immediately. Nothing is rescanned: every byte is appended once and
+    dropped at most once, making the cost plain O(len) — the old loop
+    re-scanned the whole remaining input per pass and, since
+    [sanitize_text] is reachable with uncapped values (a single crafted
+    finding body can be megabytes, the artifact caps the whole output
+    but not a body), that loop was a quadratic-work door on
+    untrusted model output.
+
+    Case folding matches [REVIEW_MARKER_RE], the pattern this replaces,
+    so an oddly-capitalized marker cannot slip through either way.
+    """
+
+    buf: list[str] = []
+    open_marker = "<opencode_review>"
+    close_marker = "</opencode_review>"
+
+    def _pop_if_complete(ch: str) -> None:
+        if ch != ">":
+            return
+        size = len(buf)
+        if (
+            size >= len(close_marker)
+            and "".join(buf[-len(close_marker):]).lower() == close_marker
+        ):
+            del buf[-len(close_marker):]
+            return
+        if size < len(open_marker):
+            return
+        if "".join(buf[-len(open_marker):]).lower() == open_marker:
+            del buf[-len(open_marker):]
+
+    for ch in text:
+        buf.append(ch)
+        _pop_if_complete(ch)
+    return "".join(buf)
 
 
 def normalize_path(path: Any) -> str | None:
