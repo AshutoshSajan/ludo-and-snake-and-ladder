@@ -315,4 +315,60 @@ void main() {
       );
     });
   });
+
+  group('credential channel guard', () {
+    /// Where the request landed and its specific refusal wording.
+    Future<(bool sent, String status)> experience(String url, {bool credential = true}) async {
+      var sent = false;
+      final mock = MockClient(
+        (req) async {
+          sent = true;
+          return http.Response(jsonEncode({'ok': true}), 200);
+        },
+      );
+      final client = FriendClient(
+        serverUrl: url,
+        credential: credential ? 'test-credential' : '',
+        httpClient: mock,
+      );
+      try {
+        await client.state(seatId: 'p1', name: 'Swift Otter');
+        return (sent, 'answered');
+      } on FriendException catch (e) {
+        return (sent, e.text);
+      }
+    }
+
+    test('a credential never rides plain HTTP to a non-loopback host', () async {
+      final (sent, status) = await experience('http://203.0.113.5:5000/ws');
+      expect(sent, isFalse, reason: 'refused before anything is sent');
+      expect(status, contains('plain HTTP'));
+      expect(status, contains('wss://'));
+      expect(status, isNot(contains('reach the server')),
+          reason: 'a broken-transport refusal, not a reachability one');
+    });
+
+    test('loopback HTTP and secure transports still carry the credential',
+        () async {
+      for (final url in [
+        'http://127.0.0.1:5000/ws',
+        'http://localhost:5000/ws',
+        'http://[::1]:5000/ws',
+        serverUrl, // the wss:// base the production client points at
+      ]) {
+        final (sent, status) = await experience(url);
+        expect(sent, isTrue, reason: url);
+        expect(status, 'answered');
+      }
+    });
+
+    test('an empty credential has nothing to leak and rides plain HTTP', () async {
+      final (sent, status) = await experience(
+        'http://203.0.113.5:5000/ws',
+        credential: false,
+      );
+      expect(sent, isTrue, reason: 'the below-auth shapes stay exercised');
+      expect(status, 'answered');
+    });
+  });
 }
