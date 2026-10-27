@@ -26,6 +26,12 @@ MAX_FOLDED_CHARS = 800
 MAX_DIFF_BYTES = 200_000
 MAX_DIFF_FILES = 200
 
+# The review envelope the model must not be able to forge or smuggle, and
+# the mention pattern the neutralisation pass watches for (both used in
+# [sanitize_text]; the marker pass runs to a fixpoint — see its helper).
+REVIEW_MARKER_RE = re.compile(r"<opencode_review>|</opencode_review>", re.IGNORECASE)
+MENTION_RE = re.compile(r"@(?=[A-Za-z0-9])")
+
 _REVIEW_BLOCK = re.compile(
     r"<opencode_review>\s*(.*?)\s*</opencode_review>",
     re.IGNORECASE | re.DOTALL,
@@ -78,23 +84,43 @@ def sanitize_text(text: str, limit: int) -> str:
 
     - normalise newlines and drop NULs;
     - remove the review envelope markers so a model cannot forge a second
-      review block inside a comment;
-    - neutralise @mentions with a zero-width space so a prompt-injected diff
-      cannot ping people or teams;
+      review block inside a comment — to a fixpoint, because nested
+      markers can re-assemble from the pieces one pass leaves behind;
+    - neutralise @mentions with a zero-width space only AFTER every
+      text-deleting pass, since deletion joins characters and a joined
+      '@name' is a live ping (CWE-116);
     - cap the size.
     """
 
     if not isinstance(text, str):
         return ""
     value = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
-    value = re.sub(
-        r"<opencode_review>|</opencode_review>", "", value, flags=re.IGNORECASE
-    )
-    value = re.sub(r"@(?=[A-Za-z0-9])", "@\u200b", value)
+    value = _remove_to_fixpoint(value, REVIEW_MARKER_RE)
+    value = MENTION_RE.sub("@\u200b", value)
     value = value.strip()
     if len(value) > limit:
         value = value[:limit].rstrip() + "\n\n_(truncated)_"
     return value
+
+
+def _remove_to_fixpoint(text: str, pattern: re.Pattern[str]) -> str:
+    """Strip every match of [pattern], repeating until one pass changes nothing.
+
+    A single substitution pass can leave a marker behind as residue when
+    two are nested: ``<opencode_</opencode_review>review>`` loses the
+    inner one and re-assembles the outer from its parts — the machinery a
+    later transformation needs to join an '@' with the name that sat
+    after the nesting (CWE-116). Each pass that changes anything removed
+    at least one whole marker, so the length strictly shrinks and the
+    loop is finite; ordinary input converges on the first pass, and the
+    crafted worst case is bounded by the scan cap either way.
+    """
+
+    while True:
+        stripped = pattern.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
 
 
 def normalize_path(path: Any) -> str | None:
