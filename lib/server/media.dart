@@ -111,6 +111,14 @@ class MediaNoteStore {
     if (kind == MediaKind.voice && (durMs < 100 || durMs > 60_000)) {
       return null;
     }
+    // Announced media is immutable (CWE-639): the chat line that carried
+    // this URL keeps its author's attribution, so a second upload onto the
+    // same (room, kind, id) is either a retry or an attempt to swap the
+    // bytes under a live message. Refused before anything moves —
+    // no sweep, no eviction, no byte bookkeeping — so the original note
+    // survives exactly as its author held it.
+    final slot = _rooms[code]?[kind];
+    if (slot != null && slot.containsKey(id)) return null;
 
     final t = _now();
     _sweep(t);
@@ -152,6 +160,19 @@ class MediaNoteStore {
     _totalBytes += data.length;
     return note;
   }
+
+  /// Whether a note already occupies this exact (room, kind, id) slot.
+  ///
+  /// The upload handler's fast path for answering a duplicate with a
+  /// pointed 409 instead of the generic 400. Reporting, never authority:
+  /// across the handler's awaits a racing upload can slip in, so [put]
+  /// re-verifies the same rule atomically and always has the last word.
+  bool exists({
+    required MediaKind kind,
+    required String code,
+    required String id,
+  }) =>
+      _rooms[code]?[kind]?.containsKey(id) ?? false;
 
   /// Fetches one note, sweeping expired ones first — the lookup itself is
   /// the cheapest place to age things out, since a pull after a day is
@@ -254,6 +275,15 @@ Future<shelf.Response> _uploadNote(
   final id = q['id'] ?? '';
   if (!roomIsLive(code)) {
     return _json(404, 'No such room to leave a $verb in');
+  }
+  // Announced media is immutable (CWE-639): a chat line already pointing
+  // at this id keeps its author's attribution, so a second upload onto it
+  // is refused with the fix named — send it under a fresh id. The check is
+  // the wording fast path only; across the body-read awaits a racing
+  // upload can still slip past, and [MediaNoteStore.put] re-verifies the
+  // same rule atomically with the final say.
+  if (store.exists(kind: kind, code: code, id: id)) {
+    return _json(409, 'A $verb with this id already exists — send it under a fresh id');
   }
 
   final mime = (req.headers['content-type'] ?? '').split(';').first.trim();
