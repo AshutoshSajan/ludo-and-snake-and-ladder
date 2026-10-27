@@ -149,6 +149,14 @@ Map<String, String> serverEnv = const {};
 /// individually addressable.
 String instanceId = 'game-1';
 
+/// Socket addresses whose forwarding judgment the server may trust. The
+/// shipped deploy/nginx.conf proxies every client socket to the replicas
+/// from same-host Nginx — a loopback backend leg, hence the default set.
+/// Widened via TRUSTED_PROXIES (see .env.example): only hops named here
+/// may influence the client identity rate limiting keys on, so nothing
+/// short of this list can extend a proxy chain toward the server.
+Set<String> trustedProxies = const {'127.0.0.1', '::1'};
+
 /// Every open WebSocket, joined or not — the raw capacity gauge for /stats.
 final _openConnections = <String>{};
 
@@ -488,7 +496,11 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           );
           // Not a fresh join — maybe a returning player reclaiming
           // their seat (lobby or mid-game).
-          joined ??= authority.rejoinRoom(code, member!, credential: credential);
+          joined ??= authority.rejoinRoom(
+            code,
+            member!,
+            credential: credential,
+          );
           if (joined == null) {
             final owner = await _foreignOwnerOf(code);
             webSocket.sink.add(
@@ -1105,7 +1117,10 @@ String? _friendCredential(shelf.Request req) {
 /// stand in for a credential (the friends chat reads, DM sends, request/
 /// respond/remove, block/unblock, invites and reports all route through
 /// this gate).
-Future<shelf.Response?> _friendIdentity(shelf.Request req, String seatId) async {
+Future<shelf.Response?> _friendIdentity(
+  shelf.Request req,
+  String seatId,
+) async {
   final credential = _friendCredential(req);
   if (credential == null) {
     return _friendBadRequest(_credentialMissingText, code: 401);
@@ -1615,11 +1630,68 @@ Future<shelf.Response> friendsInviteRespondHandler(shelf.Request req) async {
   return _friendJson({'ok': true, 'code': code});
 }
 
+/// The bucket identity for rate limiting: [peer] is the immediate socket
+/// address and [xff] the joined `X-Forwarded-For` chain, consulted ONLY
+/// when [trusted] — explicit addresses, never inferred — includes the
+/// immediate peer, so a request that reaches the server from anywhere but
+/// a configured proxy keys on itself and its headers are dead letters.
+///
+/// Within a trusted front, the walk goes right to left: every proxy
+/// appends the address it received the request from, so the rightmost
+/// entry is the one observation made on a wire the server is responsible
+/// for whose source is not itself. Anything a client ships in its own
+/// header only sits further left — claiming `victim-ip` cannot outrun the
+/// real peer appended after it, and claiming more identities changes
+/// nothing. A chain of nothing but trusted hops (or an empty one) leaves
+/// the identity unknown to the walk: the immediate peer is the answer,
+/// which under a trusted front is exactly the shared-bucket behavior an
+/// unconfigured deployment used to get, minus the forge attempt becoming
+/// a cheaper key.
+String clientIpWithForwarding(String peer, String? xff, Set<String> trusted) {
+  if (!trusted.contains(peer.toLowerCase())) return peer;
+  if (xff == null) return peer;
+  final hops = [
+    for (final h in xff.split(','))
+      if (h.trim().isNotEmpty) h.trim(),
+  ];
+  for (var i = hops.length - 1; i >= 0; i--) {
+    if (trusted.contains(hops[i].toLowerCase())) continue;
+    return hops[i];
+  }
+  return peer;
+}
+
+/// The trusted proxy set from TRUSTED_PROXIES — comma-separated exact
+/// socket addresses (IPv4 or IPv6 literals; no ranges, so review stays
+/// one read per entry). Blank or absent keeps the loopback default. Addrs
+/// are lowercased for a case-insensitive match so an oddly-spelled IPv6
+/// hop cannot fall out of a trusted chain it belongs to.
+Set<String> trustedProxiesFromEnv(String? value) =>
+    _trustedProxySet(value) ?? const {'127.0.0.1', '::1'};
+
+Set<String>? _trustedProxySet(String? value) {
+  final raw = (value ?? '').trim();
+  if (raw.isEmpty) return null;
+  final set = <String>{
+    for (final piece in raw.split(','))
+      if (piece.trim().isNotEmpty) piece.trim().toLowerCase(),
+  };
+  return set.isEmpty ? null : set;
+}
+
 String _clientIp(shelf.Request req) {
   final info = req.context['shelf.io.connection_info'];
   try {
     final addr = (info as dynamic).remoteAddress;
-    return addr?.address as String? ?? 'unknown';
+    final peer = addr?.address as String? ?? 'unknown';
+    // Headers are hearsay unless the socket itself names a trusted proxy
+    // — the direct peer keys on itself, so X-Forwarded-For can neither
+    // bypass nor forge the identity boundary (CWE-307).
+    return clientIpWithForwarding(
+      peer,
+      req.headers['x-forwarded-for'],
+      trustedProxies,
+    );
   } catch (_) {
     return 'unknown';
   }
@@ -2268,6 +2340,12 @@ Future<void> main(List<String> args) async {
   instanceId = env['INSTANCE_ID']?.trim().isNotEmpty == true
       ? env['INSTANCE_ID']!.trim()
       : instanceId;
+
+  // Rate-limit identity (CWE-307): which addresses may speak for a real
+  // client through a forwarding chain. Defaults to the loopback leg the
+  // shipped Nginx config proxies through; widen it when an outer proxy
+  // joins the chain.
+  trustedProxies = trustedProxiesFromEnv(env['TRUSTED_PROXIES']);
 
   // GIF search for table chat: the provider layer picks Klipy or GIPHY
   // from the environment (GIF_PROVIDER pins one explicitly). Without
