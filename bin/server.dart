@@ -22,7 +22,11 @@
 ///                        friends w/ latest-message ids, requests,
 ///                        invites, blocks) for one seat; also the bind
 ///                        point — first state call binds the presented
-///                        credential hash to the seat's public id
+///                        credential hash to the seat's public id, per
+///                        IP-budgeted (a first bind has no server-
+///                        verifiable control proof; see the bind point)
+///                        and reversible only by admin
+///                        `POST /admin/friends/unbind`
 ///   POST /friends/lookup   -> resolve a friend code / seat id to a profile
 ///                        (public: it needs no acting seat)
 ///   POST /friends/request  -> send (or match) a friend request
@@ -975,6 +979,19 @@ final _friendActionsBurst = <String, List<int>>{};
 final _friendActionsDaily = <String, List<int>>{};
 final _friendChatBurst = <String, List<int>>{};
 final _friendChatDaily = <String, List<int>>{};
+final _friendBindBurst = <String, List<int>>{};
+final _friendBindDaily = <String, List<int>>{};
+// The bind point's own budget: /friends/state is the screen's poll —
+// unthrottled, because every open friends screen pings it every few
+// seconds — while the FIRST-BIND MUTATION it performs is the one
+// security-sensitive write in the family and is bounded per IP here.
+// A household plays with a handful of devices over months, so a bind
+// flood is by definition attacker traffic; the caps above let a cleared
+// storage or a replacement device sign in comfortably while a seat-id
+// sweep stops within the first block of attempts (the bind carries no
+// server-verifiable control proof — see the bind point's comment).
+const _maxFriendBindBurst = 10; // per hour per IP
+const _maxFriendBindDaily = 40; // per day per IP
 const _maxFriendActionBurst = 40; // per hour per IP
 const _maxFriendActionDaily = 200; // per day per IP
 const _maxFriendChatBurst = 120; // per hour per IP
@@ -1013,6 +1030,8 @@ void _recordFriendHit(
 void resetFriendAttempts() {
   _friendActionsBurst.clear();
   _friendActionsDaily.clear();
+  _friendBindBurst.clear();
+  _friendBindDaily.clear();
   _friendChatBurst.clear();
   _friendChatDaily.clear();
 }
@@ -1161,8 +1180,35 @@ Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
   // The bind point: the first state call couples the presented credential
   // hash to this seat id. First binder wins — a seat already held by
   // another token rejects re-binding, and a banned seat never binds.
+  //
+  // What this gate is, honestly: on the first bind **the presented
+  // credential is the only verification that exists** — a server-verifiable
+  // control proof is not available for a seat nobody has signed in with
+  // yet. Both near-miss candidates fail as proofs: the game hello's seatId
+  // is self-declared there exactly as here, and a seat credential mints on
+  // first sight in ANY freshly created room, so "present a room credential
+  // while live" is satisfiable by claiming the public seat id in one's own
+  // room. What bounds a first-bind hijack is therefore not proof but
+  // budget: an attacker who knows a public seat id must spend one bounded
+  // slot per IP below, and the seat loses that limbo the moment its owner
+  // signs in — the bind holds only until then, and stays only if it were
+  // legal.
   final bound = await friendStore.seatForCredential(hashToken(credential));
   if (bound == null) {
+    final ip = _clientIp(req);
+    if (_friendRateLimited(
+      ip,
+      burst: _friendBindBurst,
+      daily: _friendBindDaily,
+      maxBurst: _maxFriendBindBurst,
+      maxDaily: _maxFriendBindDaily,
+    )) {
+      return _friendBadRequest(
+        'too many friends sign-ins — try again later',
+        code: 429,
+      );
+    }
+    _recordFriendHit(ip, burst: _friendBindBurst, daily: _friendBindDaily);
     if (!await friendStore.bindCredential(seatId, hashToken(credential))) {
       return _friendBadRequest(_credentialForeignText, code: 401);
     }
@@ -2226,6 +2272,32 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
         jsonEncode({'ok': true}),
         headers: {'content-type': 'application/json'},
       );
+    case 'friends/unbind':
+      // The seat's credentials recovery path. A seat whose friends identity
+      // was bound to an attacker's token (possible because a first bind
+      // cannot carry a server-verifiable control proof — see the bind
+      // point's comment in friendsStateHandler) stays locked out for its
+      // real owner forever: re-binding is refused with "another device".
+      // This action clears the stored binding — the seat becomes unbound,
+      // and the owner's next /friends/state call re-claims it like a first
+      // sign-in. What it deliberately does NOT do: unwind friendships,
+      // requests or DMs a hijacker may have created while the seat was
+      // theirs — the recovered owner sees those as normal relationship
+      // rows and can end or block them like any other contact.
+      final seat = (body['seatId'] as String? ?? '').trim();
+      if (seat.isEmpty) {
+        return _badAdminAction('seatId required');
+      }
+      await friendStore.clearCredential(seat);
+      await adminStore.recordAdminAction(
+        action: 'friendsUnbind',
+        subject: seat,
+        by: by,
+      );
+      return shelf.Response.ok(
+        jsonEncode({'ok': true}),
+        headers: {'content-type': 'application/json'},
+      );
     case 'feedback/update':
       final id = int.tryParse('${body['id']}') ?? -1;
       if (id < 0) {
@@ -2629,6 +2701,7 @@ Future<void> main(List<String> args) async {
           case 'admin/rename':
           case 'admin/delete-game':
           case 'admin/rooms/close':
+          case 'admin/friends/unbind':
           case 'admin/feedback/update':
           case 'admin/feedback/delete':
           case 'admin/table/insert':

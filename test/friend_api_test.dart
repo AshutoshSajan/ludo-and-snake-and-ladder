@@ -19,6 +19,8 @@ import 'package:game_club/server/report_store.dart';
 
 import '../bin/server.dart'
     show
+        adminActionHandler,
+        adminAuditHandler,
         adminFeedbackHandler,
         adminStore,
         adminToken,
@@ -651,17 +653,30 @@ void main() {
 
   group('throttling', () {
     test('the 41st friend action in the hour is refused', () async {
-      // Twenty accepted pairs spend exactly the 40-hit action bucket.
-      for (var i = 0; i < 20; i++) {
-        await makeFriends('a$i', 'b$i');
+      // One pair only, left PENDING: the bind budget is separate and
+      // this test must spend the ACTION bucket, so the request walk
+      // below re-sends a standing request — each successful send counts
+      // an action hit (the same thing a UI double-tap does) without any
+      // further bind.
+      await _serve('a0');
+      await _serve('b0');
+      for (var i = 0; i < 40; i++) {
+        final r = await _call(
+          'friends/request',
+          _post('friends/request', {
+            'seatId': 'a0',
+            'name': 'a0',
+            'target': 'b0',
+          }),
+        );
+        expect(r.statusCode, 200, reason: 'a standing re-send is idempotent');
       }
-      await _serve('pX');
       final r = await _call(
         'friends/request',
         _post('friends/request', {
-          'seatId': 'pX',
-          'name': 'pX',
-          'target': 'a0',
+          'seatId': 'a0',
+          'name': 'a0',
+          'target': 'b0',
         }),
       );
       expect(r.statusCode, 429);
@@ -669,6 +684,14 @@ void main() {
         ((await _json(r))['text'] as String),
         contains('too many friend actions'),
       );
+      // The bind budget is untouched by action floods: a fresh seat can
+      // still sign in (this is a state call, not a friend action).
+      final bind = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'late-device', 'name': 'late'},
+            token: 'late-device-credential'),
+      );
+      expect(bind.statusCode, 200);
     });
   });
 
@@ -843,6 +866,92 @@ void main() {
       // The original binding still answers its own device.
       final same = await _json(await _state('p1'));
       expect(same['ok'], isTrue);
+    });
+
+    test('the first bind is budgeted per IP: sweeps stop within ten',
+        () async {
+      // Ten fresh sign-ins spend the exact bind bucket.
+      for (var i = 0; i < 10; i++) {
+        final r = await _call(
+          'friends/state',
+          _post('friends/state', {'seatId': 'sw$i', 'name': 'sw$i'},
+              token: 'sw$i/credential'),
+        );
+        expect(r.statusCode, 200, reason: 'sw$i');
+      }
+      final r = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'sw11', 'name': 'sw11'},
+            token: 'sw11/credential'),
+      );
+      expect(r.statusCode, 429);
+      expect(
+        (await _json(r))['text'],
+        contains('too many friends sign-ins'),
+      );
+      // The budget charges BINDS, not the screen's state poll: an
+      // already-bound seat's read rides through even past the cap.
+      final poll = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'sw0', 'name': 'sw0'},
+            token: 'sw0/credential'),
+      );
+      expect(poll.statusCode, 200);
+    });
+
+    test('a hijacked seat recovers only through an admin unbind', () async {
+      // The takeover: an attacker's token binds the victim's public seat
+      // before the victim's own device ever signs in.
+      expect(
+        await friendStore.bindCredential('victim', hashToken('attacker-token')),
+        isTrue,
+      );
+
+      // The real device arrives and is locked out.
+      final locked = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'victim', 'name': 'Victim'},
+            token: 'victim/device-credential'),
+      );
+      expect(locked.statusCode, 401);
+      expect((await _json(locked))['text'], contains('another device'));
+
+      // The recovery path: an admin unbind frees the seat.
+      final unbind = await adminActionHandler(
+        _post('admin/friends/unbind', {'seatId': 'victim'}, token: 'secret'),
+      );
+      expect(unbind.statusCode, 200);
+      expect((await _json(unbind))['ok'], isTrue);
+
+      // The owner's device signs in like a first device would.
+      final back = await _call(
+        'friends/state',
+        _post('friends/state', {'seatId': 'victim', 'name': 'Victim'},
+            token: 'victim/device-credential'),
+      );
+      expect(back.statusCode, 200);
+      expect(await boundTo('victim/device-credential'), 'victim');
+
+      // The action is auditable for the operator's trail.
+      final audit = await adminAuditHandler(
+        _get('admin/audit', token: 'secret'),
+      );
+      final items = (await _json(audit))['audit'] as List;
+      expect(items.any((e) => e['action'] == 'friendsUnbind'), isTrue);
+    });
+
+    test('the unbind action demands admin authorization', () async {
+      final saved = adminToken;
+      adminToken = 'secret';
+      final r = await adminActionHandler(
+        _post('admin/friends/unbind', {'seatId': 'p1'}, token: 'not-the-token'),
+      );
+      adminToken = saved;
+      expect(r.statusCode, 403);
+      // And nothing was cleared.
+      final bound = await friendStore
+          .bindCredential('p1', hashToken('p1/real-credential'));
+      expect(bound, isTrue);
     });
 
     test('friends/lookup stays public (it needs no acting seat)', () async {
