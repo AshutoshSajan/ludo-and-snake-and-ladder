@@ -339,6 +339,7 @@ void main() {
                 String credential = '',
                 required String gameType,
                 required int capacity,
+                required String seatCredential,
               }) => OnlineClient(
                 serverUrl,
                 seatId: seatId,
@@ -346,6 +347,7 @@ void main() {
                 credential: credential,
                 gameType: gameType,
                 capacity: capacity,
+                initialSeatCredential: seatCredential,
                 channelFactory: factory.create,
               ),
         ),

@@ -85,6 +85,7 @@ class StorageService {
   }
 
   static const _kOnlineCredential = 'gc.onlineCredential';
+  static const _kSeatCredential = 'gc.seatCredential';
 
   /// The friends credential: the device's private identity half.
   ///
@@ -118,6 +119,24 @@ class StorageService {
   Future<void> saveOnlineName(String name) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kOnlineName, name);
+  }
+
+  /// The game server's private seat-reclaim credential, as granted inside
+  /// the [joined] response of the room authority. Persisted beside the id
+  /// and name with the same lifetime — one device profile — because the
+  /// server refuses a seat rewrite without it and a restart mid-game must
+  /// still be able to present it (CWE-287). Distinct from the friends
+  /// credential's `gc.onlineCredential`: that one the device generates for
+  /// the friends server; this one the game server grants per room, so the
+  /// key differs to keep neither secret from clobbering the other.
+  Future<String> loadSeatCredential() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString(_kSeatCredential) ?? '';
+  }
+
+  Future<void> saveSeatCredential(String credential) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kSeatCredential, credential);
   }
 
   /// Whether the home screen already offered the guided walkthrough.

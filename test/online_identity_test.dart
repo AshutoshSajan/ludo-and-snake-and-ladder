@@ -59,6 +59,35 @@ void main() {
     );
   });
 
+  test('the seat credential persists beside the id, distinct from the friends one',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+
+    expect(
+      await storage.loadSeatCredential(),
+      isEmpty,
+      reason: 'nothing is granted before the first seat',
+    );
+
+    // The server grants the seat credential inside a 'joined' response; the
+    // lobby screen persists it so a restart can present the same claim.
+    await storage.saveSeatCredential('seat-1');
+    expect(await StorageService().loadSeatCredential(), 'seat-1');
+
+    // The friends credential is its own secret under its own key: it
+    // generates on first load, and the seat claim never lands in it.
+    final friends = await StorageService().loadOnlineCredential();
+    expect(friends, isNotEmpty);
+    expect(friends, isNot('seat-1'));
+    expect(await StorageService().loadSeatCredential(), 'seat-1');
+
+    // The identity keys are undisturbed throughout.
+    expect(await storage.loadOnlinePlayerId(), isNotEmpty);
+    await storage.saveOnlineName('Asha');
+    expect(await StorageService().loadSeatCredential(), 'seat-1');
+  });
+
   group('default names', () {
     test('are generated, and well formed', () {
       final name = DefaultNames.generate();

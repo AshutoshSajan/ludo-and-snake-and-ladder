@@ -375,6 +375,7 @@ class OnlineClient extends ChangeNotifier {
     this.serverUrl, {
     required this.seatId,
     required this.name,
+    this.initialSeatCredential = '',
     this.credential = '',
     this.gameType = 'ludo',
     this.quickMatch = false,
@@ -388,12 +389,29 @@ class OnlineClient extends ChangeNotifier {
   final String seatId; // profile id — our identity across reconnects
   final String name;
 
+  /// The seat's private reconnect credential restored from storage, so a
+  /// restart mid-game can present the same claim the device held before it
+  /// died (the server refuses a seat rewrite without it). Refreshed from
+  /// every `joined` response; empty until the first grant arrives. Not the
+  /// friends-plane [credential]: this one proves a game-seat claim to the
+  /// game server, minted there and granted in `joined`.
+  final String initialSeatCredential;
+
+  /// The private reconnect credential granted for this client's seat, kept
+  /// separate from the public roster identity (CWE-287 fix). Anything the
+  /// server broadcasts — lobby, seats, state — never contains it.
+  String _seatCredential = '';
+  String get seatCredential =>
+      _seatCredential.isEmpty ? initialSeatCredential : _seatCredential;
+
   /// The friends credential paired with [seatId] — the device's private
   /// identity half. The friends server binds it to the seat id, so the
   /// friends calls this client's screens make carry it as `Authorization:
   /// Bearer`; the seat id alone stays the public roster value and proves
   /// nothing. Empty in the older constructions and most tests, which
-  /// never touch the friends HTTP plane.
+  /// never touch the friends HTTP plane. Distinct from the game seat's
+  /// reclaim credential ([seatCredential]), which the game server grants
+  /// per room and this client replays through the WebSocket hello.
   final String credential;
 
   /// Which game to play when creating a room ('ludo' | 'snakes'). Joiners
@@ -728,6 +746,11 @@ class OnlineClient extends ChangeNotifier {
         'seatId': seatId,
         'name': name,
         'game': gameType,
+        // The private reconnect credential, presented when this device
+        // holds one: the server re-verifies the claim on a widen-before
+        // ever installing a connection under a seen-before seat id.
+        // First-time joins have none yet and the field is omitted.
+        if (seatCredential.isNotEmpty) 'credential': seatCredential,
         if (quickMatch && (_joinCode == null || _joinCode!.isEmpty))
           'match': true,
         // Room creators (and quick match, which creates too) name the table
@@ -913,6 +936,15 @@ class OnlineClient extends ChangeNotifier {
         _spectating = msg['spectator'] as bool? ?? _spectating;
         final colorName = msg['color'] as String?;
         myColor = colorName == null ? null : LudoColor.values.byName(colorName);
+        // The seat's private reconnect credential rides the joined response
+        // and nothing else — the server minted it for this admission and
+        // every later hello presents it, so a reclaim verifies the claimant
+        // instead of the publicly-visible seat id (CWE-287). Absent before
+        // the first grant; a regrant overwrites, an absent field keeps.
+        final granted = msg['credential'] as String?;
+        if (granted != null && granted.isNotEmpty) {
+          _seatCredential = granted;
+        }
         // A (re)join is a clean slate: whatever eviction this client saw
         // last belongs to the room we just left.
         _mySeatEvicted = false;
