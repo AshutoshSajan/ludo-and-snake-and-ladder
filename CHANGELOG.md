@@ -6,8 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
+### Documentation
+- Docs(env): TRUSTED_PROXIES replaces the loopback default wholesale (CWE-307)
+- Docs: clarify authentication, media, voice, and automation contracts
 ### Fixed
-- Fix(release): gstreamer build+runtime packages for the snap part
+- Fix(opencode): sweep reply comment and marker removal to a fixpoint (CWE-review)
+- Fix(media): keep evicted note ids reserved while their URLs could still serve (CWE-review #6)
+- Fix(friends): budget the first bind per IP and give hijacked seats an admin recovery (CWE-review #5)
+- Fix(friends): refuse to send the seat credential over the open wire
+- Fix(opencode): fail closed when an escape link cannot be removed
+- Fix(opencode): strip review markers with a linear scanner (CWE-review #3)
+- Fix(media): serve keyboard images as inert rasters only (CWE-79)
+- Fix(opencode): neutralize mentions after all assembling deletions (CWE-116)
+- Fix(opencode): bound reply postprocessing with a linear comment scanner (CWE-1333)
+- Fix(server): recover per-client rate-limit identity through trusted proxies (CWE-307)
+- Fix(voice): reconcile peers against eligible seats only (CWE-863)
+- Fix(media): refuse game media uploads onto an existing note id (CWE-639)
+- Fix(admin): dissolve rooms permanently on administrative closure
+- Fix(server): clamp hello identity strings and ship rosters only on change
+- Fix(friends): require a device credential on every friends endpoint
+- Fix(server): require a seat-bound credential to replace a seat claim
+### Other
+- Ci(review): refuse checkout symlinks that leave the workspace
 ## [v1.3.0] - 2026-10-26
 ### Added
 - Feat(release): dispatch with legs= to re-test only failed builds
@@ -56,6 +76,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs: replace placeholder screenshots with real Playwright captures
 - Docs: replace duplicate screenshots with distinct labeled placeholders
 ### Fixed
+- Fix(release): gstreamer build+runtime packages for the snap part
 - Fix(release): RPM relation and AppImage Exec-name staging
 - Fix(release): emit per-leg booleans for the legs filter
 - Fix(release): legs filter without split() — concat-padded contains
