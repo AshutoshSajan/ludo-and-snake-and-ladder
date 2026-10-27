@@ -13,7 +13,11 @@ the printed path is not a boundary — the final canonical target has to be
 inside the workspace, or the link does not survive checkout.
 
 Refusing means removing the LINK, before the model runs; the review itself
-continues on a schedule where the path is simply no longer traversable.
+continues on a schedule where the path is simply no longer traversable. That
+must hold for every refused link: a removal that fails silently would let an
+unchanged escape reach the model process anyway, so failures are counted
+separately, summarized as nothing that was removed, and the script exits
+non-zero — the workflow's `set -euo pipefail` step stops before the model.
 Nothing outside the workspace is read, opened, written, or deleted in the
 process: resolving happens in the script's imagination (realpath of the
 lexical target), and unlinking touches only in-workspace link entries. Links
@@ -69,20 +73,39 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--workspace is not a directory: {args.workspace}")
 
     escaped = find_escaped_links(args.workspace)
+    removed: list[tuple[Path, Path]] = []
+    unremoved: list[tuple[Path, OSError]] = []
     for link, target in escaped:
         try:
             # The link is unlinked, its destination is never opened — the
             # operation cannot touch anything outside the workspace.
             link.unlink()
         except OSError as exc:
-            print(f"::warning::could not remove {link}: {exc}", file=sys.stderr)
-    if escaped:
+            # A failed removal is not a marginal outcome: the model is
+            # next to run, and a surviving escape link is the exact
+            # condition this script exists to prevent. Count it as not
+            # removed and fail closed below rather than carrying on.
+            unremoved.append((link, exc))
+            print(f"::error::could not remove {link}: {exc}", file=sys.stderr)
+            continue
+        removed.append((link, target))
+    if removed:
         print(
-            f"::warning::Removed {len(escaped)} checkout symlink(s) whose "
+            f"::warning::Removed {len(removed)} checkout symlink(s) whose "
             "target leaves the workspace; the review continues without them."
         )
-        for link, target in escaped:
+        for link, target in removed:
             print(f"  refused: {link} -> {target}")
+    if unremoved:
+        print(
+            f"::error::{len(unremoved)} checkout symlink(s) whose target "
+            "leaves the workspace could not be removed; the review stops "
+            "before the model runs, so no escape link survives checkout.",
+            file=sys.stderr,
+        )
+        for link, exc in unremoved:
+            print(f"  unrefused: {link} ({exc})", file=sys.stderr)
+        return 1
     return 0
 
 
