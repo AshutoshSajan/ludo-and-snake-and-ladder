@@ -266,6 +266,8 @@ Future<shelf.Response> _uploadNote(
   required String verb,
   required bool Function(String mime) mimeOk,
   required String mimeError,
+  bool Function(Uint8List bytes)? bodyOk,
+  String? bodyError,
 }) async {
   if (req.method != 'POST') {
     return _json(405, 'Use POST to upload a $verb');
@@ -304,11 +306,21 @@ Future<shelf.Response> _uploadNote(
       return _json(413, '${verb[0].toUpperCase()}${verb.substring(1)} too large');
     }
   }
+  final data = bytes.toBytes();
+  // The label alone is not proof of format: check what actually arrives
+  // before anything is stored. Stored notes are announce-and-immutable
+  // (the CWE-639 contract above), so a body that never should have been
+  // accepted could not be corrected later — the gate must run here,
+  // after the cap has bounded the materialization and before
+  // [MediaNoteStore.put].
+  if (bodyOk != null && !bodyOk(data)) {
+    return _json(400, bodyError ?? '$verb rejected (unsupported body)');
+  }
   final note = store.put(
     kind: kind,
     code: code,
     id: id,
-    data: bytes.toBytes(),
+    data: data,
     mime: mime,
     durMs: durMs,
   );
@@ -342,26 +354,87 @@ Future<shelf.Response> voiceNoteUpload(
 /// Handles `POST /media/image?room=CODE&id=xxx` — a GIF (or a still
 /// image) inserted from the mobile keyboard, uploaded before it is
 /// announced as a normal `'gif'` chat line. Same room-gating as voice.
+///
+/// Only inert raster formats are accepted (CWE-79), on both gates what
+/// can reach the serve path:
+///
+/// * the content type must name one of the four formats the
+///   keyboard-content client actually sends ([_imageNoteMimes] — which
+///   is exactly why `image/svg+xml`, which `image/*` used to pass, is
+///   out: an SVG file is an XML *document*, not a picture, and inline
+///   serving would execute it as one);
+/// * the bytes themselves must begin with a real raster signature
+///   ([_startsAsRaster]) — a label claiming `image/gif` never earns a
+///   stored `<?xml …` or `<script>` body.
 Future<shelf.Response> imageNoteUpload(
   shelf.Request req, {
   required MediaNoteStore store,
   required bool Function(String code) roomIsLive,
 }) {
-  bool imageMime(String mime) => mime.startsWith('image/');
   return _uploadNote(
     req,
     kind: MediaKind.image,
     store: store,
     roomIsLive: roomIsLive,
     verb: 'image note',
-    mimeOk: imageMime,
-    mimeError: 'A keyboard image must be a picture',
+    mimeOk: _imageNoteMimes.contains,
+    mimeError: 'Only GIF, PNG, JPEG or WebP images are accepted — '
+        'SVG is a document, not a picture',
+    bodyOk: _startsAsRaster,
+    bodyError: 'That file does not start like a GIF, PNG, JPEG or WebP picture',
   );
 }
+
+/// The raster mimes the keyboard-content flow can produce
+/// (lib/ui/shared/keyboard_content.dart's allow-list mirrored here).
+const Set<String> _imageNoteMimes = {
+  'image/gif',
+  'image/webp',
+  'image/png',
+  'image/jpeg',
+};
+
+/// True when [bytes] begins with the signature of one of the four raster
+/// formats [_imageNoteMimes] allows — anything else, active documents
+/// and markup included, starts differently and is refused before it can
+/// be stored. The keyboard contract may under-label the format (an IME
+/// that omits its mime type is sent as `image/gif` whatever the picture
+/// is — see `_safeMime`'s default), so the body need not match its own
+/// label's family; it only must be *some* verified inert raster.
+bool _startsAsRaster(Uint8List bytes) {
+  bool has(int at, List<int> sig) {
+    if (bytes.length - at < sig.length) return false;
+    for (var i = 0; i < sig.length; i++) {
+      if (bytes[at + i] != sig[i]) return false;
+    }
+    return true;
+  }
+
+  return has(0, _gif87aSignature) ||
+      has(0, _gif89aSignature) ||
+      has(0, _pngSignature) ||
+      has(0, _jpegSignature) ||
+      (has(0, _riffSignature) && has(8, _webpSignature));
+}
+
+const List<int> _gif87aSignature = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61];
+const List<int> _gif89aSignature = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+const List<int> _pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const List<int> _jpegSignature = [0xff, 0xd8, 0xff];
+const List<int> _riffSignature = [0x52, 0x49, 0x46, 0x46];
+const List<int> _webpSignature = [0x57, 0x45, 0x42, 0x50];
 
 /// Handles `GET /media/<kind>/<code>/<id>` — the raw bytes, no-store
 /// because notes die with the room and a cached ghost is worse than a
 /// 404.
+///
+/// The bytes are untrusted uploads, so they get served as inert as the
+/// web can make them (CWE-79): `content-security-policy: sandbox` gives
+/// a document load of this URL a unique opaque origin with scripting
+/// disabled, and `x-content-type-options: nosniff` refuses the browser
+/// any second opinion about the bytes' type. Inline mounting — the only
+/// way a played note actually appears — is unaffected: those
+/// directives bind document contexts, not `<img>`/`<audio>` embeds.
 shelf.Response mediaNoteServe(
   shelf.Request req, {
   required MediaNoteStore store,
@@ -386,6 +459,8 @@ shelf.Response mediaNoteServe(
       'content-type': note.mime,
       'cache-control': 'no-store',
       'accept-ranges': 'none',
+      'content-security-policy': 'sandbox',
+      'x-content-type-options': 'nosniff',
     },
   );
 }

@@ -483,6 +483,16 @@ void main() {
       expect(res2.statusCode, 400);
     });
 
+    test('a voice note body needs no raster signature', () async {
+      // The body gate is an image-note construction: audio MIMEs pass
+      // with whatever bytes the recorder produced — [9, 8, 7] starts like
+      // nothing a real audio container does, and is kept anyway.
+      final store = _store(_Clock());
+      final res = await post(store, body: [9, 8, 7]);
+      expect(res.statusCode, 200);
+      expect(store.get(MediaKind.voice, 'ROOM', 'abcdefgh'), isNotNull);
+    });
+
     test('a missing duration header is a 400, not a stored 0', () async {
       final store = _store(_Clock());
       final res = await post(store, duration: null);
@@ -517,7 +527,9 @@ void main() {
   });
 
   group('imageNoteUpload', () {
-    final gifBytes = Uint8List.fromList([71, 73, 70, 56, 57]); // "GIF89…"
+    // The full 6-byte GIF file header ("GIF89a") — the gate verifies a
+    // real raster signature, so the fixture must be a real one.
+    final gifBytes = Uint8List.fromList([71, 73, 70, 56, 57, 97]);
 
     Future<shelf.Response> post(
       MediaNoteStore store, {
@@ -591,6 +603,92 @@ void main() {
       expect(res2.statusCode, 400);
     });
 
+    test('SVG content types are refused, with the reason in the wording',
+        () async {
+      // image/svg+xml passed the old image/* gate; it is a document,
+      // not a picture, and inline serving would have executed it.
+      final svgBytes = Uint8List.fromList(
+        utf8.encode('<?xml version="1.0"?><svg>…'),
+      );
+      final res = await post(
+        _store(_Clock()),
+        mime: 'image/svg+xml',
+        body: svgBytes,
+      );
+      expect(res.statusCode, 400);
+      final body = jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body['text'], contains('SVG'));
+
+      final store = _store(_Clock());
+      final res2 = await post(store, mime: 'image/svg+xml', body: svgBytes);
+      expect(res2.statusCode, 400);
+      expect(store.totalBytes, 0, reason: 'nothing of it is ever held');
+    });
+
+    test('raster mimes are the whole accept-list, matching the keyboard client',
+        () async {
+      // Exactly what lib/ui/shared/keyboard_content.dart may send —
+      // anything beyond (image/avif, image/bmp, …) is refused at the mime
+      // gate even when the body is a decent raster. GIF and WebP are
+      // covered by their signature tests below.
+      for (final (mime, sig, id) in [
+        ('image/png', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'gifabc'),
+        ('image/jpeg', [0xff, 0xd8, 0xff], 'gifabd'),
+      ]) {
+        final store = _store(_Clock());
+        final res = await post(store, id: id, mime: mime, body: sig);
+        expect(res.statusCode, 200, reason: '$mime accepted with its own bytes');
+      }
+    });
+
+    test('a raster-labelled body that is not a raster is refused intact',
+        () async {
+      // The label claiming image/gif does not earn a stored markup body:
+      // signature gate catches whatever survived past the mime gate.
+      final store = _store(_Clock());
+      final markup = Uint8List.fromList(
+        utf8.encode('<script>alert(1)</script>'),
+      );
+      final res = await post(store, mime: 'image/gif', body: markup);
+      expect(res.statusCode, 400);
+      expect(store.get(MediaKind.image, 'ROOM', 'gifabc'), isNull);
+      expect(store.totalBytes, 0);
+    });
+
+    test('a body too short to verify any signature is refused', () async {
+      final res = await post(_store(_Clock()), body: [71, 73, 70, 56, 57]);
+      expect(res.statusCode, 400);
+      final res2 = await post(_store(_Clock()), body: [0x89, 0x50, 0x4e, 0x47]);
+      expect(res2.statusCode, 400);
+      final res3 = await post(_store(_Clock()), body: [1, 2, 3]);
+      expect(res3.statusCode, 400);
+    });
+
+    test('real WebP and GIF bodies are accepted', () async {
+      // WebP: RIFF ???? WEBP — the four label bytes then four free ones.
+      final webp = Uint8List.fromList(
+        [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50],
+      );
+      final store = _store(_Clock());
+      expect((await post(store, mime: 'image/webp', body: webp)).statusCode,
+          200);
+
+      final gif87a = Uint8List.fromList([71, 73, 70, 56, 55, 97]);
+      expect((await post(store, id: 'gifabd', body: gif87a)).statusCode, 200);
+    });
+
+    test('an underlabelled because label-less picture still gets in', () async {
+      // The keyboard contract sends a label-less IME picture as
+      // image/gif whatever format it actually is; the body need only be
+      // *some* verified inert raster, so gif-labelled png bytes pass —
+      // no real insertion flow is lost to the gate.
+      final png = Uint8List.fromList([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      final store = _store(_Clock());
+      final res = await post(store, mime: 'image/gif', body: png);
+      expect(res.statusCode, 200);
+      expect(store.get(MediaKind.image, 'ROOM', 'gifabc'), isNotNull);
+    });
+
     test('a body past the image cap is a 413 mid-stream', () async {
       final res = await post(
         _store(_Clock()),
@@ -631,6 +729,10 @@ void main() {
       expect(res.headers['content-type'], 'audio/mp4');
       expect(res.headers['cache-control'], 'no-store');
       expect(res.headers['accept-ranges'], 'none');
+      // Inert-serve hardening (CWE-79) rides on both kinds: a document
+      // load of this URL gets a sandboxed opaque origin and no sniffing.
+      expect(res.headers['content-security-policy'], 'sandbox');
+      expect(res.headers['x-content-type-options'], 'nosniff');
       final bytes = await res.read().fold<List<int>>(
         [],
         (acc, chunk) => acc..addAll(chunk),
@@ -654,6 +756,31 @@ void main() {
       expect(res.statusCode, 200);
       expect(res.headers['content-type'], 'image/gif');
       expect(res.headers['cache-control'], 'no-store');
+      expect(res.headers['content-security-policy'], 'sandbox');
+      expect(res.headers['x-content-type-options'], 'nosniff');
+    });
+
+    test('a pre-gate svg-labelled note serves inert anyway', () async {
+      // Bytes stored before the upload gate existed (or seeded directly)
+      // must not regain script authority at serve time: the stored label
+      // stays the truth of the response, and the sandbox + nosniff pair
+      // is what keeps a document load from executing it on our origin.
+      final store = _store(_Clock());
+      store.put(
+        kind: MediaKind.image,
+        code: 'ROOM',
+        id: 'gifabc',
+        data: Uint8List.fromList(utf8.encode('<svg><script>alert(1)</script>')),
+        mime: 'image/svg+xml',
+      );
+      final res = mediaNoteServe(
+        shelf.Request('GET', Uri.parse('http://s/media/image/ROOM/gifabc')),
+        store: store,
+      );
+      expect(res.statusCode, 200);
+      expect(res.headers['content-type'], 'image/svg+xml');
+      expect(res.headers['content-security-policy'], 'sandbox');
+      expect(res.headers['x-content-type-options'], 'nosniff');
     });
 
     test('HEAD answers like GET, without the body', () async {
