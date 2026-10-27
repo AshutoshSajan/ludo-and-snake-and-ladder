@@ -401,6 +401,9 @@ class OnlineClient extends ChangeNotifier {
   /// separate from the public roster identity (CWE-287 fix). Anything the
   /// server broadcasts — lobby, seats, state — never contains it.
   String _seatCredential = '';
+
+  /// The latest nonempty server grant, or [initialSeatCredential] until one
+  /// arrives. Presented in the WebSocket hello when nonempty.
   String get seatCredential =>
       _seatCredential.isEmpty ? initialSeatCredential : _seatCredential;
 
@@ -1256,8 +1259,8 @@ class OnlineClient extends ChangeNotifier {
       if (s.seatId.isNotEmpty && s.status != SeatStatus.left) s.seatId,
   };
 
-  /// Joins the table voice. False when the mic was refused — the caller
-  /// surfaces that rather than flipping the button into a silent state.
+  /// Joins the table voice after reconciling eligible peers. Returns false
+  /// for spectators or when the mic is refused, so callers can show failure.
   Future<bool> joinVoice() async {
     if (_spectating) return false;
     // The seat roster must be known before offers are elected; feeding it

@@ -356,8 +356,16 @@ abstract interface class FriendStore {
   /// * [clearCredential] — operator relief: frees the seat for a fresh
   ///   bind when its device lost the secret. Recovery tooling only; the
   ///   HTTP surface never calls it.
+  ///
+  /// Trims [seatId] and throws [ArgumentError] if it is empty. [tokenHash]
+  /// must be hashed by the caller; the store does not hash it.
   Future<bool> bindCredential(String seatId, String tokenHash);
+
+  /// Returns the seat bound to the exact [tokenHash], or null if unknown.
   Future<String?> seatForCredential(String tokenHash);
+
+  /// Removes the trimmed [seatId]'s binding, allowing its seat and hash to
+  /// bind again. Does nothing when no binding exists.
   Future<void> clearCredential(String seatId);
 
   /// The profile for [seatId], if that player ever registered.
@@ -696,6 +704,8 @@ class SqliteFriendStore implements FriendStore {
       'SELECT ?, ?, ? WHERE NOT EXISTS ('
       'SELECT 1 FROM friend_credentials WHERE seat_id = ?)';
 
+  /// Binds a caller-hashed token using [FriendStore.bindCredential]'s rules.
+  /// Insert-time [SqliteException]s return false; read errors propagate.
   @override
   Future<bool> bindCredential(String seatId, String tokenHash) async {
     final id = seatId.trim();

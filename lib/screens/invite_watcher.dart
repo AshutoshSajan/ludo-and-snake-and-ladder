@@ -306,6 +306,8 @@ class InviteWatcher {
     }
   }
 
+  /// Loads the device identity for authenticated polls, or the injected
+  /// override. Generates and saves a default display name when absent.
   Future<({String seatId, String name, String credential})>
   _loadIdentity() async {
     final override = identityOverride;

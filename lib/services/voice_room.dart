@@ -252,6 +252,7 @@ class VoiceRoom {
   /// nobody left to reach — the same reasoning [abandoned] uses). Feeds
   /// that still list the departed seat are handled by reconciliation;
   /// this is for the instant close when the exit itself is announced.
+  /// An unknown seat is ignored without notifying listeners.
   void removeSeat(String seat) {
     if (!_peers.containsKey(seat)) return;
     _closePeer(seat);

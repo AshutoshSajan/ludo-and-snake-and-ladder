@@ -122,18 +122,21 @@ class StorageService {
   }
 
   /// The game server's private seat-reclaim credential, as granted inside
-  /// the [joined] response of the room authority. Persisted beside the id
+  /// the `joined` response of the room authority. Persisted beside the id
   /// and name with the same lifetime — one device profile — because the
   /// server refuses a seat rewrite without it and a restart mid-game must
   /// still be able to present it (CWE-287). Distinct from the friends
   /// credential's `gc.onlineCredential`: that one the device generates for
   /// the friends server; this one the game server grants per room, so the
   /// key differs to keep neither secret from clobbering the other.
+  /// Returns an empty string when no credential has been saved.
   Future<String> loadSeatCredential() async {
     final sp = await SharedPreferences.getInstance();
     return sp.getString(_kSeatCredential) ?? '';
   }
 
+  /// Replaces the saved game-seat credential for the next reconnect.
+  /// An empty value clears the usable claim without changing the player id.
   Future<void> saveSeatCredential(String credential) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kSeatCredential, credential);

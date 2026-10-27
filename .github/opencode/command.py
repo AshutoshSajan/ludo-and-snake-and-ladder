@@ -464,7 +464,12 @@ def strip_html_comments(text: str) -> str:
 
 
 def clean_reply(text: str) -> str:
-    """Turn untrusted model prose into a bounded Markdown reply."""
+    """Return sanitized Markdown, or an empty string for non-string input.
+
+    Limit the input before removing HTML comments, then remove review markers
+    and neutralize mentions. Truncated replies include a notice in addition
+    to the MAX_REPLY_CHARS content limit.
+    """
 
     if not isinstance(text, str):
         return ""

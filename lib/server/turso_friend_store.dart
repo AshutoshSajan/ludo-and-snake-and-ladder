@@ -413,6 +413,9 @@ class TursoFriendStore implements FriendStore {
       'SELECT ?, ?, ? WHERE NOT EXISTS ('
       'SELECT 1 FROM friend_credentials WHERE seat_id = ?)';
 
+  /// Binds a caller-hashed token using [FriendStore.bindCredential]'s rules.
+  /// Unique-constraint failures during insertion return false; other
+  /// [TursoFriendStoreException]s propagate, including lookup/schema failures.
   @override
   Future<bool> bindCredential(String seatId, String tokenHash) async {
     final id = seatId.trim();
