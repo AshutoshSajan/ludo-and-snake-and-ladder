@@ -12,10 +12,19 @@
 ///   GET  /leaderboard -> top players + total games recorded
 ///   POST /feedback    -> player report: bug / feature request / question /
 ///                        other (the contact page posts here too)
+///   POST /friends/...    -> the friends family (see block below). Every
+///                        acting-seat route requires the device credential
+///                        as `Authorization: Bearer <token>` — the device
+///                        secret the first /friends/state call binds to a
+///                        seat id; a request's seat id must match the
+///                        credential's bound seat or it is a 401.
 ///   POST /friends/state    -> full friends screen bundle (profile +
 ///                        friends w/ latest-message ids, requests,
-///                        invites, blocks) for one seat
+///                        invites, blocks) for one seat; also the bind
+///                        point — first state call binds the presented
+///                        credential hash to the seat's public id
 ///   POST /friends/lookup   -> resolve a friend code / seat id to a profile
+///                        (public: it needs no acting seat)
 ///   POST /friends/request  -> send (or match) a friend request
 ///   POST /friends/respond  -> accept / decline / withdraw a request
 ///   POST /friends/remove   -> un-friend (either side)
@@ -66,6 +75,7 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:game_club/engine/ludo/ludo_models.dart';
 import 'package:game_club/server/admin_store.dart';
 import 'package:game_club/server/admin_tables.dart';
+import 'package:game_club/server/auth.dart' show hashToken;
 import 'package:game_club/server/game_server.dart';
 import 'package:game_club/server/friend_store.dart';
 import 'package:game_club/server/gif.dart';
@@ -259,6 +269,29 @@ Future<void> advertiseRoom(Room room) async {
       .catchError((Object _) {});
 }
 
+/// The largest message a single connection may hand the protocol
+/// parser, in characters of a UTF-16-ish Dart string (a few bytes less
+/// than the wire frame). The biggest legitimate intent is a voice
+/// note's WebRTC signalling payload, itself capped at 64 KiB inside the
+/// intent handler; everything beyond this bound is parse cost and
+/// retained-metadata fuel somebody else pays for — refused with an
+/// error before the process does any work with it (per-connection
+/// message limit, the transport half of the CWE-400 fix).
+const maxIncomingMessageChars = 96 * 1024;
+
+/// Trims and clamps a hello-carried identity string — a display name or
+/// a seat id — to [max] characters. Both ride every roster broadcast to
+/// every tablemate, so a bound enforced BEFORE anything retains them
+/// keeps stored metadata from becoming megabyte re-serializations on
+/// every later message (CWE-400). Non-string JSON arrives as [fallback]:
+/// the hello path used to let a `"name": 12345` crash an uncaught cast
+/// in the socket listener, which a clean default now answers instead.
+String _clampIdentity(Object? value, Object fallback, int max) {
+  final c = value is String ? value : fallback.toString();
+  final v = c.trim();
+  return v.length <= max ? v : v.substring(0, max);
+}
+
 shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
   final connId = 'c${_connCounter++}';
   _openConnections.add(connId); // counted from the raw socket up
@@ -267,6 +300,15 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
 
   webSocket.stream.listen(
     (data) async {
+      // Per-connection inbound bound BEFORE any parse work: no single
+      // frame may cost the process serialization, CPU or memory beyond
+      // this line. Empty frames fall through to the bad-json answer.
+      if (data is String && data.length > maxIncomingMessageChars) {
+        webSocket.sink.add(
+          jsonEncode({'type': 'error', 'text': 'message too large'}),
+        );
+        return;
+      }
       Map<String, dynamic> msg;
       try {
         msg = jsonDecode(data as String) as Map<String, dynamic>;
@@ -283,8 +325,22 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
           );
           return;
         }
-        final seatId = msg['seatId'] as String? ?? '';
-        final name = (msg['name'] as String? ?? 'Player').trim();
+        // Enemy input here is arbitrary JSON: both reads are typed and
+        // clamped BEFORE anything retains them. The roster ships these
+        // strings to every tablemate, so an oversized name or seat id
+        // meant two junk intents re-shipping megabyte rosters (CWE-400);
+        // a non-string JSON value is a clean default, not an uncaught
+        // cast in the socket listener.
+        final seatId = _clampIdentity(
+          msg['seatId'],
+          '',
+          ServerMember.maxSeatIdChars,
+        );
+        final name = _clampIdentity(
+          msg['name'],
+          'Player',
+          ServerMember.maxNameChars,
+        );
         if (seatId.isEmpty) {
           webSocket.sink.add(
             jsonEncode({'type': 'error', 'text': 'seatId required'}),
@@ -484,7 +540,7 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
             'credential': room.seatCredentials[member!.seatId],
           }),
         );
-        _lobby(room);
+        room.broadcastLobbyIfChanged();
         // Who holds which corner, whether their link is live, whether the
         // table is playing for them, and who has left: the corner badges
         // and the "X left the game" notice both read this.
@@ -509,10 +565,14 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
         final room = authority.rooms[roomCode];
         if (room != null) {
           authority.handleIntent(room: room, connectionId: connId, msg: msg);
-          // Keep the roster fresh — in the lobby too, where a player who
-          // walks out must disappear from everyone's seat list and not
-          // only once a game happens to be running.
-          _lobby(room);
+          // Ship the roster only when it actually changed: the lobby lane
+          // must not turn every dead letter or rejected intent into a
+          // full re-serialization of stored metadata for the whole table
+          // (the intent half of the CWE-400 bound — see
+          // Room.broadcastLobbyIfChanged). A player who walks out in the
+          // lobby still leaves everyone's seat list the moment a real
+          // roster change ships it.
+          room.broadcastLobbyIfChanged();
         }
       }
     },
@@ -549,25 +609,6 @@ Future<String?> _foreignOwnerOf(String code) async {
   } on RoomRegistryException {
     return null;
   }
-}
-
-void _lobby(Room room) {
-  room.broadcast({
-    'type': 'lobby',
-    'code': room.code,
-    'started': room.started,
-    // Table size the room closes at: the lobby's "Waiting for players…
-    // (n/size)" line reads this. Fine to list next to the roster — a size
-    // never changes after creation, so unlike the seats it cannot disagree
-    // with itself between arrivals.
-    'capacity': room.capacity,
-    // The same entries the `seats` feed carries, so whichever of the two
-    // arrives last cannot wipe the seat ids and statuses the other one
-    // reported — two shapes for one roster is how badges start disappearing
-    // at random, depending on the order the broadcasts land in.
-    'seats': room.seatsJson()['seats'],
-    'spectators': [for (final m in room.spectators.values) m.name],
-  });
 }
 
 /// The documented JSON health check. Always served at GET /health; at GET /
@@ -659,9 +700,10 @@ Map<String, String> _corsHeaders(shelf.Request req) => {
   // preflight must advertise it or browsers refuse the real request.
   'access-control-allow-methods': 'GET, POST, OPTIONS',
   // Echoed back rather than a fixed list: a preflight that asks for a header
-  // the server does not echo is rejected by the browser, and today only a
-  // header-less GET or POST is ever made. Answering what was asked keeps a
-  // future request (or a dev proxy adding one) from failing as a CORS error.
+  // the server does not echo is rejected by the browser, and friends calls
+  // carry `Authorization` (the device credential), so answering whatever was
+  // asked keeps a future request (or a dev proxy adding one) from failing as
+  // a CORS error.
   'access-control-allow-headers':
       ?req.headers['access-control-request-headers'],
   'access-control-max-age': '600',
@@ -1022,10 +1064,70 @@ List<Map<String, Object?>> tableRowsFor(String seatId, Set<String> covered) {
   return rows.length > 32 ? rows.sublist(0, 32) : rows;
 }
 
+/// The friends family's devices credential: every acting-seat route reads
+/// `Authorization: Bearer <token>` — the private half of the identity —
+/// and derives the acting seat from the store's hash-to-seat lookup. The
+/// request's `seatId` parameter stays public and advisory: presenting a
+/// seat id other than the credential's bound seat is a 401, never an
+/// identity.
+///
+
+/// User-facing texts for the three credential failures. Each phrases the
+/// fix (update the app / finish sign-in / wrong device) so the friends
+/// surfaces can show it without re-wording.
+const _credentialMissingText =
+    'Friends needs this device\'s identity — update Game Club and try again.';
+const _credentialUnboundText =
+    'Friends sign-in on this device is not set up yet — open the Friends '
+    'screen once to finish.';
+const _credentialForeignText =
+    'This seat\'s friends identity belongs to another device.';
+
+/// The raw credential from the request, presented as
+/// `Authorization: Bearer <token>` (the same scheme the admin sessions
+/// use, on disjoint routes). Null when it is absent or malformed — a
+/// bearer-less call carries no identity at all.
+String? _friendCredential(shelf.Request req) {
+  final header = req.headers['authorization'] ?? '';
+  const prefix = 'Bearer ';
+  if (!header.startsWith(prefix)) return null;
+  final token = header.substring(prefix.length).trim();
+  // The bound is generous (256-bit tokens are ~43 chars) but keeps a
+  // malformed or padded header from shipping megabytes into a hash.
+  return token.isEmpty || token.length > 256 ? null : token;
+}
+
+/// Validates the request's friends credential for [seatId] and returns the
+/// 401 to send instead of acting — null when the credential is bound to
+/// exactly this seat. The check is deliberately derive-shaped: the seat
+/// comes from the credential's stored binding, the request's [seatId]
+/// parameter may only *agree* with it, so the public id can no longer
+/// stand in for a credential (the friends chat reads, DM sends, request/
+/// respond/remove, block/unblock, invites and reports all route through
+/// this gate).
+Future<shelf.Response?> _friendIdentity(shelf.Request req, String seatId) async {
+  final credential = _friendCredential(req);
+  if (credential == null) {
+    return _friendBadRequest(_credentialMissingText, code: 401);
+  }
+  final bound = await friendStore.seatForCredential(hashToken(credential));
+  if (bound == null) {
+    return _friendBadRequest(_credentialUnboundText, code: 401);
+  }
+  if (bound != seatId) {
+    return _friendBadRequest(_credentialForeignText, code: 401);
+  }
+  return null;
+}
+
 /// poll coarsely.
 Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
   if (req.method != 'POST') {
     return _friendBadRequest('POST only', code: 405);
+  }
+  final credential = _friendCredential(req);
+  if (credential == null) {
+    return _friendBadRequest(_credentialMissingText, code: 401);
   }
   final body = await _readJsonBody(req);
   final seatId = (body['seatId'] as String? ?? '').trim();
@@ -1034,6 +1136,17 @@ Future<shelf.Response> friendsStateHandler(shelf.Request req) async {
     return _friendBadRequest('seatId and name required');
   }
   if (await _friendBanned(seatId) case final banned?) return banned;
+  // The bind point: the first state call couples the presented credential
+  // hash to this seat id. First binder wins — a seat already held by
+  // another token rejects re-binding, and a banned seat never binds.
+  final bound = await friendStore.seatForCredential(hashToken(credential));
+  if (bound == null) {
+    if (!await friendStore.bindCredential(seatId, hashToken(credential))) {
+      return _friendBadRequest(_credentialForeignText, code: 401);
+    }
+  } else if (bound != seatId) {
+    return _friendBadRequest(_credentialForeignText, code: 401);
+  }
   final profile = await friendStore.serve(seatId, name);
   unawaited(
     adminStore
@@ -1117,8 +1230,10 @@ Future<shelf.Response> friendsRequestHandler(shelf.Request req) async {
     );
   }
   final body = await _readJsonBody(req);
-  final seatId = (body['seatId'] as String? ?? '');
+  final seatId = (body['seatId'] as String? ?? '').trim();
   final target = (body['target'] as String? ?? '');
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   try {
     final status = await friendStore.sendRequest(
       seatId,
@@ -1165,6 +1280,8 @@ Future<shelf.Response> friendsRespondHandler(shelf.Request req) async {
   final id = int.tryParse('${body['id']}') ?? -1;
   if (id < 0) return _friendBadRequest('id required');
   final accept = body['accept'] as bool? ?? false;
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   final acting = await _friendBanned(seatId);
   if (acting != null) return acting;
   final ok = accept
@@ -1187,6 +1304,8 @@ Future<shelf.Response> friendsRemoveHandler(shelf.Request req) async {
   if (seatId.isEmpty || target.isEmpty) {
     return _friendBadRequest('seatId and target required');
   }
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   final acting = await _friendBanned(seatId);
   if (acting != null) return acting;
   if (!await friendStore.areFriends(seatId, target)) {
@@ -1208,6 +1327,8 @@ Future<shelf.Response> friendsBlockHandler(shelf.Request req) async {
   if (seatId.isEmpty || target.isEmpty) {
     return _friendBadRequest('seatId and target required');
   }
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId) case final banned?) return banned;
   try {
     await friendStore.block(
@@ -1237,6 +1358,8 @@ Future<shelf.Response> friendsUnblockHandler(shelf.Request req) async {
   if (seatId.isEmpty || target.isEmpty) {
     return _friendBadRequest('seatId and target required');
   }
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId) case final banned?) return banned;
   final ok = await friendStore.unblock(seatId, target);
   return _friendJson({'ok': ok});
@@ -1264,6 +1387,8 @@ Future<shelf.Response> friendsReportHandler(shelf.Request req) async {
   if (seatId.isEmpty || target.isEmpty) {
     return _friendBadRequest('seatId and target required');
   }
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId) case final banned?) return banned;
   final name = await reportStoreLookupName(
     target,
@@ -1315,6 +1440,8 @@ Future<shelf.Response> friendsChatHandler(shelf.Request req) async {
   if (seatId.isEmpty || peer.isEmpty) {
     return _friendBadRequest('seatId and peer query params required');
   }
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId) case final banned?) return banned;
   final page = await friendStore.chat(
     seatId,
@@ -1350,6 +1477,8 @@ Future<shelf.Response> friendsChatSendHandler(shelf.Request req) async {
   if (seatId.isEmpty || to.isEmpty) {
     return _friendBadRequest('seatId and to required');
   }
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId) case final banned?) return banned;
   try {
     final message = await friendStore.send(
@@ -1376,6 +1505,8 @@ Future<shelf.Response> friendsChatLikeHandler(shelf.Request req) async {
   final seatId = (body['seatId'] as String? ?? '').trim();
   final id = int.tryParse('${body['messageId']}') ?? -1;
   if (id < 0) return _friendBadRequest('messageId required');
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId) case final banned?) return banned;
   try {
     final message = await friendStore.like(
@@ -1416,7 +1547,9 @@ Future<shelf.Response> friendsInviteHandler(shelf.Request req) async {
     );
   }
   final body = await _readJsonBody(req);
-  final seatId = (body['seatId'] as String? ?? '');
+  final seatId = (body['seatId'] as String? ?? '').trim();
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId.trim()) case final banned?) return banned;
   try {
     final invite = await friendStore.sendInvite(
@@ -1466,6 +1599,8 @@ Future<shelf.Response> friendsInviteRespondHandler(shelf.Request req) async {
   if (seatId.isEmpty) return _friendBadRequest('seatId required');
   final id = int.tryParse('${body['id']}') ?? -1;
   if (id < 0) return _friendBadRequest('id required');
+  final denied = await _friendIdentity(req, seatId);
+  if (denied != null) return denied;
   if (await _friendBanned(seatId) case final banned?) return banned;
   // Accept → the room code when the invite carried one (null when it was
   // code-less); decline → null. Answering twice, or someone else's
@@ -1957,17 +2092,20 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
       );
     case 'rooms/close':
       final code = (body['code'] as String? ?? '').trim().toUpperCase();
-      final room = authority.rooms[code];
-      if (room == null) {
+      if (authority.rooms[code] == null) {
         return shelf.Response(
           404,
           body: jsonEncode({'ok': false, 'text': "room '$code' not found"}),
           headers: {'content-type': 'application/json'},
         );
       }
-      for (final connId in room.members.keys.toList()) {
-        authority.leaveRoom(code, connId);
-      }
+      // Permanent closure, not a connection-by-connection disconnect:
+      // leaveRoom deliberately keeps a started game alive for reconnecting
+      // players, which would let a former participant reclaim their seat
+      // right after the action reports success (CWE-863 bypass). The
+      // table is dissolved in one step and the sockets receive the
+      // roomClosed notice from it.
+      authority.closeRoomPermanently(code);
       await adminStore.recordRoomClosed(code, playerCount: 0);
       return shelf.Response.ok(
         jsonEncode({'ok': true}),

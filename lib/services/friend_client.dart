@@ -3,9 +3,11 @@
 /// Mirrors `report_client.dart`: the ws(s) server URL is rewritten to
 /// http(s), every failure becomes a [FriendException] whose text is the
 /// server's user-presentable wording, and a per-test injectable
-/// `http.Client` keeps tests off the wire. The server is
-/// unauthenticated by design — identity is the seat id the WS `hello`
-/// path already asserts, bounded by per-IP throttles and per-seat caps.
+/// `http.Client` keeps tests off the wire. Every call carries the device's
+/// friends credential (`Authorization: Bearer`) — the private half of the
+/// seat identity, bound to its public seat id server-side on first
+/// registration. Reads/writes are no longer seat-claim games: the server
+/// derives the acting seat from the credential.
 ///
 /// The server's shape knowledge lives here in one place: every row lands
 /// as the store's `toJson()`, so the fromJson factories below take an
@@ -293,14 +295,31 @@ class FriendState {
 }
 
 class FriendClient {
-  FriendClient({required this.serverUrl, http.Client? httpClient})
-    : _client = httpClient ?? http.Client(),
-      _ownsClient = httpClient == null;
+  FriendClient({
+    required this.serverUrl,
+    required this.credential,
+    http.Client? httpClient,
+  }) : _client = httpClient ?? http.Client(),
+       _ownsClient = httpClient == null;
 
   /// Same-origin game server URL (ws(s)://host/ws form, as everywhere).
   final String serverUrl;
+
+  /// The device's friends credential — the private half of the identity
+  /// the server binds to the seat id. Presented as
+  /// `Authorization: Bearer` on every call; empty only in tests that
+  /// exercise request shapes below the auth plane.
+  final String credential;
+
   final http.Client _client;
   final bool _ownsClient;
+
+  /// Headers every friends request rides with: JSON body encoding plus
+  /// the credential when the client holds one.
+  Map<String, String> _headers() => {
+    'content-type': 'application/json',
+    if (credential.isNotEmpty) 'authorization': 'Bearer $credential',
+  };
 
   Uri _uri(String path) {
     final base = Uri.parse(serverUrl);
@@ -317,11 +336,7 @@ class FriendClient {
     Map<String, dynamic> body,
   ) async {
     final resp = await _attempt(
-      () => _client.post(
-        _uri(path),
-        headers: {'content-type': 'application/json'},
-        body: jsonEncode(body),
-      ),
+      () => _client.post(_uri(path), headers: _headers(), body: jsonEncode(body)),
     );
     return _unwrap(resp);
   }
@@ -332,7 +347,10 @@ class FriendClient {
     Map<String, String> query,
   ) async {
     final resp = await _attempt(
-      () => _client.get(_uri(path).replace(queryParameters: {...query})),
+      () => _client.get(
+        _uri(path).replace(queryParameters: {...query}),
+        headers: _headers(),
+      ),
     );
     return _unwrap(resp);
   }
@@ -355,11 +373,7 @@ class FriendClient {
     Map<String, dynamic> body,
   ) async {
     final resp = await _attempt(
-      () => _client.post(
-        _uri(path),
-        headers: {'content-type': 'application/json'},
-        body: jsonEncode(body),
-      ),
+      () => _client.post(_uri(path), headers: _headers(), body: jsonEncode(body)),
     );
     try {
       return jsonDecode(resp.body) as Map<String, dynamic>;

@@ -67,7 +67,11 @@ class InviteWatcher {
 
   /// Test seam: a pre-resolved identity. Production reads storage and, on
   /// a first-time player, derives and persists the stable default name.
-  final Future<({String seatId, String name})>? identityOverride;
+  /// The credential rides with the id: the state poll presents it as
+  /// `Authorization: Bearer` (tests that override identity prove their
+  /// token, too — a bearer-less poll cannot reach the server).
+  final Future<({String seatId, String name, String credential})>?
+  identityOverride;
 
   /// Test seam for the notification sound. Production leaves it null and
   /// reads the saved sound toggle before chiming; a test that counts
@@ -159,7 +163,10 @@ class InviteWatcher {
     final factory = clientFactory;
     final answers = _client ??= factory != null
         ? factory()
-        : FriendClient(serverUrl: defaultServerUrl());
+        : FriendClient(
+            serverUrl: defaultServerUrl(),
+            credential: identity.credential,
+          );
     final state = await answers.state(
       seatId: identity.seatId,
       name: identity.name,
@@ -216,7 +223,7 @@ class InviteWatcher {
   /// directly. One dedupe set guards every caller, so an invite can never
   /// knock twice on screen.
   Future<void> seeInvites({
-    required ({String seatId, String name}) identity,
+    required ({String seatId, String name, String credential}) identity,
     required Iterable<FriendInviteView> invites,
     required FriendClient answers,
   }) async {
@@ -299,11 +306,13 @@ class InviteWatcher {
     }
   }
 
-  Future<({String seatId, String name})> _loadIdentity() async {
+  Future<({String seatId, String name, String credential})>
+  _loadIdentity() async {
     final override = identityOverride;
     if (override != null) return override;
     final storage = StorageService();
     final id = await storage.loadOnlinePlayerId();
+    final credential = await storage.loadOnlineCredential();
     var name = await storage.loadOnlineName();
     if (name.isEmpty) {
       // A first-time player never typed a name: derive the same stable
@@ -312,7 +321,7 @@ class InviteWatcher {
       name = DefaultNames.unique(playerId: id);
       await storage.saveOnlineName(name);
     }
-    return (seatId: id, name: name);
+    return (seatId: id, name: name, credential: credential);
   }
 
   /// The knock: the table family's gold-rimmed card at the top right,

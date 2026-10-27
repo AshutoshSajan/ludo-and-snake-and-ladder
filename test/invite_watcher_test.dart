@@ -48,14 +48,18 @@ void main() {
 
   Future<InviteWatcher> watcherWith(
     MockClient mock, {
-    ({String seatId, String name}) identity = const (seatId: 'p2', name: 'Bo'),
+    ({String seatId, String name, String credential}) identity =
+        const (seatId: 'p2', name: 'Bo', credential: 'test-credential'),
     Duration? every,
     Future<void> Function()? chime,
   }) async {
     final watcher = InviteWatcher(
       interval: every ?? interval,
-      clientFactory: () =>
-          FriendClient(serverUrl: 'wss://test/ws', httpClient: mock),
+      clientFactory: () => FriendClient(
+        serverUrl: 'wss://test/ws',
+        credential: identity.credential,
+        httpClient: mock,
+      ),
       identityOverride: Future.value(identity),
       // Tests must not touch platform audio channels; the production
       // chime is covered by the service's own test.
@@ -425,7 +429,7 @@ void main() {
         posts.add(req);
         return http.Response('{}', 200);
       }),
-      identity: (seatId: '', name: ''),
+      identity: (seatId: '', name: '', credential: ''),
     );
     await tester.pumpWidget(shell());
     watcher.start();

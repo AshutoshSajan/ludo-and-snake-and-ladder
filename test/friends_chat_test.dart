@@ -75,6 +75,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient(
           (_) async => ok({
             'ok': true,
@@ -119,6 +120,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient((req) async {
           if (req.url.path == '/friends/chat/like') {
             serverLiked = jsonDecode(req.body)['liked'] as bool;
@@ -158,6 +160,7 @@ void main() {
       tester,
       FriendClient(
         serverUrl: serverUrl,
+        credential: 'test-credential',
         httpClient: MockClient(
           (_) async => ok({
             'ok': true,

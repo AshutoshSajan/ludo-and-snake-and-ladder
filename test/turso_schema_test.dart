@@ -30,6 +30,7 @@ void main() {
         'friend_messages',
         'friend_invites',
         'friend_blocks',
+        'friend_credentials',
         // The older stores keep sharing the file.
         'results',
         'players',

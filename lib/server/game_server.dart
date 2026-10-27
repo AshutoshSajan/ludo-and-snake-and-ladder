@@ -23,6 +23,18 @@ import 'media.dart';
 
 /// One connected participant.
 class ServerMember {
+  /// The identity bounds a hello may retain. Roster metadata rides every
+  /// broadcast to every tablemate — and a roster was re-serialized on
+  /// every parsed object — so an unbounded display name or seat id made
+  /// two junk messages a megabyte-scale amplification (CWE-400). Both
+  /// are clamped by the transport BEFORE a [ServerMember] exists. The
+  /// name bound matches the friends identity plane's
+  /// `FriendCaps.maxNameLength` so one person is one bounded size
+  /// everywhere; the seat bound is far above the ~15 characters the app
+  /// mints, so no real device id is ever touched by it.
+  static const maxNameChars = 60;
+  static const maxSeatIdChars = 40;
+
   ServerMember({
     required this.id,
     required this.seatId,
@@ -299,8 +311,9 @@ class Room {
     started = true;
   }
 
-  void broadcast(Map<String, dynamic> message) {
-    final json = jsonEncode(message);
+  /// One JSON payload to every member and spectator — the loop every
+  /// broadcast lane shares.
+  void broadcastJson(String json) {
     for (final m in [...members.values, ...spectators.values]) {
       try {
         m.sink(json);
@@ -308,6 +321,67 @@ class Room {
         // A dead connection is pruned by the transport layer.
       }
     }
+  }
+
+  void broadcast(Map<String, dynamic> message) =>
+      broadcastJson(jsonEncode(message));
+
+  /// The waiting-room feed: who is seated and who watches, plus whether
+  /// the table has started. The same entries the `seats` feed carries,
+  /// so whichever of the two arrives last cannot wipe the seat ids and
+  /// statuses the other one reported — two shapes for one roster is how
+  /// badges start disappearing at random, depending on the order the
+  /// broadcasts land in.
+  Map<String, dynamic> lobbyFeed() => {
+    'type': 'lobby',
+    'code': code,
+    'started': started,
+    // Table size the room closes at: the lobby's "Waiting for players…
+    // (n/size)" line reads this. Fine to list next to the roster — a size
+    // never changes after creation, so unlike the seats it cannot disagree
+    // with itself between arrivals.
+    'capacity': capacity,
+    // The same entries the `seats` feed carries, so whichever of the two
+    // arrives last cannot wipe the seat ids and statuses the other one
+    // reported — two shapes for one roster is how badges start disappearing
+    // at random, depending on the order the broadcasts land in.
+    'seats': seatsJson()['seats'],
+    'spectators': [for (final m in spectators.values) m.name],
+  };
+
+  /// The lobby feed exactly as this room last shipped it, or null before
+  /// the first ship. Lives on the room so the dedupe dies with it.
+  String? _lastLobbyJson;
+
+  /// Marks the feed unseen, so the next [broadcastLobbyIfChanged] ships a
+  /// full copy even when the roster reads identical.
+  ///
+  /// The one case that needs it: a reconnection replaces a detached
+  /// connection one-for-one ([rejoinRoom] for a player, the seat-id swap
+  /// in [spectateRoom] for a watcher), so the roster contents are byte-
+  /// for-byte what the room last shipped — yet the *new* connection has
+  /// never seen a lobby feed and would otherwise get none until the next
+  /// real roster change.
+  void markLobbyUnseen() => _lastLobbyJson = null;
+
+  /// Ships the lobby feed only when its CONTENTS differ from the room's
+  /// last ship.
+  ///
+  /// The change-only rule is a deliberate cost bound: the transport used
+  /// to re-serialize and re-send this whole roster after every parsed
+  /// object — dead letters, rejected intents, junk JSON — so a retained
+  /// oversized name turned two two-byte messages into megabyte frames
+  /// delivered to the whole table (CWE-400). A real change (a seat, a
+  /// watcher, the started flag, a turn-miss counter) always alters the
+  /// payload and still ships immediately; identical payloads travel the
+  /// `seats` / `state` lanes instead. A joining connection is always
+  /// added to the roster before this runs, so every arrival ships their
+  /// own feed once.
+  void broadcastLobbyIfChanged() {
+    final json = jsonEncode(lobbyFeed());
+    if (json == _lastLobbyJson) return;
+    _lastLobbyJson = json;
+    broadcastJson(json);
   }
 
   /// Sends a message to whichever live connection currently holds
@@ -656,6 +730,13 @@ class GameAuthority {
     // credential minted into the room's bound secret store; later
     // admissions fall through to putIfAbsent, which keeps the original.
     _bindSeatCredential(room, member.seatId);
+    // A newly seated member has by definition not seen the room's last
+    // lobby feed. A fresh join changes the roster and ships regardless,
+    // but a RETURNING player whose socket dropped is re-seated here to a
+    // byte-identical roster — without the unseen mark the change-only
+    // lane (Room.broadcastLobbyIfChanged) would swallow their only copy
+    // (CWE-400 fix; see Room.markLobbyUnseen).
+    room.markLobbyUnseen();
     return room;
   }
 
@@ -682,6 +763,10 @@ class GameAuthority {
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
     _bindSeatCredential(room, member.seatId);
+    // Same guarantee as joinRoom: a seated connection must receive its
+    // first feed (Room.markLobbyUnseen) even when the roster it joins
+    // reads identical to the last ship.
+    room.markLobbyUnseen();
     return room;
   }
 
@@ -710,6 +795,10 @@ class GameAuthority {
     room.spectators.removeWhere((_, m) => m.seatId == member.seatId);
     room.abandonTimer?.cancel();
     room.abandonTimer = null;
+    // The roster reads identical, but THIS connection never saw a lobby
+    // feed — the rejoin replaced the detached connection one-for-one, so
+    // the dedupe must not swallow their copy (see Room.markLobbyUnseen).
+    room.markLobbyUnseen();
     room.broadcast(room.seatsJson()); // clears their "away" badge
     // Coming back wakes the driver up again: a room that went quiet froze its
     // autoplay mid-turn, and this is where the paused turn is picked back up.
@@ -746,6 +835,10 @@ class GameAuthority {
     // Watchers are also granted the private reconnect credential: from
     // here on, reconnecting into watcher mode re-verifies the same seat.
     _bindSeatCredential(room, member.seatId);
+    // A replacing watcher connection has never seen the room's lobby feed
+    // (and the roster it produces is identical to the last ship): mark the
+    // feed unseen so their hello ships it once (see Room.markLobbyUnseen).
+    room.markLobbyUnseen();
     // Somebody is watching again, so a game the table was handed may resume:
     // the same rule that stopped it when the room went quiet (see _armAutoTimer).
     _armAutoTimer(room);
@@ -761,6 +854,45 @@ class GameAuthority {
   void abandonRoom(Room room) {
     rooms.remove(room.code);
     room.removed = true;
+  }
+
+  /// Dissolves a room permanently: everyone out, every timer stopped, the
+  /// registry claim released, no seat left to reclaim.
+  ///
+  /// [leaveRoom] is a *disconnect* operation: a started game lingers for
+  /// [emptyRoomGrace] precisely so a dropped player can return, and a
+  /// rejoin repairs the seat one-for-one. That courtesy is exactly the
+  /// hole an administrative closure cannot offer (CWE-863 report): the
+  /// admin `rooms/close` action used to drive it connection by
+  /// connection, reported success — and a former participant's hello
+  /// carrying their own seatId re-seated them into the "closed" room,
+  /// restoring membership and cancelling the pending abandonment.
+  /// Administrative callers take this path instead; the natural room
+  /// lifecycle (walk-outs, link drops, the reconnection grace) keeps
+  /// [leaveRoom]'s semantics.
+  void closeRoomPermanently(String code) {
+    final room = rooms[code];
+    if (room == null) return;
+    rooms.remove(code);
+    room.removed = true;
+    // The table first hears it the ordinary way — the same message the
+    // reconnection grace ships when a game's last connection is gone for
+    // good — and then no part of the room can ever reach anyone again:
+    // the rosters are emptied so even a stale reference held by a socket
+    // in flight broadcasts nothing, the three timers (reconnection grace,
+    // autoplay driver, turn clock) are stopped, and the registry claim is
+    // released through the same [onRoomClosed] hook the natural close
+    // paths use.
+    room.broadcast({'type': 'roomClosed'});
+    room.members.clear();
+    room.spectators.clear();
+    room.abandonTimer?.cancel();
+    room.abandonTimer = null;
+    room.autoTimer?.cancel();
+    room.autoTimer = null;
+    room.turnTimer?.cancel();
+    room.turnTimer = null;
+    onRoomClosed?.call(room.code, room.registryToken);
   }
 
   /// Removes the connection [connectionId] from a room's players or

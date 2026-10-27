@@ -13,7 +13,6 @@ class StorageService {
   static const _kAnimations = 'gc.animationsEnabled';
   static const _kOnlineId = 'gc.onlinePlayerId';
   static const _kOnlineName = 'gc.onlineName';
-  static const _kOnlineCredential = 'gc.onlineCredential';
   static const _kTutorialAsked = 'gc.tutorialAsked';
   static const _kTutorialDone = 'gc.tutorialDone';
 
@@ -85,6 +84,31 @@ class StorageService {
     return generated;
   }
 
+  static const _kOnlineCredential = 'gc.onlineCredential';
+  static const _kSeatCredential = 'gc.seatCredential';
+
+  /// The friends credential: the device's private identity half.
+  ///
+  /// The seat id is public (it appears in rosters, chats and the
+  /// leaderboard) and carries no authority; the friends server binds this
+  /// device-held secret — SHA-256 hashed, never echoed — to that seat on
+  /// first registration, and every friends call presents it as
+  /// `Authorization: Bearer`. Generated beside the id it belongs to, with
+  /// secure random and enough bits that the public id leaking elsewhere
+  /// can never stand in for it.
+  Future<String> loadOnlineCredential() async {
+    final sp = await SharedPreferences.getInstance();
+    final existing = sp.getString(_kOnlineCredential);
+    if (existing != null && existing.isNotEmpty) return existing;
+    // 32 bytes = 256 bits, base64url — the same shape the server's admin
+    // session tokens mint, so neither side ever compares tokens shorter
+    // than guesswork.
+    final data = List<int>.generate(32, (_) => Random.secure().nextInt(256));
+    final generated = base64Url.encode(data).replaceAll('=', '');
+    await sp.setString(_kOnlineCredential, generated);
+    return generated;
+  }
+
   /// The display name last used online, so the connect form can offer it
   /// instead of asking for the same name every time.
   Future<String> loadOnlineName() async {
@@ -97,20 +121,22 @@ class StorageService {
     await sp.setString(_kOnlineName, name);
   }
 
-  /// The game server's private reconnect credential for the stored player
-  /// id, as granted inside the `joined` response. Persisted beside the id
+  /// The game server's private seat-reclaim credential, as granted inside
+  /// the [joined] response of the room authority. Persisted beside the id
   /// and name with the same lifetime — one device profile — because the
   /// server refuses a seat rewrite without it and a restart mid-game must
-  /// still be able to present it (CWE-287). Never shown in the UI and
-  /// never part of any roster: it is a secret, not a display value.
-  Future<String> loadOnlineCredential() async {
+  /// still be able to present it (CWE-287). Distinct from the friends
+  /// credential's `gc.onlineCredential`: that one the device generates for
+  /// the friends server; this one the game server grants per room, so the
+  /// key differs to keep neither secret from clobbering the other.
+  Future<String> loadSeatCredential() async {
     final sp = await SharedPreferences.getInstance();
-    return sp.getString(_kOnlineCredential) ?? '';
+    return sp.getString(_kSeatCredential) ?? '';
   }
 
-  Future<void> saveOnlineCredential(String credential) async {
+  Future<void> saveSeatCredential(String credential) async {
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kOnlineCredential, credential);
+    await sp.setString(_kSeatCredential, credential);
   }
 
   /// Whether the home screen already offered the guided walkthrough.

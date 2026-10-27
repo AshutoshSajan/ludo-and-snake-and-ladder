@@ -35,6 +35,7 @@ typedef OnlineClientBuilder = OnlineClient Function({
   required String serverUrl,
   required String seatId,
   required String name,
+  String credential,
   required String gameType,
   required int capacity,
   required String seatCredential,
@@ -44,6 +45,7 @@ OnlineClient _defaultClient({
   required String serverUrl,
   required String seatId,
   required String name,
+  String credential = '',
   required String gameType,
   required int capacity,
   required String seatCredential,
@@ -51,6 +53,7 @@ OnlineClient _defaultClient({
   serverUrl,
   seatId: seatId,
   name: name,
+  credential: credential,
   gameType: gameType,
   capacity: capacity,
   initialSeatCredential: seatCredential,
@@ -219,8 +222,14 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   /// handed to every new [OnlineClient] as its initial claim; a `joined`
   /// grant refreshes it in [_onClientChanged]. A secret, never a display
   /// value: the server refuses to rewrite a seen-before seat without it
-  /// (CWE-287), and it absent from everything the roster broadcasts.
+  /// (CWE-287), and it is absent from everything the roster broadcasts.
   String _seatCredential = '';
+
+  /// The credential paired with [_seatId] — the private identity half the
+  /// friends server binds to this seat. Loaded with the rest of the
+  /// identity and threaded into [_connect]'s client build + the friends
+  /// tray client so their calls present it as `Authorization: Bearer`.
+  String _credential = '';
 
   @override
   void initState() {
@@ -258,7 +267,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     // server the WS connects to, whatever the connect form holds now.
     if (_friendClient == null || _friendUrl != client.serverUrl) {
       _friendClient?.close();
-      _friendClient = FriendClient(serverUrl: client.serverUrl);
+      _friendClient = FriendClient(
+        serverUrl: client.serverUrl,
+        credential: client.credential,
+      );
       _friendUrl = client.serverUrl;
     }
     try {
@@ -297,8 +309,9 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
   Future<void> _restoreIdentity() async {
     final storage = StorageService();
     final id = await storage.loadOnlinePlayerId();
-    final name = await storage.loadOnlineName();
     final credential = await storage.loadOnlineCredential();
+    final name = await storage.loadOnlineName();
+    final seatCredential = await storage.loadSeatCredential();
     if (!mounted) return;
     final hadStoredName = name.isNotEmpty;
     // A first-time player is given a name rather than an empty field, and it
@@ -308,9 +321,10 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final resolved = hadStoredName ? name : _defaultNameFor(id);
     setState(() {
       _seatId = id;
+      _credential = credential;
       _nameCtrl.text = resolved;
       _name = resolved;
-      _seatCredential = credential;
+      _seatCredential = seatCredential;
     });
 
     final joinCode = widget.startup?.joinCode;
@@ -432,6 +446,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
         serverUrl: client.serverUrl,
         mySeatId: client.seatId,
         myName: client.name,
+        myCredential: client.credential,
         peerSeatId: seat.seatId,
         peerName: seat.name,
       ),
@@ -506,7 +521,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
     final credential = client.seatCredential;
     if (credential.isNotEmpty && credential != _seatCredential) {
       _seatCredential = credential;
-      StorageService().saveOnlineCredential(credential);
+      StorageService().saveSeatCredential(credential);
     }
   }
 
@@ -533,6 +548,7 @@ class _OnlineLobbyScreenState extends State<OnlineLobbyScreen> {
       serverUrl: OnlineLobbyScreen.defaultServerUrl(),
       seatId: _seatId,
       name: name,
+      credential: _credential,
       gameType: _gameType,
       // The table size rides only when this hello creates (or matches
       // into) a room; a join submits a code and inherits the room's size
