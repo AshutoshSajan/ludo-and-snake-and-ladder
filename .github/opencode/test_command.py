@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -270,6 +271,35 @@ class ReplyTests(unittest.TestCase):
 
     def test_clean_reply_caps(self):
         reply = clean_reply("x" * (command.MAX_REPLY_CHARS + 100))
+        self.assertIn("_(truncated)_", reply)
+
+    def test_clean_reply_strips_nested_opener_with_first_closer(self):
+        # Lazy-regex parity: a comment runs from its opener to the first
+        # "-->", swallowing any nested opener on the way.
+        reply = clean_reply("pre <!-- a <!-- b --> mid")
+        self.assertNotIn("<!--", reply)
+        self.assertIn("pre", reply)
+        self.assertIn("mid", reply)
+
+    def test_clean_reply_keeps_an_unterminated_opener_as_text(self):
+        # Parity with the regex's failure mode: without a later "-->" the
+        # opener stays literal and the prose after it is untouched.
+        reply = clean_reply("lead-in <!-- never closed, no closer anywhere")
+        self.assertIn("lead-in", reply)
+        self.assertIn("<!-- never closed", reply)
+
+    def test_clean_reply_is_linear_under_unclosed_opener_flood(self):
+        # CWE-1333: thousands of "<!--" openers with no closer once made
+        # the regex rescans overlapping suffixes — quadratic CPU outside
+        # the model subprocess budget. The scanner is a constant number
+        # of finds over a bounded cap; this assert is generous but would
+        # never hold for the old quadratic pass.
+        text = "<!-- flood\n" * 60_000
+        started = time.perf_counter()
+        reply = clean_reply(text)
+        elapsed = time.perf_counter() - started
+        self.assertLess(elapsed, 1.0,
+                        "postprocessing must stay inside the command budget")
         self.assertIn("_(truncated)_", reply)
 
     def test_with_footer_marks_the_comment(self):
