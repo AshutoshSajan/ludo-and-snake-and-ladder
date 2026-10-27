@@ -54,6 +54,152 @@ void main() {
       expect(store.totalBytes, 3);
     });
 
+    test('a put onto an occupied room/kind/id refuses and preserves the '
+        'original', () {
+      final store = _store(_Clock());
+      final data = Uint8List.fromList([1, 2, 3]);
+      final first = store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'abcdefgh',
+        data: data,
+        mime: 'audio/mp4',
+        durMs: 1500,
+      );
+      expect(first, isNotNull);
+
+      // A would-be swap: same coordinates, a different recording.
+      final swapped = store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'abcdefgh',
+        data: Uint8List.fromList([9, 9, 9]),
+        mime: 'audio/mp4',
+        durMs: 1000,
+      );
+      expect(swapped, isNull);
+
+      final back = store.get(MediaKind.voice, 'ROOM', 'abcdefgh')!;
+      expect(back.data, data,
+          reason: 'the author recording survives the refusal byte for byte');
+      expect(back.durMs, 1500);
+      expect(back.storedAt, first!.storedAt);
+    });
+
+    test('the id key binds per room and per kind, not globally', () {
+      final store = _store(_Clock());
+      final data = Uint8List.fromList([1]);
+      expect(
+        store.put(
+          kind: MediaKind.voice,
+          code: 'ROOM',
+          id: 'abcdefgh',
+          data: data,
+          mime: 'audio/mp4',
+          durMs: 1500,
+        ),
+        isNotNull,
+      );
+      // Same id, other room: a fresh, unrelated note.
+      expect(
+        store.put(
+          kind: MediaKind.voice,
+          code: 'OTHER',
+          id: 'abcdefgh',
+          data: data,
+          mime: 'audio/mp4',
+          durMs: 1500,
+        ),
+        isNotNull,
+      );
+      // Same id, other kind in the same room: voice and image slots never
+      // collide.
+      expect(
+        store.put(
+          kind: MediaKind.image,
+          code: 'ROOM',
+          id: 'abcdefgh',
+          data: data,
+          mime: 'image/gif',
+        ),
+        isNotNull,
+      );
+    });
+
+    test('a refused put leaves the caps and bookkeeping untouched', () {
+      final store = _store(_Clock());
+      final data = Uint8List.fromList([1, 2]);
+      final oldest = store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'aaaaaa',
+        data: data,
+        mime: 'audio/mp4',
+        durMs: 1500,
+      );
+      final newer = store.put(
+        kind: MediaKind.image,
+        code: 'ROOM',
+        id: 'bbbbbb',
+        data: data,
+        mime: 'image/gif',
+      );
+      expect(oldest, isNotNull);
+      expect(newer, isNotNull);
+      final statsBefore = store.roomsStats;
+      final bytesBefore = store.totalBytes;
+
+      // An overwrite attempt must not run the room-cap eviction either:
+      // nothing ages out, nothing gives ground, the store is inert.
+      expect(
+        store.put(
+          kind: MediaKind.voice,
+          code: 'ROOM',
+          id: 'aaaaaa',
+          data: Uint8List.fromList([9, 9]),
+          mime: 'audio/mp4',
+          durMs: 1500,
+        ),
+        isNull,
+      );
+      expect(store.roomsStats, statsBefore);
+      expect(store.totalBytes, bytesBefore);
+      expect(store.get(MediaKind.voice, 'ROOM', 'aaaaaa')!.data, data);
+    });
+
+    test('an expired-but-not-yet-swept id still refuses recreation', () {
+      final clock = _Clock();
+      final store = _store(clock);
+      final data = Uint8List.fromList([1]);
+      final note = store.put(
+        kind: MediaKind.voice,
+        code: 'ROOM',
+        id: 'abcdefgh',
+        data: data,
+        mime: 'audio/mp4',
+        durMs: 1500,
+      );
+      expect(note, isNotNull);
+
+      // Past the TTL, before any sweep ran: the store still holds the
+      // binding, so the gate — which is checked first, before the sweep —
+      // refuses. A later reader sweeps it away, and the id frees up then;
+      // the point is that existence, not freshness, is what the store
+      // answers atomically.
+      clock.now = clock.now.add(const Duration(hours: 25));
+      expect(
+        store.put(
+          kind: MediaKind.voice,
+          code: 'ROOM',
+          id: 'abcdefgh',
+          data: data,
+          mime: 'audio/mp4',
+          durMs: 1500,
+        ),
+        isNull,
+      );
+    });
+
     test('a malformed id is refused — it ends up in a URL path', () {
       final store = _store(_Clock());
       final data = Uint8List.fromList([1]);
@@ -294,6 +440,27 @@ void main() {
       expect(store.get(MediaKind.voice, 'ROOM', 'abcdefgh'), isNotNull);
     });
 
+    test('a duplicate id answers 409 and the announced recording stands', () async {
+      final store = _store(_Clock());
+      final first = await post(store, body: [9, 8, 7]);
+      expect(first.statusCode, 200);
+
+      // Same coordinates, a different body: an attempt to exchange the
+      // recording under a chat line already pointing at this URL.
+      final second = await post(store, body: [1, 1, 1]);
+      expect(second.statusCode, 409);
+      final body =
+          jsonDecode(await second.readAsString()) as Map<String, dynamic>;
+      expect(body['ok'], isFalse);
+      expect(body['text'], contains('fresh id'));
+
+      expect(
+        store.get(MediaKind.voice, 'ROOM', 'abcdefgh')!.data,
+        Uint8List.fromList([9, 8, 7]),
+        reason: 'the author recording survives the refused upload intact',
+      );
+    });
+
     test('a note for a room that is not live here is a 404', () async {
       final res = await _upload(
         'voice',
@@ -383,6 +550,23 @@ void main() {
       expect(body.containsKey('dur'), isFalse,
           reason: 'an image has no playback duration');
       expect(store.get(MediaKind.image, 'ROOM', 'gifabc'), isNotNull);
+    });
+
+    test('a duplicate id answers 409 and the announced image stands', () async {
+      final store = _store(_Clock());
+      final first = await post(store, body: gifBytes);
+      expect(first.statusCode, 200);
+
+      // Same coordinates, a different image: an attempt to exchange the
+      // bytes under a chat line already pointing at this URL.
+      final body2 = Uint8List.fromList([0, 1, 2, 3]);
+      final second = await post(store, body: body2);
+      expect(second.statusCode, 409);
+      expect(
+        store.get(MediaKind.image, 'ROOM', 'gifabc')!.data,
+        gifBytes,
+        reason: 'the author image survives the refused upload intact',
+      );
     });
 
     test('a dead room is a 404 like voice', () async {
