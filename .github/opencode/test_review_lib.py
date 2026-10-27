@@ -18,7 +18,7 @@ import publish_review
 import review_lib
 from review_lib import (
     REVIEW_MARKER_RE,
-    _remove_review_markers,
+    remove_review_markers,
     Finding,
     ParseError,
     build_error_body,
@@ -147,7 +147,7 @@ class SanitizeTextTests(unittest.TestCase):
             "<OPENCODE_</OPENCODE_REVIEW>rEVIEW>",
         ]
         for shape in shapes:
-            self.assertEqual(_remove_review_markers(shape), loop(shape), shape)
+            self.assertEqual(remove_review_markers(shape), loop(shape), shape)
 
     def test_marker_removal_is_linear_under_the_depth_cascade(self):
         # A crafted stack of nested openers makes the regex loop re-scan
@@ -157,7 +157,7 @@ class SanitizeTextTests(unittest.TestCase):
         # flood is impossible for the old loop at any timeout.
         cascade = "<opencode_" * 40_000 + "</opencode_review>" + "review>" * 40_000
         started = time.perf_counter()
-        self.assertEqual(_remove_review_markers(cascade), "")
+        self.assertEqual(remove_review_markers(cascade), "")
         self.assertLess(time.perf_counter() - started, 2.0)
 
     def test_does_not_touch_email_like_text(self):

@@ -28,7 +28,8 @@ MAX_DIFF_FILES = 200
 
 # The review envelope the model must not be able to forge or smuggle, and
 # the mention pattern the neutralisation pass watches for (both used in
-# [sanitize_text]; the marker pass runs to a fixpoint — see its helper).
+# [sanitize_text]; the marker pass itself is [remove_review_markers], run
+# separately by command.py's reply flow inside its own fixpoint).
 REVIEW_MARKER_RE = re.compile(r"<opencode_review>|</opencode_review>", re.IGNORECASE)
 MENTION_RE = re.compile(r"@(?=[A-Za-z0-9])")
 
@@ -95,7 +96,7 @@ def sanitize_text(text: str, limit: int) -> str:
     if not isinstance(text, str):
         return ""
     value = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
-    value = _remove_review_markers(value)
+    value = remove_review_markers(value)
     value = MENTION_RE.sub("@\u200b", value)
     value = value.strip()
     if len(value) > limit:
@@ -103,7 +104,7 @@ def sanitize_text(text: str, limit: int) -> str:
     return value
 
 
-def _remove_review_markers(text: str) -> str:
+def remove_review_markers(text: str) -> str:
     """Strip every review-envelope marker, including nested re-assemblies.
 
     One marker pass can leave another marker behind as residue when two
