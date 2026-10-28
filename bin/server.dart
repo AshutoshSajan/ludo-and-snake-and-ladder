@@ -580,15 +580,21 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
       if (roomCode != null) {
         final room = authority.rooms[roomCode];
         if (room != null) {
-          authority.handleIntent(room: room, connectionId: connId, msg: msg);
-          // Ship the roster only when it actually changed: the lobby lane
-          // must not turn every dead letter or rejected intent into a
-          // full re-serialization of stored metadata for the whole table
-          // (the intent half of the CWE-400 bound — see
-          // Room.broadcastLobbyIfChanged). A player who walks out in the
-          // lobby still leaves everyone's seat list the moment a real
-          // roster change ships it.
-          room.broadcastLobbyIfChanged();
+          final rosterTouched = authority.handleIntent(
+            room: room,
+            connectionId: connId,
+            msg: msg,
+          );
+          // Ship the roster only when the intent actually touched it: the
+          // lobby lane must not turn every dead letter, chat line, voice
+          // frame, or rejected intent into a full re-serialization of
+          // stored metadata for the whole table (the intent half of the
+          // CWE-400 bound). handleIntent answers that before anything is
+          // built; the lane's content comparison then catches the intents
+          // that were allowed but changed nothing. A player who walks out
+          // in the lobby still leaves everyone's seat list the moment a
+          // real roster change ships it.
+          if (rosterTouched) room.broadcastLobbyIfChanged();
         }
       }
     },
