@@ -46,7 +46,11 @@ void main() {
         durMs: 1500,
       );
       expect(note, isNotNull);
-      expect(note!.urlPath, '/media/voice/ROOM/abcdefgh');
+      final stored = note!;
+      expect(
+        stored.urlPath,
+        '/media/voice/ROOM/abcdefgh/${stored.contentTag}',
+      );
       final back = store.get(MediaKind.voice, 'ROOM', 'abcdefgh');
       expect(back!.data, data);
       expect(back.mime, 'audio/mp4');
@@ -291,7 +295,11 @@ void main() {
         mime: 'image/gif',
       );
       expect(note, isNotNull, reason: 'a keyboard gif needs no duration');
-      expect(note!.urlPath, '/media/image/ROOM/gifaa1');
+      final stored = note!;
+      expect(
+        stored.urlPath,
+        '/media/image/ROOM/gifaa1/${stored.contentTag}',
+      );
       final filler = Uint8List(store.maxNoteBytesFor(MediaKind.image) + 1);
       expect(
         store.put(
@@ -541,12 +549,15 @@ void main() {
       expect(freed, isNotNull, reason: 'the reservation expired with ttl');
     });
 
-    test('the reservation window is cap-bounded: real rooms keep their '
-        'ids forever', () {
+    test('the reservation window is cap-bounded: a flood rotates the oldest '
+        'reservation', () {
       // A 2-note room with every put evicting its oldest: the flood below
       // mints 132 notes — 130 evictions — enough to push the 128-deep
       // reservation window past its two oldest entries, after which the
-      // oldest reservations yield. A real room never churns near this.
+      // oldest reservations yield. A real room never churns near this;
+      // a flood that does still cannot reopen an announced URL, because
+      // the URL itself carries the content tag (see the replacement test
+      // in the mediaNoteServe group). The window stays a memory guard.
       final store = _store(_Clock(), maxPerRoom: 2);
       String idFor(int i) => 'x${i.toRadixString(36).padLeft(5, '0')}a';
       for (var i = 0; i < 132; i++) {
@@ -617,9 +628,10 @@ void main() {
       expect(res.statusCode, 200);
       final body = jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['ok'], isTrue);
-      expect(body['url'], '/media/voice/ROOM/abcdefgh');
+      final stored = store.get(MediaKind.voice, 'ROOM', 'abcdefgh');
+      expect(stored, isNotNull);
+      expect(body['url'], stored!.urlPath);
       expect(body['dur'], 1200);
-      expect(store.get(MediaKind.voice, 'ROOM', 'abcdefgh'), isNotNull);
     });
 
     test('a duplicate id answers 409 and the announced recording stands', () async {
@@ -740,10 +752,11 @@ void main() {
       expect(res.statusCode, 200);
       final body = jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['ok'], isTrue);
-      expect(body['url'], '/media/image/ROOM/gifabc');
+      final stored = store.get(MediaKind.image, 'ROOM', 'gifabc');
+      expect(stored, isNotNull);
+      expect(body['url'], stored!.urlPath);
       expect(body.containsKey('dur'), isFalse,
           reason: 'an image has no playback duration');
-      expect(store.get(MediaKind.image, 'ROOM', 'gifabc'), isNotNull);
     });
 
     test('a duplicate id answers 409 and the announced image stands', () async {
@@ -895,16 +908,16 @@ void main() {
   group('mediaNoteServe', () {
     test('a stored voice note is served back with its mime and no-store', () async {
       final store = _store(_Clock());
-      store.put(
+      final note = store.put(
         kind: MediaKind.voice,
         code: 'ROOM',
         id: 'abcdefgh',
         data: Uint8List.fromList([4, 5]),
         mime: 'audio/mp4',
         durMs: 900,
-      );
+      )!;
       final res = mediaNoteServe(
-        shelf.Request('GET', Uri.parse('http://s/media/voice/ROOM/abcdefgh')),
+        shelf.Request('GET', Uri.parse('http://s${note.urlPath}')),
         store: store,
       );
       expect(res.statusCode, 200);
@@ -924,15 +937,15 @@ void main() {
 
     test('an image note serves by its own path-family', () async {
       final store = _store(_Clock());
-      store.put(
+      final note = store.put(
         kind: MediaKind.image,
         code: 'ROOM',
         id: 'gifabc',
         data: Uint8List.fromList([7, 7, 7]),
         mime: 'image/gif',
-      );
+      )!;
       final res = mediaNoteServe(
-        shelf.Request('GET', Uri.parse('http://s/media/image/ROOM/gifabc')),
+        shelf.Request('GET', Uri.parse('http://s${note.urlPath}')),
         store: store,
       );
       expect(res.statusCode, 200);
@@ -948,15 +961,15 @@ void main() {
       // stays the truth of the response, and the sandbox + nosniff pair
       // is what keeps a document load from executing it on our origin.
       final store = _store(_Clock());
-      store.put(
+      final note = store.put(
         kind: MediaKind.image,
         code: 'ROOM',
         id: 'gifabc',
         data: Uint8List.fromList(utf8.encode('<svg><script>alert(1)</script>')),
         mime: 'image/svg+xml',
-      );
+      )!;
       final res = mediaNoteServe(
-        shelf.Request('GET', Uri.parse('http://s/media/image/ROOM/gifabc')),
+        shelf.Request('GET', Uri.parse('http://s${note.urlPath}')),
         store: store,
       );
       expect(res.statusCode, 200);
@@ -967,15 +980,15 @@ void main() {
 
     test('HEAD answers like GET, without the body', () async {
       final store = _store(_Clock());
-      store.put(
+      final note = store.put(
         kind: MediaKind.image,
         code: 'ROOM',
         id: 'gifabc',
         data: Uint8List.fromList([7]),
         mime: 'image/gif',
-      );
+      )!;
       final res = mediaNoteServe(
-        shelf.Request('HEAD', Uri.parse('http://s/media/image/ROOM/gifabc')),
+        shelf.Request('HEAD', Uri.parse('http://s${note.urlPath}')),
         store: store,
       );
       // The body travels (shelf_io strips it for HEAD at the socket) —
@@ -984,17 +997,24 @@ void main() {
       expect(res.headers['content-type'], 'image/gif');
     });
 
-    test('an unknown note, unknown kind, or path shape is a 404', () {
+    test('an unknown note, unknown tag, or path shape is a 404', () {
+      const tag = 'aaaaaaaaaaaaaaaaaaaaaa';
       expect(
         mediaNoteServe(
-          shelf.Request('GET', Uri.parse('http://s/media/voice/ROOM/nnnnnn')),
+          shelf.Request(
+            'GET',
+            Uri.parse('http://s/media/voice/ROOM/nnnnnn/$tag'),
+          ),
           store: _store(_Clock()),
         ).statusCode,
         404,
       );
       expect(
         mediaNoteServe(
-          shelf.Request('GET', Uri.parse('http://s/media/jpg/ROOM/abcdef')),
+          shelf.Request(
+            'GET',
+            Uri.parse('http://s/media/jpg/ROOM/abcdef/$tag'),
+          ),
           store: _store(_Clock()),
         ).statusCode,
         404,
@@ -1009,12 +1029,110 @@ void main() {
       );
     });
 
+    test('an untagged or mistagged url never serves a note', () {
+      final store = _store(_Clock());
+      final note = store.put(
+        kind: MediaKind.image,
+        code: 'ROOM',
+        id: 'gifabc',
+        data: Uint8List.fromList([7]),
+        mime: 'image/gif',
+      )!;
+
+      // A pre-tag URL shape and a forged tag both fail the content
+      // binding: only the exact tag of the stored bytes resolves.
+      expect(
+        mediaNoteServe(
+          shelf.Request('GET', Uri.parse('http://s/media/image/ROOM/gifabc')),
+          store: store,
+        ).statusCode,
+        404,
+      );
+      expect(
+        mediaNoteServe(
+          shelf.Request(
+            'GET',
+            Uri.parse('http://s/media/image/ROOM/gifabc/aaaaaaaaaaaaaaaaaaaaaa'),
+          ),
+          store: store,
+        ).statusCode,
+        404,
+      );
+      expect(
+        mediaNoteServe(
+          shelf.Request('GET', Uri.parse('http://s${note.urlPath}')),
+          store: store,
+        ).statusCode,
+        200,
+      );
+    });
+
+    test('a rotated id cannot serve replacement bytes through an old url', () {
+      final clock = _Clock();
+      final store = _store(clock, maxPerRoom: 1);
+      final original = store.put(
+        kind: MediaKind.image,
+        code: 'ROOM',
+        id: 'abcdefgh',
+        data: Uint8List.fromList([1, 2, 3]),
+        mime: 'image/gif',
+      )!;
+      final oldUrl = original.urlPath;
+
+      // Churn the room past the bounded reservation window: a 1-note room
+      // retires one id per put, and the 128-deep window drops the oldest
+      // after 129 later evictions. This is the reported setup — the id
+      // becomes free while an old chat line still shows its URL.
+      for (var i = 0; i < 129; i++) {
+        store.put(
+          kind: MediaKind.image,
+          code: 'ROOM',
+          id: 'x${i.toRadixString(36).padLeft(5, '0')}a',
+          data: Uint8List.fromList([9]),
+          mime: 'image/gif',
+        );
+      }
+
+      final replacement = store.put(
+        kind: MediaKind.image,
+        code: 'ROOM',
+        id: 'abcdefgh',
+        data: Uint8List.fromList([7, 7, 7]),
+        mime: 'image/gif',
+      );
+      expect(replacement, isNotNull, reason: 'the reservation rotated out');
+      expect(
+        replacement!.contentTag,
+        isNot(original.contentTag),
+        reason: 'different bytes get a different tag',
+      );
+
+      // The old message's url still names the original bytes, so it must
+      // stop resolving rather than serve the replacement.
+      expect(
+        mediaNoteServe(
+          shelf.Request('GET', Uri.parse('http://s$oldUrl')),
+          store: store,
+        ).statusCode,
+        404,
+        reason: 'history cannot be re-mounted with replacement content',
+      );
+      expect(
+        mediaNoteServe(
+          shelf.Request('GET', Uri.parse('http://s${replacement.urlPath}')),
+          store: store,
+        ).statusCode,
+        200,
+        reason: 'the replacement is reachable only through its own url',
+      );
+    });
+
     test('writing to a serve path is 405', () {
       expect(
         mediaNoteServe(
           shelf.Request(
             'POST',
-            Uri.parse('http://s/media/image/ROOM/gifabc'),
+            Uri.parse('http://s/media/image/ROOM/gifabc/aaaaaaaaaaaaaaaaaaaaaa'),
           ),
           store: _store(_Clock()),
         ).statusCode,

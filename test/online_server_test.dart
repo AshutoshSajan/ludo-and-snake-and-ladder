@@ -703,14 +703,14 @@ void main() {
         final room = auth.createRoom(_member(LudoColor.red, on: log.add));
         auth.joinRoom(room.code, _member(LudoColor.blue, on: log.add));
 
-        auth.mediaNotes.put(
+        final note = auth.mediaNotes.put(
           kind: MediaKind.voice,
           code: room.code,
           id: 'eadada55',
           data: Uint8List.fromList([1]),
           mime: 'audio/mp4',
           durMs: 1400,
-        );
+        )!;
         auth.handleIntent(
           room: room,
           connectionId: 'blue',
@@ -718,7 +718,7 @@ void main() {
         );
 
         final line = _lastSent(log, 'chat')!;
-        expect(line['note']['url'], '/media/voice/${room.code}/eadada55');
+        expect(line['note']['url'], note.urlPath);
         // The duration comes from the store, not the client's say-so — a
         // client claiming 90 000 ms is corrected by the file it uploaded.
         expect(line['note']['dur'], 1400);
@@ -1625,7 +1625,7 @@ void main() {
       );
       final joined = await nextMsg(hostBuf, 'joined');
       final code = joined['code'] as String;
-      final relative = '/media/voice/$code/ab12cd34';
+      final untagged = '/media/voice/$code/ab12cd34';
 
       // Production goes through the real HTTP stack; the test binding's
       // global stub is zone-optimized back out for these calls.
@@ -1647,7 +1647,11 @@ void main() {
       );
       expect(post.statusCode, 200);
       final ack = jsonDecode(post.body) as Map<String, dynamic>;
-      expect(ack['url'], relative);
+      // The announced url names both the note id and a digest of its
+      // bytes, so a later id re-use cannot serve different content under
+      // this url (CWE-639).
+      expect(ack['url'], startsWith('$untagged/'));
+      final relative = ack['url'] as String;
       expect(ack['dur'], 1100);
 
       final get = await overRealHttp(
@@ -1657,6 +1661,13 @@ void main() {
       expect(get.bodyBytes, [1, 2, 3]);
       expect(get.headers['content-type'], 'audio/mp4');
       expect(get.headers['cache-control'], 'no-store');
+
+      // The untagged id alone is not the announcement: the content tag is
+      // part of the binding, so a forged/old tag never resolves.
+      final noTag = await overRealHttp(
+        () => http.get(Uri.parse('http://127.0.0.1:${srv.port}$untagged')),
+      );
+      expect(noTag.statusCode, 404);
 
       // An unknown note is a 404, not an empty success.
       final missing = await overRealHttp(
