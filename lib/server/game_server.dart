@@ -839,12 +839,30 @@ class GameAuthority {
     return room;
   }
 
+  /// True when [seatId] is one of the seats the running game was created
+  /// with (see [Room.start]). A claim that only ever existed in the lobby
+  /// is not: the game has no pieces and no turn for it.
+  bool _seatIsInGame(Room room, String seatId) => switch (room.game) {
+    LudoState s => s.players.any((p) => p.id == seatId),
+    snakes.SnakesState s => s.players.any((p) => p.id == seatId),
+    _ => false,
+  };
+
   /// Seats a returning player back into their original corner. Works in the
   /// lobby and, crucially, mid-game: the seat survives the disconnect, so the
   /// game state (whose turn, tokens) keeps pointing at the same seatId. Any
   /// stale half-open connection for that seat is evicted. Returns null when
   /// the room is gone, the seatId never sat there, the seat forfeited, or
   /// [credential] does not match the seat's stored reconnect credential.
+  ///
+  /// A claim is not a reservation in an unstarted lobby: the corner may have
+  /// been issued to a replacement while this player was away, and the table
+  /// may since have filled up. A reconnect that is not replacing the same
+  /// live seat is therefore refused when the room is full or the claimed
+  /// corner now belongs to a live player (CWE-863) — the caller's ordinary
+  /// join paths have already offered it every free corner it could take.
+  /// Mid-game, only the seats the game was created with may return; a claim
+  /// from the lobby that never started a game has no pieces to restore.
   Room? rejoinRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null) return null;
@@ -859,6 +877,20 @@ class GameAuthority {
     // untouched until the presentation verifies. The check here is exact —
     // this path only ever targets seats the room has minted a claim for.
     if (!_seatCredentialHolds(room, member.seatId, credential)) return null;
+    // A live holder of this exact seat is a stale half-open connection
+    // being replaced one-for-one: the member count and the corner do not
+    // change, so this stays legal even at capacity.
+    final replacing = room.members.values.any(
+      (m) => m.seatId == member.seatId,
+    );
+    if (!replacing) {
+      if (room.started) {
+        if (!_seatIsInGame(room, member.seatId)) return null;
+      } else {
+        if (room.full) return null;
+        if (room.ownerOf(claimed) != null) return null;
+      }
+    }
     room.members.removeWhere((_, m) => m.seatId == member.seatId);
     member.color = claimed;
     room.members[member.id] = member;

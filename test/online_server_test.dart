@@ -2992,6 +2992,156 @@ void main() {
         reason: 'a returning player keeps the room alive',
       );
     });
+
+    test('a lobby reconnect cannot seat a third player past capacity', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red, seatId: 'a', id: 'a'),
+        capacity: 2,
+      );
+      auth.joinRoom(room.code, _member(LudoColor.blue, seatId: 'b', id: 'b'));
+
+      // A drops; the claim on its corner survives for a reload.
+      auth.leaveRoom(room.code, 'a');
+      final credential = room.seatCredentials['a'];
+      expect(credential, isNotNull);
+
+      // A replacement takes the freed corner before A gets back, so the
+      // table is full again — with somebody else in red.
+      expect(
+        auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'c', id: 'c')),
+        isNotNull,
+      );
+      expect(room.members['c']!.color, LudoColor.red);
+      expect(room.full, isTrue);
+
+      // The returning claim must not become a third member in a two-seat
+      // room: that used to insert a second owner of red, and the later
+      // departure of either one deleted the other's pieces by colour.
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.red, seatId: 'a', id: 'a2'),
+          credential: credential,
+        ),
+        isNull,
+        reason: 'a lobby claim is not a reservation past capacity',
+      );
+      expect(room.members, hasLength(2));
+      expect(room.members.keys, containsAll(['b', 'c']));
+      expect(
+        room.members.values.map((m) => m.color).toSet(),
+        hasLength(room.members.length),
+        reason: 'no corner has two owners',
+      );
+    });
+
+    test('a lobby reconnect refuses a corner that now has another owner', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red, seatId: 'a', id: 'a'),
+      );
+      auth.joinRoom(room.code, _member(LudoColor.blue, seatId: 'b', id: 'b'));
+
+      // A drops and C takes red, while two corners still sit free.
+      auth.leaveRoom(room.code, 'a');
+      final credential = room.seatCredentials['a'];
+      expect(
+        auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'c', id: 'c')),
+        isNotNull,
+      );
+      expect(room.members['c']!.color, LudoColor.red);
+      expect(room.full, isFalse);
+
+      // Room to spare does not make the historical corner A's again.
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.red, seatId: 'a', id: 'a2'),
+          credential: credential,
+        ),
+        isNull,
+        reason: 'the corner was re-issued while the seat was away',
+      );
+      expect(room.members.keys, isNot(contains('a2')));
+      expect(room.members, hasLength(2));
+    });
+
+    test('a live seat still replaces its own connection at capacity', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red, seatId: 'a', id: 'a'),
+        capacity: 2,
+      );
+      auth.joinRoom(room.code, _member(LudoColor.blue, seatId: 'b', id: 'b'));
+      expect(room.full, isTrue);
+
+      // The stale half-open connection is replaced one-for-one: the member
+      // count and the corner do not change, so fullness is no obstacle.
+      final fresh = _member(LudoColor.red, seatId: 'a', id: 'a2');
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          fresh,
+          credential: room.seatCredentials['a'],
+        ),
+        same(room),
+      );
+      expect(room.members, hasLength(2));
+      expect(room.members.keys, containsAll(['a2', 'b']));
+      expect(fresh.color, LudoColor.red);
+    });
+
+    test('a lobby claim cannot join a game it did not start in', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red, seatId: 'a', id: 'a'),
+      );
+      auth.joinRoom(room.code, _member(LudoColor.blue, seatId: 'b', id: 'b'));
+      expect(
+        auth.joinRoom(room.code, _member(LudoColor.green, seatId: 'c', id: 'c')),
+        isNotNull,
+      );
+      final credential = room.seatCredentials['c'];
+
+      // C drops out of the lobby; the game starts without that seat.
+      auth.leaveRoom(room.code, 'c');
+      expect(
+        auth.handleIntent(
+          room: room,
+          connectionId: 'a',
+          msg: {'type': 'start'},
+        ),
+        isTrue,
+      );
+      expect(room.started, isTrue);
+
+      // The lobby claim has no turn and no pieces in the running game, so
+      // it must not be inserted into it.
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.green, seatId: 'c', id: 'c2'),
+          credential: credential,
+        ),
+        isNull,
+        reason: 'only the seats the game started with may return',
+      );
+      expect(room.members, hasLength(2));
+      expect(room.members.keys, containsAll(['a', 'b']));
+
+      // A seat that IS in the game still reclaims its corner mid-game.
+      auth.leaveRoom(room.code, 'b');
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.yellow, seatId: 'b', id: 'b2'),
+          credential: room.seatCredentials['b'],
+        ),
+        same(room),
+        reason: 'a real game seat is still reclaimable',
+      );
+    });
   });
 
   // ---------------------------------------------------------- spectating
