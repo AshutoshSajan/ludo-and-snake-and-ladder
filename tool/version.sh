@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Read or write the project version, in one place.
 #
-# The version was declared in three files that had already drifted apart:
-# pubspec.yaml said 1.0.0, both extension manifests said 1.0.0, and the tags
-# said v1.1.0. AMO rejects an upload whose version does not increase, and the
-# Web Store rejects a repeat, so a version that disagrees with reality fails at
-# the worst moment - during a release, with credentials in hand.
+# The version was declared in four files that had already drifted apart:
+# pubspec.yaml, both extension manifests and snap/snapcraft.yaml; the tags
+# said something else again. AMO rejects an upload whose version does not
+# increase, the Web Store rejects a repeat, and the release workflow refuses
+# to package a snap whose version disagrees with the tag, so a version that
+# disagrees with reality fails at the worst moment - during a release, with
+# credentials in hand.
 #
-# This script is the only thing that writes those three fields, so they cannot
+# This script is the only thing that writes those four fields, so they cannot
 # drift again. CI calls it on push; a human can call it by hand.
 #
 # Usage:
@@ -22,6 +24,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 PUBSPEC=pubspec.yaml
 MANIFESTS=(extension/manifest.chrome.json extension/manifest.firefox.json)
+SNAP=snap/snapcraft.yaml
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -106,6 +109,16 @@ case "${1:-}" in
       [ -f "$m" ] || die "$m is missing"
       sed -i.bak -E "s/(\"version\": \")[^\"]*(\")/\1$v\2/" "$m" && rm -f "$m.bak"
     done
+    # The snap is the fourth declaration, and `build-snap` refuses a file whose
+    # version disagrees with the tag. It used to be bumped by hand, so a
+    # release-prep run moved pubspec and the manifests but left the snap on the
+    # previous version — the v1.4.0 dry run failed with
+    # "snap/snapcraft.yaml (1.3.0) != tag (1.4.0)". Write it here, with the
+    # others, and verify the substitution instead of trusting the pattern.
+    [ -f "$SNAP" ] || die "$SNAP is missing"
+    sed -i.bak -E "s/^version: *'[^']*'/version: '$v'/" "$SNAP" && rm -f "$SNAP.bak"
+    snap_declared=$(sed -n "s/^version: *'\([^']*\)'.*/\1/p" "$SNAP" | head -1)
+    [ "$snap_declared" = "$v" ] || die "could not update $SNAP (found '$snap_declared')"
     echo "$v"
     ;;
   *)

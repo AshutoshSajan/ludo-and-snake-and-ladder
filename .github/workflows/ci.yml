@@ -216,15 +216,22 @@ jobs:
             echo "declaring $base (no version bump); regenerating the changelog"
           else
             echo "next version: $target"
-            tool/version.sh --set "$target"
           fi
+          # Always write, even when the version is unchanged. --set is
+          # idempotent for an equal version (the Android build code is
+          # preserved), and it repairs a declaration that lagged the rest —
+          # exactly the case when a release-prep PR bumped pubspec but the
+          # snap was still on the previous version. `build-snap` compares its
+          # version with the tag and refuses to package a drift, so a
+          # broken fourth declaration must be fixed here, before the tag.
+          tool/version.sh --set "$target"
           tool/changelog.sh
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "chore/release-prep-$target"
           git add CHANGELOG.md pubspec.yaml extension/manifest.chrome.json \
-            extension/manifest.firefox.json
+            extension/manifest.firefox.json snap/snapcraft.yaml
           if git diff --quiet --cached; then
             echo "nothing changed; not opening a PR"
             exit 0
