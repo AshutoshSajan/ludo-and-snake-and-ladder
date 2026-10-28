@@ -34,10 +34,18 @@ jobs:
           fetch-depth: 0 # every branch tip is needed to prove the merge landed
 
       - name: Delete the merged head branch
+        # Branch names are data, never shell text: the head ref is chosen by
+        # the PR author, and a git-valid name may contain `$()` or backticks
+        # (for example `fix/x$(id)` passes check-ref-format). Passing the
+        # refs through the step environment keeps them out of the script the
+        # runner evaluates; the quoted expansions below treat them as strings.
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          branch="${{ github.event.pull_request.head.ref }}"
-          base="${{ github.base_ref }}"
+          branch="$HEAD_REF"
+          base="$BASE_REF"
 
           # A trunk is never deleted, no matter how a PR involving it closes.
           case "$branch" in
