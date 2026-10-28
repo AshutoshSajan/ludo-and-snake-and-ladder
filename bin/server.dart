@@ -85,13 +85,13 @@ import 'package:game_club/server/friend_store.dart';
 import 'package:game_club/server/gif.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/media.dart';
+import 'package:game_club/server/persistence.dart';
 import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_friend_store.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
 import 'package:http/http.dart' as http;
-import 'package:sqlite3/sqlite3.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
@@ -580,15 +580,21 @@ shelf.Handler wsHandler() => webSocketHandler((webSocket, _) {
       if (roomCode != null) {
         final room = authority.rooms[roomCode];
         if (room != null) {
-          authority.handleIntent(room: room, connectionId: connId, msg: msg);
-          // Ship the roster only when it actually changed: the lobby lane
-          // must not turn every dead letter or rejected intent into a
-          // full re-serialization of stored metadata for the whole table
-          // (the intent half of the CWE-400 bound — see
-          // Room.broadcastLobbyIfChanged). A player who walks out in the
-          // lobby still leaves everyone's seat list the moment a real
-          // roster change ships it.
-          room.broadcastLobbyIfChanged();
+          final rosterTouched = authority.handleIntent(
+            room: room,
+            connectionId: connId,
+            msg: msg,
+          );
+          // Ship the roster only when the intent actually touched it: the
+          // lobby lane must not turn every dead letter, chat line, voice
+          // frame, or rejected intent into a full re-serialization of
+          // stored metadata for the whole table (the intent half of the
+          // CWE-400 bound). handleIntent answers that before anything is
+          // built; the lane's content comparison then catches the intents
+          // that were allowed but changed nothing. A player who walks out
+          // in the lobby still leaves everyone's seat list the moment a
+          // real roster change ships it.
+          if (rosterTouched) room.broadcastLobbyIfChanged();
         }
       }
     },
@@ -859,8 +865,13 @@ Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
   );
 }
 
-/// True when [req] carries the configured admin bearer token. Empty
-/// [adminToken] disables the whole admin surface (deny-all).
+/// True when [req] carries the configured admin bearer token. An empty
+/// [adminToken] deny-alls THIS legacy path (and first-run setup), not
+/// the credential surface: admin users log in with email+password and
+/// their DB-backed sessions are independent of the token (see
+/// ADMIN_TOKEN in .env.example). Clearing the token contains the token
+/// itself — it neither revokes live sessions nor disables interactive
+/// login; revocation is the logout/user-management path.
 bool _legacyTokenMatch(shelf.Request req) {
   if (adminToken.isEmpty) return false;
   final header = req.headers['authorization'] ?? '';
@@ -905,19 +916,57 @@ Future<bool> isAdminAuthorized(shelf.Request req) async {
 
 // ------------------------------------------------------------------ login
 // rate limiting: per-IP sliding window on FAILED logins only. Successes
-// never count, so a correct password always works. Test-only reset via
-// [resetLoginAttempts].
+// never count, so a correct password always works once earlier misses age
+// out. Test-only reset via [resetLoginAttempts].
+//
+// Every verification also holds a reservation while it runs: the failure
+// list alone cannot bound a concurrent burst, because a request that has
+// passed the check has not yet had the chance to record its failure — so
+// a whole batch admitted in one turn would all reach credential
+// verification even though the budget is ten (CWE-307). A reservation is
+// capacity, not a failure: it is released on success, on a rejected
+// password (where it is converted into the failure it spent), and on any
+// error, so an abandoned request cannot hold a slot.
 const _loginWindow = Duration(seconds: 60);
 const _maxLoginFailures = 10;
 
 final _loginFailures = <String, List<int>>{};
+
+/// Verifications in flight per client. Counted alongside the failures in
+/// [loginRateLimited]: with the check and the increment in one synchronous
+/// turn, a burst of simultaneous requests cannot all pass a budget that
+/// any one of them would exhaust by failing.
+final _loginInFlight = <String, int>{};
 
 bool loginRateLimited(String ip) {
   final now = DateTime.now().millisecondsSinceEpoch;
   final cutoff = now - _loginWindow.inMilliseconds;
   final hits = (_loginFailures[ip] ?? []).where((t) => t > cutoff).toList();
   _loginFailures[ip] = hits;
-  return hits.length >= _maxLoginFailures;
+  return hits.length + (_loginInFlight[ip] ?? 0) >= _maxLoginFailures;
+}
+
+/// Checks the budget and, in the same synchronous turn, takes one slot
+/// from it for [ip]. Returns false — without taking a slot — when the
+/// client is already at the limit. Every true return must be settled with
+/// [_releaseLoginAttempt].
+bool _reserveLoginAttempt(String ip) {
+  if (loginRateLimited(ip)) return false;
+  _loginInFlight[ip] = (_loginInFlight[ip] ?? 0) + 1;
+  return true;
+}
+
+/// Ends a reserved verification. A rejected password is recorded as the
+/// failure that slot stood for; a success or an error simply gives the
+/// capacity back.
+void _releaseLoginAttempt(String ip, {bool failed = false}) {
+  final left = (_loginInFlight[ip] ?? 0) - 1;
+  if (left <= 0) {
+    _loginInFlight.remove(ip);
+  } else {
+    _loginInFlight[ip] = left;
+  }
+  if (failed) _recordLoginFailure(ip);
 }
 
 void _recordLoginFailure(String ip) {
@@ -926,7 +975,10 @@ void _recordLoginFailure(String ip) {
 }
 
 /// Test-only: clears the in-memory login failure buckets.
-void resetLoginAttempts() => _loginFailures.clear();
+void resetLoginAttempts() {
+  _loginFailures.clear();
+  _loginInFlight.clear();
+}
 
 // Feedback throttling: the report/contact endpoints are unauthenticated,
 // so per-IP buckets keep the queue (and the DB) from being flooded. Two
@@ -1856,41 +1908,63 @@ Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
   }
 }
 
+/// The one refusal for a client over the login budget — used both by the
+/// cheap pre-body check and by the authoritative reservation below.
+shelf.Response _loginLimitedResponse() => shelf.Response(
+  429,
+  body: jsonEncode({
+    'ok': false,
+    'text': 'too many attempts — wait a minute',
+  }),
+  headers: {'content-type': 'application/json'},
+);
+
 Future<shelf.Response> adminLoginHandler(shelf.Request req) async {
   final ip = _clientIp(req);
+  // Cheap early refusal: a client already at the limit never has its body
+  // read. This is only a fast path — the decisive check is the reserve
+  // below, after the body awaits.
   if (loginRateLimited(ip)) {
-    return shelf.Response(
-      429,
-      body: jsonEncode({
-        'ok': false,
-        'text': 'too many attempts — wait a minute',
+    return _loginLimitedResponse();
+  }
+  final body = await _readJsonBody(req);
+  // Recheck and take a verification slot in one synchronous turn. Every
+  // request that failed the early check's test but has not yet recorded
+  // its failure counts against the budget here, so a simultaneous burst
+  // is verified at most ten times — not all of it.
+  if (!_reserveLoginAttempt(ip)) {
+    return _loginLimitedResponse();
+  }
+  var rejected = false;
+  try {
+    final user = await adminStore.checkCredentials(
+      (body['email'] as String? ?? ''),
+      (body['password'] as String? ?? ''),
+    );
+    if (user == null) {
+      rejected = true;
+      return shelf.Response(
+        401,
+        body: jsonEncode({'ok': false, 'text': 'invalid credentials'}),
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    final session = await adminStore.createSession(user.id);
+    return shelf.Response.ok(
+      jsonEncode({
+        'ok': true,
+        'token': session.token,
+        'expiresAt': session.expiresAt,
+        'user': user.toJson(),
       }),
       headers: {'content-type': 'application/json'},
     );
+  } finally {
+    // Always give the capacity back: a rejected password spends its slot
+    // as the failure it is, while a success or an error frees it. The
+    // slot cannot leak, so abandoned requests cannot lock a client out.
+    _releaseLoginAttempt(ip, failed: rejected);
   }
-  final body = await _readJsonBody(req);
-  final user = await adminStore.checkCredentials(
-    (body['email'] as String? ?? ''),
-    (body['password'] as String? ?? ''),
-  );
-  if (user == null) {
-    _recordLoginFailure(ip);
-    return shelf.Response(
-      401,
-      body: jsonEncode({'ok': false, 'text': 'invalid credentials'}),
-      headers: {'content-type': 'application/json'},
-    );
-  }
-  final session = await adminStore.createSession(user.id);
-  return shelf.Response.ok(
-    jsonEncode({
-      'ok': true,
-      'token': session.token,
-      'expiresAt': session.expiresAt,
-      'user': user.toJson(),
-    }),
-    headers: {'content-type': 'application/json'},
-  );
 }
 
 Future<shelf.Response> adminLogoutHandler(shelf.Request req) async {
@@ -1992,7 +2066,7 @@ Future<shelf.Response> adminOverviewHandler(shelf.Request req) async {
           'snakes': await leaderboardStore.totalGames(game: 'snakes'),
         },
         'openFeedback': await reportStore.count(status: 'open'),
-        'feedbackByCategory': reportStore.openByCategory(),
+        'feedbackByCategory': await reportStore.openByCategory(),
       },
       'leaderboardBackend': leaderboardBackend,
     }),
@@ -2147,7 +2221,7 @@ Future<shelf.Response> adminFeedbackHandler(shelf.Request req) async {
       'feedback': [for (final e in entries) e.toJson()],
       'openCount': await reportStore.count(status: 'open'),
       'totalCount': await reportStore.count(),
-      'openByCategory': reportStore.openByCategory(),
+      'openByCategory': await reportStore.openByCategory(),
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -2176,13 +2250,13 @@ Future<shelf.Response> adminTableHandler(shelf.Request req) async {
       'editable': spec.editable.toList(),
       'insertable': spec.insertable,
       'deletable': spec.deletable,
-      'rows': adminStore.tableRows(
+      'rows': await adminStore.tableRows(
         spec,
         limit: limit,
         offset: int.tryParse(q['offset'] ?? '')?.clamp(0, 100000) ?? 0,
         q: query,
       ),
-      'total': adminStore.tableCount(spec, q: query),
+      'total': await adminStore.tableCount(spec, q: query),
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -2352,7 +2426,7 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
       final spec = tableSpec(body['table'] as String? ?? '');
       if (spec == null) return _badAdminAction('unknown table');
       try {
-        adminStore.insertTableRow(
+        await adminStore.insertTableRow(
           spec,
           (body['values'] as Map?)?.cast<String, dynamic>() ?? {},
         );
@@ -2471,37 +2545,45 @@ Future<void> main(List<String> args) async {
     preferred: env['GIF_PROVIDER'] ?? '',
   );
 
-  // Persistence for production runs: a hosted Turso database when
-  // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
-  // survives on ephemeral hosts), otherwise the local SQLite file. Tests
-  // swap the globals.
-  final turso = TursoLeaderboardStore.fromEnvironment(env);
-  leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
-  // Admin history lives in the same SQLite file so one DB holds players,
-  // bans, audit and room lifecycle beside the leaderboard rows. When the
-  // leaderboard is Turso-backed the file still exists locally for admin
-  // history (single-replica deployments); multi-replica admin history
-  // needs a shared store.
+  // Persistence for production runs. [openPersistence] is the ONE place
+  // that decides where durable state lives: with TURSO_DATABASE_URL +
+  // TURSO_AUTH_TOKEN set every store — leaderboard, admin history,
+  // accounts, sessions, feedback, friends and the room registry — is
+  // Turso-backed and no local SQLite file is opened at all; without them
+  // every store falls back to one local SQLite file. Tests swap the
+  // globals; test/persistence_test.dart proves both modes and fails if
+  // this file starts constructing a store directly again.
+  final persistence = openPersistence(env: env, dbPath: dbPath);
+
   try {
     adminStore.close();
   } catch (_) {}
-  // One shared SQLite connection for admin history + feedback: the
-  // generic Data-tab CRUD reaches every whitelisted table through
-  // [adminStore], so the tables must live on the same connection (and
-  // file) the feature stores own.
-  final sharedDb = sqlite3.open(dbPath);
-  adminStore = AdminStore.fromDb(sharedDb);
-  reportStore = ReportStore.fromDb(sharedDb);
-  // Friends state: Turso when configured, so friendships, requests, DMs and
-  // invites survive a redeploy on an ephemeral host; otherwise the shared
-  // SQLite file. The local friend tables are created either way — the admin
-  // Data tab whitelists them and reaches them through [sharedDb], so they
-  // must exist on that connection even when Turso is the store of record
-  // (they receive no writes then).
-  friendStore.close();
-  final localFriendStore = SqliteFriendStore.fromDb(sharedDb);
-  final tursoFriends = TursoFriendStore.fromEnvironment(env);
-  friendStore = tursoFriends ?? localFriendStore;
+  try {
+    reportStore.close();
+  } catch (_) {}
+  try {
+    friendStore.close();
+  } catch (_) {}
+
+  leaderboardStore = persistence.leaderboard;
+  adminStore = persistence.admin;
+  reportStore = persistence.reports;
+  friendStore = persistence.friends;
+  roomRegistry = persistence.rooms;
+
+  // Create the shared schema up front (every statement is idempotent) so a
+  // Turso deployment fails loudly here instead of on the first admin
+  // request, and so the Data tab can reach the friend tables before the
+  // first player opens the Friends screen.
+  try {
+    await persistence.ensureSchema();
+  } catch (e) {
+    stderr.writeln(
+      '!! could not create the shared schema: $e\n'
+      '   The server will keep starting, but admin/feedback requests fail '
+      'until the database is reachable.',
+    );
+  }
   adminToken = (env['ADMIN_TOKEN'] ?? '').trim();
   authority = GameAuthority(
     leaderboard: leaderboardStore,
@@ -2556,19 +2638,13 @@ Future<void> main(List<String> args) async {
     },
   );
 
-  // Same env vars drive the cross-instance room registry: with Turso,
-  // rooms are discoverable by every replica behind the load balancer;
-  // without it, the in-memory registry keeps single-instance behavior.
-  final tursoRegistry = TursoRoomRegistry.fromEnvironment(env);
-  roomRegistry = tursoRegistry ?? InMemoryRoomRegistry();
-
   // Keep the registry truthful: refresh every live room's TTL. Rooms are
   // unregistered the moment they close (onRoomClosed above); entries from a
   // crashed instance self-expire once their TTL passes. The cadence must
   // stay well under the TTL — sweeping no more often than the TTL would
   // let live rooms expire between sweeps (lookups 404 for rooms that
   // still exist).
-  Timer.periodic(registryRefreshInterval(tursoRegistry?.ttl), (_) {
+  Timer.periodic(registryRefreshInterval(persistence.registryTtl), (_) {
     for (final room in authority.rooms.values) {
       // A room can close mid-round-trip; advertiseRoom withdraws the route
       // again when that happens, so the sweep never revives a dead room.
@@ -2734,9 +2810,9 @@ Future<void> main(List<String> args) async {
     'Game Club server listening on '
     'ws://${server.address.host}:${server.port}/ws '
     '(instance: $instanceId, '
-    'leaderboard: ${turso != null ? 'Turso' : dbPath}, '
-    'friends: ${tursoFriends != null ? 'Turso' : dbPath}, '
-    'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
+    'data: ${persistence.usesTurso ? 'Turso (all stores)' : dbPath}, '
+    'room registry: '
+    '${persistence.registryTtl != null ? 'Turso' : 'in-memory'}, '
     'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})',
   );
 
@@ -2747,7 +2823,7 @@ Future<void> main(List<String> args) async {
   // only symptom was a HandshakeException buried in a 500 on some later
   // request — which reads exactly like a revoked token and sends the debugging
   // after the credentials instead of after the image. One line here names it.
-  if (turso != null) {
+  if (persistence.usesTurso) {
     try {
       final games = await leaderboardStore.totalGames();
       stdout.writeln('Turso reachable: $games game(s) recorded.');
@@ -2764,7 +2840,7 @@ Future<void> main(List<String> args) async {
   // The friends store gets the same one-line proof. A Turso-backed friends
   // store that cannot reach its database must fail loudly here rather than
   // look healthy until the first player opens the Friends screen.
-  if (tursoFriends != null) {
+  if (persistence.friends is TursoFriendStore) {
     try {
       await friendStore.profile('');
       stdout.writeln('Turso friends store reachable.');

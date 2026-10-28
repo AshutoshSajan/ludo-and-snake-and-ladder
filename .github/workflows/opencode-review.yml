@@ -4,44 +4,97 @@ name: OpenCode review
 # the release branch. The model never approves, requests changes, or merges; a
 # human owns the merge.
 #
+# Manual only: no pull-request event starts this workflow. A maintainer opens
+# the Actions tab, runs "OpenCode review" with the PR number, and that explicit
+# request is the only trigger — so model spend and key use happen only when a
+# human decides a review is worth them. Drafts are reviewable on request; the
+# PR must be open and its head must live in this repository.
+#
+# Dispatch it with the PR number:
+#   gh workflow run opencode-review.yml --ref dev -f pr=<number>
+# CLI dispatch works from any branch whose copy of this file declares
+# workflow_dispatch (dev has it); GitHub lists the workflow in the Actions UI
+# only once the file exists on the default branch.
+#
 # Two jobs deliberately:
-#   * `review` only needs `contents: read` and never receives a GitHub token in
-#     the model process.
+#   * `review` only needs read-only repository scopes and never receives a
+#     GitHub token in the model process.
 #   * `publish` is the only job with `pull-requests: write` / `issues: write`,
 #     and it runs trusted code from the BASE commit, never from the PR head.
 on:
-  pull_request:
-    branches: [dev, main]
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review
+        required: true
+        type: string
 
 permissions: {}
 
-# A new push supersedes the review of the old commit. The publisher re-checks
-# the PR head before posting, so a run that was already downloading cannot
-# attach a review to a commit that has moved on.
+# A newer dispatch for the same PR supersedes the old run. The publisher
+# re-checks the PR head before posting, so a run that was already downloading
+# cannot attach a review to a commit that has moved on.
 concurrency:
-  group: opencode-review-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: opencode-review-${{ github.workflow }}-${{ inputs.pr }}
   cancel-in-progress: true
 
 jobs:
   review:
-    # Drafts are work in progress; forks do not get secrets; a bot-authored PR
-    # (Dependabot) does not need a model review.
-    if: >
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.sender.type != 'Bot'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      # The resolve step reads the PR object (base/head shas, state, head
+      # repo). The token never reaches the model process: it runs under
+      # `env -i` with only the provider key.
+      pull-requests: read
     outputs:
       configured: ${{ steps.gate.outputs.configured }}
       model: ${{ steps.gate.outputs.model }}
+      pr: ${{ inputs.pr }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
     steps:
+      # The dispatch input names the PR; this resolves and pins the two commits
+      # the rest of the workflow uses — the base (trusted scripts, diff bottom)
+      # and the head (checkout, diff top). A closed PR, a deleted branch, or a
+      # fork head fails here, before any PR code is checked out.
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          # The workflow file itself must come from a trusted branch: a
+          # dispatch selects the ref whose YAML runs, and this job carries the
+          # provider key. PR code never supplies this file.
+          if [ "$GITHUB_REF" != "refs/heads/dev" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::dispatch OpenCode review from dev or main, not from $GITHUB_REF."
+            exit 1
+          fi
+          if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+            echo "::error::inputs.pr must be a pull request number"
+            exit 1
+          fi
+          data="$(gh api "repos/$REPO/pulls/$PR")"
+          state="$(jq -r '.state' <<<"$data")"
+          head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$data")"
+          if [ "$state" != "open" ]; then
+            echo "::error::PR #$PR is $state; only open pull requests are reviewed."
+            exit 1
+          fi
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::error::PR #$PR has head repository '$head_repo'; only same-repository branches are reviewed."
+            exit 1
+          fi
+          echo "base_sha=$(jq -r '.base.sha' <<<"$data")" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r '.head.sha' <<<"$data")" >> "$GITHUB_OUTPUT"
+
       - name: Check out pull request head
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr.outputs.head_sha }}
           # The diff is `base...head`; a shallow clone silently loses the merge
           # base. The model also needs to read nearby files, so a real checkout
           # is the point.
@@ -52,7 +105,7 @@ jobs:
       - name: Check out trusted base scripts
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ steps.pr.outputs.base_sha }}
           sparse-checkout: .github/opencode
           persist-credentials: false
           path: trusted
@@ -94,8 +147,8 @@ jobs:
       - name: Prepare review context
         if: steps.gate.outputs.configured == 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -205,7 +258,7 @@ jobs:
       - name: Check out trusted publisher
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.review.outputs.base_sha }}
           sparse-checkout: .github/opencode
           persist-credentials: false
           path: trusted
@@ -222,8 +275,8 @@ jobs:
         if: steps.download.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ needs.review.outputs.pr }}
+          HEAD_SHA: ${{ needs.review.outputs.head_sha }}
           MODEL: ${{ needs.review.outputs.model }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -8,51 +8,57 @@ import '../../app_router.dart';
 import '../../app_routes.dart';
 import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
+import '../../services/server_url.dart';
 import '../../ui/club_widgets.dart';
 import '../../ui/theme.dart';
-import '../online_lobby_screen.dart';
 import 'admin_dashboard_screen.dart';
 
 /// Admin sign-in at /admin: email + password. On a fresh server the first
 /// visit becomes a one-time setup that creates the admin account.
 /// The session token lives in memory only and rides as a Bearer header.
 class AdminLoginScreen extends ConsumerStatefulWidget {
-  const AdminLoginScreen({super.key});
+  const AdminLoginScreen({super.key, this.clientFactory});
+
+  /// Test seam: builds the client used for the status check and auth.
+  /// Null in production, where the target is [defaultServerUrl].
+  final AdminClient Function()? clientFactory;
 
   @override
   ConsumerState<AdminLoginScreen> createState() => _AdminLoginScreenState();
 }
 
 class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
-  late final TextEditingController _serverCtrl;
   final _emailCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _setupTokenCtrl = TextEditingController();
+  final _setupTokenFocus = FocusNode();
   bool? _setupRequired;
   String? _error;
   bool _busy = false;
   bool _showPassword = false;
   bool _showSetupToken = false;
 
-  AdminClient get _client => AdminClient(serverUrl: _serverCtrl.text.trim());
+  // The admin page is web-only and same-origin with its server, so the
+  // target is a build-time fact — the same rule the online lobby follows.
+  // An edit box here invited pointing the back office at a foreign host.
+  AdminClient get _client =>
+      widget.clientFactory?.call() ??
+      AdminClient(serverUrl: defaultServerUrl());
 
   @override
   void initState() {
     super.initState();
-    _serverCtrl = TextEditingController(
-      text: OnlineLobbyScreen.defaultServerUrl(),
-    );
     _checkStatus();
   }
 
   @override
   void dispose() {
-    _serverCtrl.dispose();
     _emailCtrl.dispose();
     _nameCtrl.dispose();
     _passCtrl.dispose();
     _setupTokenCtrl.dispose();
+    _setupTokenFocus.dispose();
     super.dispose();
   }
 
@@ -174,6 +180,12 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
       return;
     }
     if (!mounted) return;
+    // Auth succeeded, so this is the moment the browser should offer to save
+    // the credential. Unfocus first: the web engine only submits a form once
+    // its focused input has gone dormant. The group's dispose action cancels
+    // instead, so a failed or abandoned sign-in never prompts to save.
+    FocusManager.instance.primaryFocus?.unfocus();
+    TextInput.finishAutofillContext();
     final user = authed['user'] as Map? ?? {};
     ref
         .read(adminSessionProvider.notifier)
@@ -182,7 +194,6 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
             token: client.token ?? '',
             email: '${user['email'] ?? email}',
             name: '${user['name'] ?? ''}',
-            serverUrl: _serverCtrl.text.trim(),
           ),
         );
     replaceAppScreen<void>(
@@ -226,8 +237,11 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 470),
               // One AutofillGroup so password managers offer to fill (and save)
-              // the email+password pair instead of fighting the form.
+              // the email+password pair instead of fighting the form. Saving
+              // is explicit after a successful auth; disposing the screen
+              // cancels the context so abandoned forms stay unsaved.
               child: AutofillGroup(
+                onDisposeAction: AutofillContextAction.cancel,
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(20, 28, 20, 40),
                   shrinkWrap: true,
@@ -300,19 +314,6 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                               const SizedBox(height: 14),
                             ],
                             TextField(
-                              controller: _serverCtrl,
-                              enabled: !_busy,
-                              decoration: const InputDecoration(
-                                labelText: 'Server WS URL',
-                                helperText:
-                                    'The server that issues this '
-                                    'admin session.',
-                                prefixIcon: Icon(Icons.dns_outlined, size: 20),
-                              ),
-                              onChanged: (_) => _checkStatus(),
-                            ),
-                            const SizedBox(height: 12),
-                            TextField(
                               controller: _emailCtrl,
                               enabled: !_busy,
                               keyboardType: TextInputType.emailAddress,
@@ -326,13 +327,13 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                                   size: 20,
                                 ),
                               ),
-                              onSubmitted: (_) => _submit(),
                             ),
                             if (setup) ...[
                               const SizedBox(height: 12),
                               TextField(
                                 controller: _nameCtrl,
                                 enabled: !_busy,
+                                autofillHints: const [AutofillHints.name],
                                 textInputAction: TextInputAction.next,
                                 decoration: const InputDecoration(
                                   labelText: 'Name (optional)',
@@ -341,7 +342,6 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                                     size: 20,
                                   ),
                                 ),
-                                onSubmitted: (_) => _submit(),
                               ),
                             ],
                             const SizedBox(height: 12),
@@ -362,8 +362,15 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                                   ? const [AutofillHints.newPassword]
                                   : const [AutofillHints.password],
                               contextMenuBuilder: _menuBuilder(secret: true),
-                              onEditingComplete:
-                                  TextInput.finishAutofillContext,
+                              // Setup advances to the token explicitly: the
+                              // Show button sits between the two fields in
+                              // default traversal order.
+                              onEditingComplete: setup
+                                  ? () {
+                                      _passCtrl.clearComposing();
+                                      _setupTokenFocus.requestFocus();
+                                    }
+                                  : null,
                               textInputAction: setup
                                   ? TextInputAction.next
                                   : TextInputAction.done,
@@ -385,12 +392,16 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                                   ),
                                 ),
                               ),
-                              onSubmitted: (_) => _submit(),
+                              // Enter submits a sign-in; during first-run
+                              // setup it advances to the setup token instead
+                              // so a half-filled form is never sent.
+                              onSubmitted: setup ? null : (_) => _submit(),
                             ),
                             if (setup) ...[
                               const SizedBox(height: 12),
                               TextField(
                                 controller: _setupTokenCtrl,
+                                focusNode: _setupTokenFocus,
                                 enabled: !_busy,
                                 obscureText: !_showSetupToken,
                                 enableInteractiveSelection: true,

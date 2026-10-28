@@ -84,6 +84,11 @@ InternetAddress _addr(String literal) => InternetAddress.tryParse(literal)!;
 
 const _loginMiss = '{"email":"ghost@x.io","password":"wrong-1"}';
 
+/// A store whose password checks always miss and never pay PBKDF2 — for
+/// tests about rate limiting, not credential verification.
+AdminStore _rejectingStore() =>
+    AdminStore.inMemory(verifier: (password, hash) => false);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -136,6 +141,53 @@ void main() {
       expect((await store.validateSession(session.token))?.id, user.id);
       await store.revokeSession(session.token);
       expect(await store.validateSession(session.token), isNull);
+    });
+
+    test('an absent email still pays the password work factor', () async {
+      // The verifier seam records the hash each path verifies against,
+      // so this is deterministic — no timing assertion. Countershape:
+      // before the fix, the absent path called no verifier at all.
+      final verified = <String>[];
+      final store = AdminStore.inMemory(
+        verifier: (password, hash) {
+          verified.add(hash);
+          return false;
+        },
+      );
+      addTearDown(store.close);
+
+      expect(
+        await store.checkCredentials('nobody@example.com', 'long-enough-1'),
+        isNull,
+      );
+      expect(
+        verified,
+        hasLength(1),
+        reason: 'an absent account must still run the KDF',
+      );
+      final parts = verified.single.split(r'$');
+      expect(parts.first, 'pbkdf2');
+      expect(
+        int.parse(parts[1]),
+        defaultPbkdf2Iterations,
+        reason: 'the dummy hash must carry the production work factor',
+      );
+
+      // A real account's wrong password runs exactly one verification
+      // too — the same shape as the dummy path.
+      await store.createUser(
+        email: 'root@example.com',
+        name: 'Root',
+        password: 'long-enough-1',
+        iterations: 1000,
+        by: 'test',
+      );
+      verified.clear();
+      expect(
+        await store.checkCredentials('root@example.com', 'wrong-1'),
+        isNull,
+      );
+      expect(verified, hasLength(1));
     });
 
     test('expired sessions die, short passwords and dupes rejected', () async {
@@ -366,7 +418,7 @@ void main() {
     test('login rate-limits brute force', () async {
       final savedStore = adminStore;
       final savedToken = adminToken;
-      adminStore = AdminStore.inMemory();
+      adminStore = _rejectingStore();
       adminToken = '';
       addTearDown(() {
         adminStore = savedStore;
@@ -383,6 +435,80 @@ void main() {
         );
       }
       expect(last.statusCode, 429);
+    });
+
+    test('concurrent logins cannot all pass the failure check', () async {
+      // The failure budget is checked before the body is read and only
+      // spent after credentials are verified (CWE-307). Every request in
+      // this burst reaches the check before any of them has recorded a
+      // failure, so without a reservation all fifteen are verified; with
+      // one, the ten-attempt budget holds.
+      final savedStore = adminStore;
+      final savedToken = adminToken;
+      adminStore = _rejectingStore();
+      adminToken = '';
+      addTearDown(() {
+        adminStore = savedStore;
+        adminToken = savedToken;
+        resetLoginAttempts();
+      });
+      resetLoginAttempts();
+
+      final responses = await Future.wait([
+        for (var i = 0; i < 15; i++)
+          adminLoginHandler(
+            _post('admin/login', {
+              'email': 'ghost@x.io',
+              'password': 'wrong-$i',
+            }),
+          ),
+      ]);
+      final codes = responses.map((r) => r.statusCode).toList();
+      expect(
+        codes.where((c) => c == 401).length,
+        10,
+        reason: 'only the ten-attempt budget may reach verification',
+      );
+      expect(codes.where((c) => c == 429).length, 5);
+
+      // A reservation is capacity, not a failure: the bucket holds the
+      // ten misses, so one more sequential attempt is refused.
+      final after = await adminLoginHandler(
+        _post('admin/login', {'email': 'ghost@x.io', 'password': 'wrong-x'}),
+      );
+      expect(after.statusCode, 429);
+    });
+
+    test('a successful login frees its slot without spending the budget',
+        () async {
+      final savedStore = adminStore;
+      adminStore = AdminStore.inMemory();
+      addTearDown(() {
+        adminStore = savedStore;
+        resetLoginAttempts();
+      });
+      resetLoginAttempts();
+      await adminStore.createUser(
+        email: 'root@x.io',
+        name: 'Root',
+        password: 'long-enough-1',
+        role: 'admin',
+        iterations: 1000,
+        by: 'test',
+      );
+
+      // Successes never spend the ten-failure budget: twelve in a row all
+      // log in. An eleventh would be refused if a success were recorded
+      // as a miss, and a leaked reservation would refuse one of ten.
+      for (var i = 0; i < 12; i++) {
+        final res = await adminLoginHandler(
+          _post('admin/login', {
+            'email': 'root@x.io',
+            'password': 'long-enough-1',
+          }),
+        );
+        expect(res.statusCode, 200, reason: 'login ${i + 1} of 12');
+      }
     });
 
     test('admin can list and create users', () async {
@@ -512,7 +638,7 @@ void main() {
         final savedStore = adminStore;
         final savedToken = adminToken;
         final savedProxies = trustedProxies;
-        adminStore = AdminStore.inMemory();
+        adminStore = _rejectingStore();
         adminToken = '';
         trustedProxies = trusted;
         addTearDown(() {
@@ -562,7 +688,7 @@ void main() {
       final savedStore = adminStore;
       final savedToken = adminToken;
       final savedProxies = trustedProxies;
-      adminStore = AdminStore.inMemory();
+      adminStore = _rejectingStore();
       adminToken = '';
       trustedProxies = trusted;
       addTearDown(() {
@@ -621,7 +747,7 @@ void main() {
         final savedStore = adminStore;
         final savedToken = adminToken;
         final savedProxies = trustedProxies;
-        adminStore = AdminStore.inMemory();
+        adminStore = _rejectingStore();
         adminToken = '';
         trustedProxies = trusted;
         addTearDown(() {

@@ -286,6 +286,54 @@ class Room {
     ],
   };
 
+  /// How many departed seats an unstarted lobby remembers before it starts
+  /// forgetting the oldest. A full table is at most four corners, so eight
+  /// covers every player reloading at once plus ordinary churn — but a room
+  /// that never starts now has a strict ceiling on retained history
+  /// (CWE-400; see [pruneDepartedSeats]).
+  static const int maxDepartedSeatClaims = 8;
+
+  /// Forgets everything the room remembers about [seatId]'s seat: its
+  /// corner, the private reconnect credential, and its per-turn counters.
+  /// Only ever called for claims that are being retired — a seat somebody
+  /// currently holds, or one in a running game, is never passed here.
+  void _forgetSeat(String seatId) {
+    seatRegistry.remove(seatId);
+    seatCredentials.remove(seatId);
+    missedTurns.remove(seatId);
+    autoSeats.remove(seatId);
+    forfeited.remove(seatId);
+  }
+
+  /// Retires the oldest seat history in an unstarted lobby (CWE-400).
+  ///
+  /// Every fresh seat id that joins is remembered so its player can reclaim
+  /// the corner after a reload. Nothing bounded that memory: join →
+  /// disconnect cycles accumulated one claim per cycle, each claim grew the
+  /// `lobby`/`seats` frames, and every parsed object re-encoded the roster.
+  /// This keeps at most [maxDepartedSeatClaims] walk-out rows and the same
+  /// number of vacated claims, oldest first; a reclaimed seat is always one
+  /// of the newest.
+  ///
+  /// A started game is deliberately untouched: every seat in it must stay
+  /// reclaimable for the rest of the game, and no new seats are admitted
+  /// after [start], so its history cannot grow anyway.
+  void pruneDepartedSeats() {
+    if (started) return;
+    while (leftSeats.length > maxDepartedSeatClaims) {
+      _forgetSeat(leftSeats.removeAt(0).seatId);
+    }
+    final vacated = [
+      for (final seatId in seatRegistry.keys)
+        if (!forfeited.contains(seatId) && !seatIsConnected(seatId)) seatId,
+    ];
+    final excess = vacated.length - maxDepartedSeatClaims;
+    if (excess <= 0) return;
+    for (final seatId in vacated.take(excess)) {
+      _forgetSeat(seatId);
+    }
+  }
+
   /// Build the game state from seated members (called once at start).
   void start() {
     if (gameType == 'snakes') {
@@ -370,11 +418,16 @@ class Room {
   /// Ships the lobby feed only when its CONTENTS differ from the room's
   /// last ship.
   ///
-  /// The change-only rule is a deliberate cost bound: the transport used
-  /// to re-serialize and re-send this whole roster after every parsed
-  /// object — dead letters, rejected intents, junk JSON — so a retained
-  /// oversized name turned two two-byte messages into megabyte frames
-  /// delivered to the whole table (CWE-400). A real change (a seat, a
+  /// The change-only rule is one half of a deliberate cost bound: the
+  /// transport used to re-serialize and re-send this whole roster after
+  /// every parsed object — dead letters, rejected intents, junk JSON — so a
+  /// retained oversized name turned two two-byte messages into megabyte
+  /// frames delivered to the whole table (CWE-400). The transport now asks
+  /// [GameAuthority.handleIntent] whether the intent could touch the
+  /// roster and only calls this when it could, and [pruneDepartedSeats]
+  /// caps how much history the roster can hold — this content comparison
+  /// stays as the second gate for callers that know a change was attempted
+  /// but not whether it altered the payload. A real change (a seat, a
   /// watcher, the started flag, a turn-miss counter) always alters the
   /// payload and still ships immediately; identical payloads travel the
   /// `seats` / `state` lanes instead. A joining connection is always
@@ -786,12 +839,30 @@ class GameAuthority {
     return room;
   }
 
+  /// True when [seatId] is one of the seats the running game was created
+  /// with (see [Room.start]). A claim that only ever existed in the lobby
+  /// is not: the game has no pieces and no turn for it.
+  bool _seatIsInGame(Room room, String seatId) => switch (room.game) {
+    LudoState s => s.players.any((p) => p.id == seatId),
+    snakes.SnakesState s => s.players.any((p) => p.id == seatId),
+    _ => false,
+  };
+
   /// Seats a returning player back into their original corner. Works in the
   /// lobby and, crucially, mid-game: the seat survives the disconnect, so the
   /// game state (whose turn, tokens) keeps pointing at the same seatId. Any
   /// stale half-open connection for that seat is evicted. Returns null when
   /// the room is gone, the seatId never sat there, the seat forfeited, or
   /// [credential] does not match the seat's stored reconnect credential.
+  ///
+  /// A claim is not a reservation in an unstarted lobby: the corner may have
+  /// been issued to a replacement while this player was away, and the table
+  /// may since have filled up. A reconnect that is not replacing the same
+  /// live seat is therefore refused when the room is full or the claimed
+  /// corner now belongs to a live player (CWE-863) — the caller's ordinary
+  /// join paths have already offered it every free corner it could take.
+  /// Mid-game, only the seats the game was created with may return; a claim
+  /// from the lobby that never started a game has no pieces to restore.
   Room? rejoinRoom(String code, ServerMember member, {String? credential}) {
     final room = rooms[code.toUpperCase()];
     if (room == null) return null;
@@ -806,6 +877,20 @@ class GameAuthority {
     // untouched until the presentation verifies. The check here is exact —
     // this path only ever targets seats the room has minted a claim for.
     if (!_seatCredentialHolds(room, member.seatId, credential)) return null;
+    // A live holder of this exact seat is a stale half-open connection
+    // being replaced one-for-one: the member count and the corner do not
+    // change, so this stays legal even at capacity.
+    final replacing = room.members.values.any(
+      (m) => m.seatId == member.seatId,
+    );
+    if (!replacing) {
+      if (room.started) {
+        if (!_seatIsInGame(room, member.seatId)) return null;
+      } else {
+        if (room.full) return null;
+        if (room.ownerOf(claimed) != null) return null;
+      }
+    }
     room.members.removeWhere((_, m) => m.seatId == member.seatId);
     member.color = claimed;
     room.members[member.id] = member;
@@ -950,7 +1035,10 @@ class GameAuthority {
       // A dropped link is not a walk-out: the seat, its dice, its pieces and
       // its autoplay setting all stay exactly where they are so the player
       // can resume, but the others are told the corner went quiet (see
-      // Room.seatsJson) instead of wondering why nobody answers.
+      // Room.seatsJson) instead of wondering why nobody answers. The
+      // departed-seat budget decides which of the oldest claims that
+      // resume promise no longer covers (CWE-400).
+      room.pruneDepartedSeats();
       room.broadcast(room.seatsJson());
     }
     // Re-evaluate the driver either way: a room that just went quiet stops
@@ -970,13 +1058,19 @@ class GameAuthority {
   /// to run first and silently dropped every intent but 'start' — which is
   /// why the lobby chat box did nothing at all: the lobby is precisely the
   /// phase where a chat box exists.
-  void handleIntent({
+  ///
+  /// Returns whether the intent MAY have changed the room roster — the
+  /// transport's cue to run [Room.broadcastLobbyIfChanged]. Chat, voice
+  /// signalling, junk JSON, and rejected intents touch no roster state, so
+  /// they must not pay for a rebuild of the roster either (CWE-400: a tiny
+  /// message used to re-encode the whole retained seat history).
+  bool handleIntent({
     required Room room,
     required String connectionId,
     required Map<String, dynamic> msg,
   }) {
     final member = room.members[connectionId];
-    if (member == null) return;
+    if (member == null) return false;
 
     switch (msg['type'] as String?) {
       case 'chat':
@@ -985,8 +1079,8 @@ class GameAuthority {
         final note = _chatNote(mediaNotes, room.code, msg);
         // A line is any of a sentence, a GIF, a voice note — or a caption
         // riding one. Nothing at all is not a message.
-        if (text.isEmpty && gif == null && note == null) return;
-        if (text.length > 200) return;
+        if (text.isEmpty && gif == null && note == null) return false;
+        if (text.length > 200) return false;
         room.broadcast({
           'type': 'chat',
           'from': member.name,
@@ -1006,11 +1100,10 @@ class GameAuthority {
           if (note != null) 'note': {'url': note.urlPath, 'dur': note.durMs},
           'at': DateTime.now().millisecondsSinceEpoch,
         });
-        return;
+        return false;
 
       case 'autoplay':
-        _setAutoplay(room, member, msg['on'] as bool? ?? true);
-        return;
+        return _setAutoplay(room, member, msg['on'] as bool? ?? true);
 
       case 'voice':
         // WebRTC signalling for table voice. The payload ('s') is opaque —
@@ -1024,30 +1117,37 @@ class GameAuthority {
         final kind = msg['k'] as String? ?? '';
         final to = msg['to'] as String? ?? '';
         final s = msg['s'] as String? ?? '';
-        if (!_voiceKinds.contains(kind) || to.isEmpty || s.isEmpty) return;
-        if (to == member.seatId) return;
-        if (s.length > 64 * 1024) return;
+        if (!_voiceKinds.contains(kind) || to.isEmpty || s.isEmpty) {
+          return false;
+        }
+        if (to == member.seatId) return false;
+        if (s.length > 64 * 1024) return false;
         room.sendToSeat(to, {
           'type': 'voice',
           'k': kind,
           'from': member.seatId,
           's': s,
         });
-        return;
+        return false;
 
       case 'leave':
         _applyLeave(room, member);
-        return;
+        return true;
     }
 
-    _applyGameIntent(room: room, member: member, msg: msg);
+    final rosterTouched = _applyGameIntent(room: room, member: member, msg: msg);
     // Whoever's turn it is now may be a seat the table is playing for.
     _armAutoTimer(room);
     _armTurnTimer(room);
+    return rosterTouched;
   }
 
   /// The dice-and-board intents, which only make sense once a game exists.
-  void _applyGameIntent({
+  ///
+  /// Returns whether the intent may have changed what the roster shows:
+  /// [Room.started], or a seat's turn-miss counter (the two things these
+  /// intents write that [Room.seatsJson] carries).
+  bool _applyGameIntent({
     required Room room,
     required ServerMember member,
     required Map<String, dynamic> msg,
@@ -1055,7 +1155,9 @@ class GameAuthority {
     final isSnakes = room.gameType == 'snakes';
     final state = isSnakes ? null : room.stateOrNull;
     final snakesState = room.snakesState;
-    if (state == null && snakesState == null && msg['type'] != 'start') return;
+    if (state == null && snakesState == null && msg['type'] != 'start') {
+      return false;
+    }
 
     switch (msg['type'] as String?) {
       case 'start':
@@ -1064,29 +1166,35 @@ class GameAuthority {
           onRoomStarted?.call(room);
           room.broadcast(room.seatsJson());
           room.broadcastState();
+          return true;
         }
+        return false;
 
       case 'roll':
         if (isSnakes) {
           if (snakesState == null ||
               snakesState.phase != snakes.SnakesPhase.awaitingRoll) {
-            return;
+            return false;
           }
-          if (snakesState.currentPlayer.id != member.seatId) return;
+          if (snakesState.currentPlayer.id != member.seatId) return false;
           // The seat acted on their own turn: their miss streak ends here.
           // The bar is five *consecutive* timed-out turns, not five ever.
-          room.missedTurns.remove(member.seatId);
+          // Only an actual streak clearing alters the roster's `misses`.
+          final cleared = room.missedTurns.remove(member.seatId) != null;
           snakes.rollDice(snakesState, die.next(rng));
           room.broadcastState();
           _recordResultsIfFinished(room, snakesState);
-          return;
+          return cleared;
         }
-        if (state == null || state.phase != LudoPhase.awaitingRoll) return;
-        if (state.currentPlayer.id != member.seatId) return;
-        room.missedTurns.remove(member.seatId);
+        if (state == null || state.phase != LudoPhase.awaitingRoll) {
+          return false;
+        }
+        if (state.currentPlayer.id != member.seatId) return false;
+        final cleared = room.missedTurns.remove(member.seatId) != null;
         rollDice(state, die.next(rng));
         room.broadcastState();
         _recordResultsIfFinished(room, state);
+        return cleared;
 
       case 'move':
         if (isSnakes) {
@@ -1094,41 +1202,47 @@ class GameAuthority {
           // validate, just resolve it for the current player.
           if (snakesState == null ||
               snakesState.phase != snakes.SnakesPhase.awaitingMove) {
-            return;
+            return false;
           }
-          if (snakesState.currentPlayer.id != member.seatId) return;
-          room.missedTurns.remove(member.seatId);
+          if (snakesState.currentPlayer.id != member.seatId) return false;
+          final cleared = room.missedTurns.remove(member.seatId) != null;
           snakes.applyMove(snakesState);
           room.broadcastState();
           _recordResultsIfFinished(room, snakesState);
-          return;
+          return cleared;
         }
-        if (state == null || state.phase != LudoPhase.awaitingMove) return;
-        if (state.currentPlayer.id != member.seatId) return;
-        room.missedTurns.remove(member.seatId);
+        if (state == null || state.phase != LudoPhase.awaitingMove) {
+          return false;
+        }
+        if (state.currentPlayer.id != member.seatId) return false;
+        final cleared = room.missedTurns.remove(member.seatId) != null;
         final idx = msg['token'] as int?;
-        if (idx == null || idx < 0 || idx > 3) return;
+        if (idx == null || idx < 0 || idx > 3) return cleared;
         final legal = legalMoves(state).any((m) => m.tokenIndex == idx);
-        if (!legal) return; // reject illegal move silently
+        if (!legal) return cleared; // reject illegal move silently
         applyMove(state, idx);
         room.broadcastState();
         _recordResultsIfFinished(room, state);
+        return cleared;
     }
+    return false;
   }
 
   /// Switches autoplay on or off for [member]'s seat. It lives on the server
   /// so it survives their tab closing, and so two clients can never drive the
   /// same seat. A human who changes their mind can still roll or move by
   /// hand — the driver only steps in when the turn is still pending.
-  void _setAutoplay(Room room, ServerMember member, bool on) {
-    if (on) {
-      room.autoSeats.add(member.seatId);
-    } else {
-      room.autoSeats.remove(member.seatId);
-    }
-    room.broadcast(room.seatsJson());
+  ///
+  /// Returns whether the flag actually changed: repeating the current value
+  /// is a no-op, and must not re-serialize the seat roster (CWE-400).
+  bool _setAutoplay(Room room, ServerMember member, bool on) {
+    final changed = on
+        ? room.autoSeats.add(member.seatId)
+        : room.autoSeats.remove(member.seatId);
+    if (changed) room.broadcast(room.seatsJson());
     _armAutoTimer(room);
     _armTurnTimer(room);
+    return changed;
   }
 
   /// A deliberate walk-out, as opposed to a dropped link: the seat's dice and
@@ -1164,6 +1278,10 @@ class GameAuthority {
     room.leftSeats.add((seatId: seatId, name: name, color: color));
     room.autoSeats.remove(seatId);
     room.missedTurns.remove(seatId);
+    // Lobby walk-outs are history the roster carries; keep only the newest
+    // rows so a room that never starts cannot grow them without bound
+    // (CWE-400). No-op once the game is running.
+    room.pruneDepartedSeats();
     final departure = {
       'type': 'left',
       'name': name,

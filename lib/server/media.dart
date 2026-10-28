@@ -19,17 +19,22 @@
 /// [maxImageNoteBytes] for keyboard images), a room keeps at most
 /// [maxPerRoom] of them (oldest-first eviction), the whole store stays
 /// under [maxBytes], and everything older than [ttl] is swept away
-/// lazily. Eviction leaves the id reserved (also for [ttl], counted from
-/// the moment the note left): a chat line's URL answered its author's
-/// bytes for the note's whole life, so no further upload can mount
-/// different bytes onto that id while history quoting the URL can still
-/// be pulled — the eviction side of the announced-media immutability
-/// (CWE-639).
+/// lazily.
+///
+/// Announced media is immutable (CWE-639): a URL names both its id and
+/// a [MediaNote.contentTag] digest of the bytes it was announced with,
+/// and serving verifies that binding. The reservation of evicted ids
+/// (see [_retired]) is a second, bounded guard against mounting new
+/// bytes onto a live id; the URL's content tag is what keeps *history*
+/// safe even after the reservation window rotates, because a
+/// replacement upload can only ever be fetched through the replacement's
+/// own tagged URL — the old message's URL fails the tag check.
 library;
 
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:shelf/shelf.dart' as shelf;
 
 /// The two chat media kinds. The kind drives the URL path, the size cap
@@ -51,7 +56,7 @@ class MediaNote {
     required this.durMs,
     required this.data,
     required this.storedAt,
-  });
+  }) : contentTag = _contentTagOf(data);
 
   final MediaKind kind;
   final String code;
@@ -61,10 +66,28 @@ class MediaNote {
   final Uint8List data;
   final DateTime storedAt;
 
+  /// A digest of [data], carried as the last segment of [urlPath]. Ids
+  /// alone are not enough: the store's reservation window for evicted
+  /// ids is a bounded memory guard, so a churned room can rotate an old
+  /// id back into the free pool. Without this tag, a new upload could
+  /// then mount different bytes under a URL an earlier chat line still
+  /// shows, and history would serve the replacement under its author's
+  /// name (CWE-639). With it, the URL names the bytes: serving checks
+  /// the tag, so a replacement is reachable only through the
+  /// replacement's own URL.
+  final String contentTag;
+
   /// The playback path, exactly as the chat broadcast carries it —
   /// relative, so the origin is never baked into the store.
-  String get urlPath => '/media/${kind.pathSegment}/$code/$id';
+  String get urlPath => '/media/${kind.pathSegment}/$code/$id/$contentTag';
 }
+
+/// The first 128 bits of SHA-256, url-safe: a 22-character path segment
+/// long enough that a different body cannot land on an existing URL's
+/// tag, short enough to keep the announced URL tidy.
+String _contentTagOf(Uint8List data) => base64UrlEncode(
+  crypto.sha256.convert(data).bytes.sublist(0, 16),
+).replaceAll('=', '');
 
 /// Note ids come from the client and end up in a URL path: charset and
 /// length are the whole defense, so they are strict.
@@ -107,11 +130,15 @@ class MediaNoteStore {
   /// side of announcements; this is the eviction side). The timestamp is
   /// when the note LEFT (not when it was stored), and the entry ages out
   /// with the same [ttl] the notes age out with: by then the URL has been
-  /// unresolvable for the full note ttl already, so no id can be
-  /// resurrected while its bytes could still be pulled. Per (room, kind)
-  /// the window is capped at [maxReservationsPerKind] — a genuine
+  /// unresolvable for the full note ttl already. Per (room, kind) the
+  /// window is capped at [maxReservationsPerKind] — a genuine
   /// reservation never rotates out within a normal room's life, while a
   /// fabricated id flood cannot grow this map unboundedly.
+  ///
+  /// The cap is a memory guard, not the immutability guarantee: a room
+  /// churned past it can re-use an id, but every announced URL still
+  /// names its bytes ([MediaNote.contentTag]), so the old URL cannot
+  /// serve replacement content even then.
   final Map<String, Map<MediaKind, Map<String, DateTime>>> _retired = {};
 
   /// Stores a note, sweeping expired notes and evicting the oldest notes
@@ -121,9 +148,8 @@ class MediaNoteStore {
   ///
   /// An occupied (room, kind, id) returns null without changing the store,
   /// even if that note has expired but has not yet been swept — and so does
-  /// a (room, kind, id) whose note was evicted or swept: the id stays
-  /// reserved while its announced URL could still have been pulled, so
-  /// new bytes cannot mount themselves onto history.
+  /// a (room, kind, id) whose evicted or swept note still holds a
+  /// reservation: new bytes cannot mount themselves onto a live id at all.
   MediaNote? put({
     required MediaKind kind,
     required String code,
@@ -152,6 +178,11 @@ class MediaNoteStore {
     // fresh reservation: a day dead, its id is still not available —
     // until the [ttl] ages the reservation out (by then the URL has been
     // unresolvable for a whole note lifetime).
+    //
+    // Past the bounded reservation window an id may become free again;
+    // that is safe because the *URL* is content-bound: [MediaNote.urlPath]
+    // carries a digest of the bytes, and mediaNoteServe verifies it, so
+    // the old message's URL can never serve the new note.
     final t = _now();
     _sweep(t);
     final slot = _rooms[code]?[kind];
@@ -273,13 +304,14 @@ class MediaNoteStore {
   }
 
   /// Reserves an id after its note left the store — the eviction twin of
-  /// the immutability gate in [put]: from the moment the bytes were
-  /// announced they spell one (room, kind, id), so the id they freed is
-  /// not available to mount different bytes under the same URL. Capped
-  /// FIFO per (room, kind): the oldest reservation yields when a room's
-  /// kind space exhausts [maxReservationsPerKind], which protects the
-  /// store from a fabricated-id flood while keeping every reservation a
-  /// real room's churn produces.
+  /// the immutability gate in [put]: until it ages out or is rotated by
+  /// the cap below, a freed id is not available to mount different bytes
+  /// under the same URL. Capped FIFO per (room, kind): the oldest
+  /// reservation yields when a room's kind space exhausts
+  /// [maxReservationsPerKind], which protects the store from a
+  /// fabricated-id flood. That rotation cannot reopen history, because
+  /// announced URLs carry a [MediaNote.contentTag] and serving verifies
+  /// it — the reservation is belt to that braces.
   void _retire(String code, MediaKind kind, String id, DateTime t) {
     final perKind = _retired
         .putIfAbsent(code, () => {})
@@ -287,7 +319,9 @@ class MediaNoteStore {
     perKind[id] = t;
     // Plain insertion-order FIFO: reservations land one per eviction, so
     // the first key is the oldest, and a flood that outruns the cap
-    // opens its own old ids back up — never the room's recent history.
+    // opens its own old ids back up — never the room's recent history,
+    // and never an already-announced URL, whose content tag still binds
+    // it to its original bytes.
     while (perKind.length > maxReservationsPerKind) {
       perKind.remove(perKind.keys.first);
     }
@@ -517,9 +551,16 @@ const List<int> _jpegSignature = [0xff, 0xd8, 0xff];
 const List<int> _riffSignature = [0x52, 0x49, 0x46, 0x46];
 const List<int> _webpSignature = [0x57, 0x45, 0x42, 0x50];
 
-/// Handles `GET /media/<kind>/<code>/<id>` — the raw bytes, no-store
-/// because notes die with the room and a cached ghost is worse than a
-/// 404.
+/// Handles `GET /media/<kind>/<code>/<id>/<content-tag>` — the raw bytes,
+/// no-store because notes die with the room and a cached ghost is worse
+/// than a 404.
+///
+/// The last segment is the note's [MediaNote.contentTag]; it must match
+/// the tag computed from the stored bytes or the answer is a 404. That
+/// check is the content binding (CWE-639): an id can be freed, rotated
+/// out of the reservation window and re-used by a churned room, but any
+/// URL an earlier chat line still shows names the *old* bytes and stops
+/// resolving instead of serving the replacement.
 ///
 /// The bytes are untrusted uploads, so they get served as inert as the
 /// web can make them (CWE-79): `content-security-policy: sandbox` gives
@@ -533,7 +574,7 @@ shelf.Response mediaNoteServe(
   required MediaNoteStore store,
 }) {
   final segments = req.url.pathSegments;
-  if (segments.length != 4) return _json(404, 'No such media note');
+  if (segments.length != 5) return _json(404, 'No such media note');
   final kind = switch (segments[1]) {
     'voice' => MediaKind.voice,
     'image' => MediaKind.image,
@@ -545,6 +586,10 @@ shelf.Response mediaNoteServe(
   }
   final note = store.get(kind, segments[2], segments[3]);
   if (note == null) return _json(404, 'No such media note');
+  // The URL names the bytes it was announced with. A mismatch is not a
+  // "wrong version" to correct — it is a different body under an old
+  // message's URL, so it must not resolve at all.
+  if (segments[4] != note.contentTag) return _json(404, 'No such media note');
   return shelf.Response(
     200,
     body: note.data, // shelf_io strips the body for HEAD at the socket.

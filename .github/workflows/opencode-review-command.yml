@@ -158,7 +158,11 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
-          if [ ! -f trusted/.github/opencode/command.py ]; then
+          # sanitize_checkout.py must exist too: it is the boundary that
+          # removes escaping checkout symlinks before the model starts, so a
+          # base that predates it cannot run commands safely.
+          if [ ! -f trusted/.github/opencode/command.py ] ||
+             [ ! -f trusted/.github/opencode/sanitize_checkout.py ]; then
             echo "::notice::The base commit does not contain the OpenCode command scripts yet; skipping. Commands start once this change is on the target branch."
             echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -179,6 +183,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           path: workspace
+
+      # Same boundary as the review workflow (CWE-61): the model process
+      # carries its provider key, and its read/grep tools authorize lexical
+      # paths before following symlinks — a committed link into
+      # /proc/self/environ would leak the key through an otherwise-permitted
+      # search. Trusted base code removes every link whose canonical target
+      # leaves the workspace, and fails closed before the model starts.
+      - name: Reject checkout symlinks that leave the workspace
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          python3 trusted/.github/opencode/sanitize_checkout.py --workspace workspace
 
       # Same pinned tarball as the review workflow. A command that needs the
       # model pays this install; a resolve does too, which is a few seconds of

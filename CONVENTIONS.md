@@ -59,6 +59,16 @@ git forbids re-excavating it afterwards.
   the SQLite or Turso stores, never point a script's DB path elsewhere to
   "start fresh". Schema changes are additive; migration = new tables/columns,
   not surgery on ships.
+- **One durable store, one mode.** With `TURSO_DATABASE_URL` +
+  `TURSO_AUTH_TOKEN` set, Turso is the single store of record for every
+  durable family — leaderboard, admin history, accounts, sessions, feedback,
+  friends and room routing — and no local SQLite handle is opened. Without
+  them the server uses one local SQLite file for that same full set; the
+  fallback exists for development and tests, never as a second copy beside
+  Turso. Build stores only through `openPersistence()` in
+  `lib/server/persistence.dart`; `test/persistence_test.dart` proves both
+  modes and fails if `bin/server.dart` constructs a store directly. A new
+  family extends the factory instead of choosing its own backend.
 - **Never rewrite shared history.** No `git reset --hard` on a pushed branch,
   no `rebase` of a branch other people/agents may have pulled, no mid-branch
   `git push --force` — force-pushes are treated as lost work, not as fixes.
