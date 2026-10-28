@@ -85,13 +85,13 @@ import 'package:game_club/server/friend_store.dart';
 import 'package:game_club/server/gif.dart';
 import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/media.dart';
+import 'package:game_club/server/persistence.dart';
 import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_friend_store.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
 import 'package:http/http.dart' as http;
-import 'package:sqlite3/sqlite3.dart';
 
 /// Not final so tests can swap in a fresh authority + store.
 GameAuthority authority = GameAuthority();
@@ -2066,7 +2066,7 @@ Future<shelf.Response> adminOverviewHandler(shelf.Request req) async {
           'snakes': await leaderboardStore.totalGames(game: 'snakes'),
         },
         'openFeedback': await reportStore.count(status: 'open'),
-        'feedbackByCategory': reportStore.openByCategory(),
+        'feedbackByCategory': await reportStore.openByCategory(),
       },
       'leaderboardBackend': leaderboardBackend,
     }),
@@ -2221,7 +2221,7 @@ Future<shelf.Response> adminFeedbackHandler(shelf.Request req) async {
       'feedback': [for (final e in entries) e.toJson()],
       'openCount': await reportStore.count(status: 'open'),
       'totalCount': await reportStore.count(),
-      'openByCategory': reportStore.openByCategory(),
+      'openByCategory': await reportStore.openByCategory(),
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -2250,13 +2250,13 @@ Future<shelf.Response> adminTableHandler(shelf.Request req) async {
       'editable': spec.editable.toList(),
       'insertable': spec.insertable,
       'deletable': spec.deletable,
-      'rows': adminStore.tableRows(
+      'rows': await adminStore.tableRows(
         spec,
         limit: limit,
         offset: int.tryParse(q['offset'] ?? '')?.clamp(0, 100000) ?? 0,
         q: query,
       ),
-      'total': adminStore.tableCount(spec, q: query),
+      'total': await adminStore.tableCount(spec, q: query),
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -2426,7 +2426,7 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
       final spec = tableSpec(body['table'] as String? ?? '');
       if (spec == null) return _badAdminAction('unknown table');
       try {
-        adminStore.insertTableRow(
+        await adminStore.insertTableRow(
           spec,
           (body['values'] as Map?)?.cast<String, dynamic>() ?? {},
         );
@@ -2545,37 +2545,45 @@ Future<void> main(List<String> args) async {
     preferred: env['GIF_PROVIDER'] ?? '',
   );
 
-  // Persistence for production runs: a hosted Turso database when
-  // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
-  // survives on ephemeral hosts), otherwise the local SQLite file. Tests
-  // swap the globals.
-  final turso = TursoLeaderboardStore.fromEnvironment(env);
-  leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
-  // Admin history lives in the same SQLite file so one DB holds players,
-  // bans, audit and room lifecycle beside the leaderboard rows. When the
-  // leaderboard is Turso-backed the file still exists locally for admin
-  // history (single-replica deployments); multi-replica admin history
-  // needs a shared store.
+  // Persistence for production runs. [openPersistence] is the ONE place
+  // that decides where durable state lives: with TURSO_DATABASE_URL +
+  // TURSO_AUTH_TOKEN set every store — leaderboard, admin history,
+  // accounts, sessions, feedback, friends and the room registry — is
+  // Turso-backed and no local SQLite file is opened at all; without them
+  // every store falls back to one local SQLite file. Tests swap the
+  // globals; test/persistence_test.dart proves both modes and fails if
+  // this file starts constructing a store directly again.
+  final persistence = openPersistence(env: env, dbPath: dbPath);
+
   try {
     adminStore.close();
   } catch (_) {}
-  // One shared SQLite connection for admin history + feedback: the
-  // generic Data-tab CRUD reaches every whitelisted table through
-  // [adminStore], so the tables must live on the same connection (and
-  // file) the feature stores own.
-  final sharedDb = sqlite3.open(dbPath);
-  adminStore = AdminStore.fromDb(sharedDb);
-  reportStore = ReportStore.fromDb(sharedDb);
-  // Friends state: Turso when configured, so friendships, requests, DMs and
-  // invites survive a redeploy on an ephemeral host; otherwise the shared
-  // SQLite file. The local friend tables are created either way — the admin
-  // Data tab whitelists them and reaches them through [sharedDb], so they
-  // must exist on that connection even when Turso is the store of record
-  // (they receive no writes then).
-  friendStore.close();
-  final localFriendStore = SqliteFriendStore.fromDb(sharedDb);
-  final tursoFriends = TursoFriendStore.fromEnvironment(env);
-  friendStore = tursoFriends ?? localFriendStore;
+  try {
+    reportStore.close();
+  } catch (_) {}
+  try {
+    friendStore.close();
+  } catch (_) {}
+
+  leaderboardStore = persistence.leaderboard;
+  adminStore = persistence.admin;
+  reportStore = persistence.reports;
+  friendStore = persistence.friends;
+  roomRegistry = persistence.rooms;
+
+  // Create the shared schema up front (every statement is idempotent) so a
+  // Turso deployment fails loudly here instead of on the first admin
+  // request, and so the Data tab can reach the friend tables before the
+  // first player opens the Friends screen.
+  try {
+    await persistence.ensureSchema();
+  } catch (e) {
+    stderr.writeln(
+      '!! could not create the shared schema: $e\n'
+      '   The server will keep starting, but admin/feedback requests fail '
+      'until the database is reachable.',
+    );
+  }
   adminToken = (env['ADMIN_TOKEN'] ?? '').trim();
   authority = GameAuthority(
     leaderboard: leaderboardStore,
@@ -2630,19 +2638,13 @@ Future<void> main(List<String> args) async {
     },
   );
 
-  // Same env vars drive the cross-instance room registry: with Turso,
-  // rooms are discoverable by every replica behind the load balancer;
-  // without it, the in-memory registry keeps single-instance behavior.
-  final tursoRegistry = TursoRoomRegistry.fromEnvironment(env);
-  roomRegistry = tursoRegistry ?? InMemoryRoomRegistry();
-
   // Keep the registry truthful: refresh every live room's TTL. Rooms are
   // unregistered the moment they close (onRoomClosed above); entries from a
   // crashed instance self-expire once their TTL passes. The cadence must
   // stay well under the TTL — sweeping no more often than the TTL would
   // let live rooms expire between sweeps (lookups 404 for rooms that
   // still exist).
-  Timer.periodic(registryRefreshInterval(tursoRegistry?.ttl), (_) {
+  Timer.periodic(registryRefreshInterval(persistence.registryTtl), (_) {
     for (final room in authority.rooms.values) {
       // A room can close mid-round-trip; advertiseRoom withdraws the route
       // again when that happens, so the sweep never revives a dead room.
@@ -2808,9 +2810,9 @@ Future<void> main(List<String> args) async {
     'Game Club server listening on '
     'ws://${server.address.host}:${server.port}/ws '
     '(instance: $instanceId, '
-    'leaderboard: ${turso != null ? 'Turso' : dbPath}, '
-    'friends: ${tursoFriends != null ? 'Turso' : dbPath}, '
-    'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
+    'data: ${persistence.usesTurso ? 'Turso (all stores)' : dbPath}, '
+    'room registry: '
+    '${persistence.registryTtl != null ? 'Turso' : 'in-memory'}, '
     'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})',
   );
 
@@ -2821,7 +2823,7 @@ Future<void> main(List<String> args) async {
   // only symptom was a HandshakeException buried in a 500 on some later
   // request — which reads exactly like a revoked token and sends the debugging
   // after the credentials instead of after the image. One line here names it.
-  if (turso != null) {
+  if (persistence.usesTurso) {
     try {
       final games = await leaderboardStore.totalGames();
       stdout.writeln('Turso reachable: $games game(s) recorded.');
@@ -2838,7 +2840,7 @@ Future<void> main(List<String> args) async {
   // The friends store gets the same one-line proof. A Turso-backed friends
   // store that cannot reach its database must fail loudly here rather than
   // look healthy until the first player opens the Friends screen.
-  if (tursoFriends != null) {
+  if (persistence.friends is TursoFriendStore) {
     try {
       await friendStore.profile('');
       stdout.writeln('Turso friends store reachable.');

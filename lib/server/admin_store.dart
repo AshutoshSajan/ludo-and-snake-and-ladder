@@ -1,6 +1,7 @@
 /// Admin persistence: presence, growth, bans, audit, leaderboard edits,
-/// and room lifecycle history — all in the same SQLite database file as
-/// the leaderboard when pointed at it, so one DB holds everything the
+/// room lifecycle history, accounts and sessions — all in the same
+/// database as the leaderboard, whether that database is the local SQLite
+/// file or a hosted Turso instance, so one store holds everything the
 /// dashboard shows.
 ///
 /// The server keeps live rooms in memory ([GameAuthority.rooms]); this
@@ -13,6 +14,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'admin_tables.dart';
 import 'auth.dart';
 import 'leaderboard_store.dart';
+import 'sql_backend.dart';
 
 /// One known player: first/last seen drive growth stats.
 class AdminPlayer {
@@ -171,109 +173,125 @@ final String _absentAccountHash = hashPassword(
 );
 
 class AdminStore {
-  AdminStore._(
-    this._db, {
-    required bool owns,
-    PasswordVerifier? verifier,
-  }) : _ownsDb = owns,
-       _verifier = verifier ?? verifyPassword {
-    _migrate();
-  }
+  AdminStore._(this._backend, this._ownsBackend, {PasswordVerifier? verifier})
+    : _verifier = verifier ?? verifyPassword;
 
   factory AdminStore.inMemory({PasswordVerifier? verifier}) =>
-      AdminStore._(sqlite3.openInMemory(), owns: true, verifier: verifier);
+      AdminStore._(SqliteBackend.inMemory(), true, verifier: verifier);
 
   factory AdminStore(String path, {PasswordVerifier? verifier}) =>
-      AdminStore._(sqlite3.open(path), owns: true, verifier: verifier);
+      AdminStore._(SqliteBackend.open(path), true, verifier: verifier);
 
   factory AdminStore.fromDb(Database db, {PasswordVerifier? verifier}) =>
-      AdminStore._(db, owns: false, verifier: verifier);
+      AdminStore._(SqliteBackend.fromDb(db), false, verifier: verifier);
 
-  final Database _db;
-  final bool _ownsDb;
+  /// Wraps any [SqlBackend] (the caller keeps ownership) — this is how a
+  /// Turso-backed deployment gets the same admin surface as SQLite.
+  factory AdminStore.fromBackend(
+    SqlBackend backend, {
+    PasswordVerifier? verifier,
+  }) => AdminStore._(backend, false, verifier: verifier);
+
+  final SqlBackend _backend;
+  final bool _ownsBackend;
   final PasswordVerifier _verifier;
 
-  void _migrate() {
-    _db.execute('''
-      CREATE TABLE IF NOT EXISTS results (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        game_id TEXT NOT NULL,
-        seat_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        color TEXT NOT NULL,
-        rank INTEGER NOT NULL,
-        played_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_results_seat ON results(seat_id);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_results_game_seat
-          ON results(game_id, seat_id);
-      CREATE TABLE IF NOT EXISTS players (
-        seat_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS admin_players (
-        seat_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        first_seen INTEGER NOT NULL,
-        last_seen INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS admin_bans (
-        seat_id TEXT PRIMARY KEY,
-        reason TEXT NOT NULL,
-        banned_by TEXT NOT NULL,
-        banned_at INTEGER NOT NULL,
-        until_ms INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS admin_audit (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        action TEXT NOT NULL,
-        seat_id TEXT NOT NULL,
-        by_name TEXT NOT NULL,
-        detail TEXT,
-        at_ms INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS admin_rooms (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT NOT NULL,
-        game TEXT NOT NULL,
-        instance TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        started_at INTEGER,
-        closed_at INTEGER,
-        status TEXT NOT NULL,
-        player_count INTEGER NOT NULL DEFAULT 0,
-        winner_seat TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_admin_rooms_code ON admin_rooms(code);
-      CREATE INDEX IF NOT EXISTS idx_admin_rooms_created
-          ON admin_rooms(created_at);
-      CREATE TABLE IF NOT EXISTS auth_users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT NOT NULL UNIQUE,
-        name TEXT NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'user',
-        seat_id TEXT,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS auth_sessions (
-        token_hash TEXT PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
-          ON auth_sessions(user_id);
-    ''');
-    final cols = _db
-        .select('PRAGMA table_info(results)')
-        .map((r) => r['name'] as String);
-    if (!cols.contains('game')) {
-      _db.execute(
-        "ALTER TABLE results ADD COLUMN game TEXT NOT NULL DEFAULT ''",
-      );
+  /// Schema is created lazily and memoized: a Turso deployment cannot run
+  /// migrations in a constructor. A failed attempt is cleared so the next
+  /// call retries (every statement is idempotent).
+  Future<void>? _schemaReady;
+
+  /// Creates every table this store owns, including the additive `game`
+  /// column upgrade for databases created before per-game boards existed.
+  Future<void> ensureSchema() => _schemaReady ??= _createSchema();
+
+  Future<void> _createSchema() async {
+    try {
+      await _backend.run([
+        for (final sql in _schemaSql) SqlStatement(sql),
+      ], atomic: false);
+      final probe = await _backend.run(const [
+        SqlStatement(_hasGameColumnSql, ['results', 'game']),
+      ]);
+      final present = (probe.first.rows.first['n'] as int) > 0;
+      if (!present) {
+        await _backend.run(const [SqlStatement(_addGameColumnSql)]);
+      }
+    } catch (_) {
+      _schemaReady = null; // let the next call retry
+      rethrow;
     }
   }
+
+  static const _hasGameColumnSql =
+      'SELECT COUNT(*) AS n FROM pragma_table_info(?) WHERE name = ?';
+  static const _addGameColumnSql =
+      "ALTER TABLE results ADD COLUMN game TEXT NOT NULL DEFAULT ''";
+
+  static const _schemaSql = <String>[
+    'CREATE TABLE IF NOT EXISTS results ('
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+        'game_id TEXT NOT NULL, '
+        'seat_id TEXT NOT NULL, '
+        'name TEXT NOT NULL, '
+        'color TEXT NOT NULL, '
+        'rank INTEGER NOT NULL, '
+        'played_at INTEGER NOT NULL, '
+        "game TEXT NOT NULL DEFAULT '')",
+    'CREATE INDEX IF NOT EXISTS idx_results_seat ON results(seat_id)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_results_game_seat '
+        'ON results(game_id, seat_id)',
+    'CREATE TABLE IF NOT EXISTS players ('
+        'seat_id TEXT PRIMARY KEY, '
+        'name TEXT NOT NULL)',
+    'CREATE TABLE IF NOT EXISTS admin_players ('
+        'seat_id TEXT PRIMARY KEY, '
+        'name TEXT NOT NULL, '
+        'first_seen INTEGER NOT NULL, '
+        'last_seen INTEGER NOT NULL)',
+    'CREATE TABLE IF NOT EXISTS admin_bans ('
+        'seat_id TEXT PRIMARY KEY, '
+        'reason TEXT NOT NULL, '
+        'banned_by TEXT NOT NULL, '
+        'banned_at INTEGER NOT NULL, '
+        'until_ms INTEGER)',
+    'CREATE TABLE IF NOT EXISTS admin_audit ('
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+        'action TEXT NOT NULL, '
+        'seat_id TEXT NOT NULL, '
+        'by_name TEXT NOT NULL, '
+        'detail TEXT, '
+        'at_ms INTEGER NOT NULL)',
+    'CREATE TABLE IF NOT EXISTS admin_rooms ('
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+        'code TEXT NOT NULL, '
+        'game TEXT NOT NULL, '
+        'instance TEXT NOT NULL, '
+        'created_at INTEGER NOT NULL, '
+        'started_at INTEGER, '
+        'closed_at INTEGER, '
+        'status TEXT NOT NULL, '
+        'player_count INTEGER NOT NULL DEFAULT 0, '
+        'winner_seat TEXT)',
+    'CREATE INDEX IF NOT EXISTS idx_admin_rooms_code ON admin_rooms(code)',
+    'CREATE INDEX IF NOT EXISTS idx_admin_rooms_created '
+        'ON admin_rooms(created_at)',
+    'CREATE TABLE IF NOT EXISTS auth_users ('
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+        'email TEXT NOT NULL UNIQUE, '
+        'name TEXT NOT NULL, '
+        'password_hash TEXT NOT NULL, '
+        "role TEXT NOT NULL DEFAULT 'user', "
+        'seat_id TEXT, '
+        'created_at INTEGER NOT NULL)',
+    'CREATE TABLE IF NOT EXISTS auth_sessions ('
+        'token_hash TEXT PRIMARY KEY, '
+        'user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE, '
+        'created_at INTEGER NOT NULL, '
+        'expires_at INTEGER NOT NULL)',
+    'CREATE INDEX IF NOT EXISTS idx_auth_sessions_user '
+        'ON auth_sessions(user_id)',
+  ];
 
   // ---------------------------------------------------------- presence
 
@@ -293,49 +311,48 @@ class AdminStore {
     required String name,
     required int atMs,
   }) async {
-    final existing = _db.select(
-      'SELECT first_seen FROM admin_players WHERE seat_id = ?',
-      [seatId],
-    );
-    if (existing.isEmpty) {
-      _db.execute(
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement(
         'INSERT INTO admin_players (seat_id, name, first_seen, last_seen) '
-        'VALUES (?, ?, ?, ?)',
+        'VALUES (?, ?, ?, ?) '
+        'ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name, '
+        'last_seen = excluded.last_seen',
         [seatId, name, atMs, atMs],
-      );
-    } else {
-      _db.execute(
-        'UPDATE admin_players SET name = ?, last_seen = ? '
-        'WHERE seat_id = ?',
-        [name, atMs, seatId],
-      );
-    }
+      ),
+    ]);
   }
 
   Future<AdminPlayer?> player(String seatId) async {
-    final rows = _db.select(
-      'SELECT seat_id, name, first_seen, last_seen FROM admin_players '
-      'WHERE seat_id = ?',
-      [seatId],
-    );
-    if (rows.isEmpty) return null;
-    final r = rows.first;
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT seat_id, name, first_seen, last_seen FROM admin_players '
+        'WHERE seat_id = ?',
+        [seatId],
+      ),
+    ]);
+    final row = results.first.firstRow;
+    if (row == null) return null;
     return AdminPlayer(
-      seatId: r['seat_id'] as String,
-      name: r['name'] as String,
-      firstSeen: r['first_seen'] as int,
-      lastSeen: r['last_seen'] as int,
+      seatId: row['seat_id'] as String,
+      name: row['name'] as String,
+      firstSeen: row['first_seen'] as int,
+      lastSeen: row['last_seen'] as int,
     );
   }
 
   Future<List<AdminPlayer>> allPlayers({int limit = 100}) async {
-    final rows = _db.select(
-      'SELECT seat_id, name, first_seen, last_seen FROM admin_players '
-      'ORDER BY last_seen DESC LIMIT ?',
-      [limit],
-    );
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT seat_id, name, first_seen, last_seen FROM admin_players '
+        'ORDER BY last_seen DESC LIMIT ?',
+        [limit],
+      ),
+    ]);
     return [
-      for (final r in rows)
+      for (final r in results.first.rows)
         AdminPlayer(
           seatId: r['seat_id'] as String,
           name: r['name'] as String,
@@ -346,31 +363,39 @@ class AdminStore {
   }
 
   Future<List<NewPlayersDay>> newPlayersPerDay({int days = 7}) async {
+    await ensureSchema();
     final nowDay = DateTime.now().millisecondsSinceEpoch ~/ 86400000;
-    final out = <NewPlayersDay>[];
-    for (var i = days - 1; i >= 0; i--) {
-      final day = nowDay - i;
-      final start = day * 86400000;
-      final end = (day + 1) * 86400000;
-      final rows = _db.select(
-        'SELECT COUNT(*) AS n FROM admin_players '
-        'WHERE first_seen >= ? AND first_seen < ?',
-        [start, end],
-      );
-      out.add(NewPlayersDay(day: day, newPlayers: rows.first['n'] as int));
-    }
-    return out;
+    final firstDay = nowDay - days + 1;
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT first_seen / 86400000 AS day, COUNT(*) AS n '
+        'FROM admin_players '
+        'WHERE first_seen >= ? AND first_seen < ? '
+        'GROUP BY day',
+        [firstDay * 86400000, (nowDay + 1) * 86400000],
+      ),
+    ]);
+    final counts = <int, int>{
+      for (final row in results.first.rows) row['day'] as int: row['n'] as int,
+    };
+    return [
+      for (var day = firstDay; day <= nowDay; day++)
+        NewPlayersDay(day: day, newPlayers: counts[day] ?? 0),
+    ];
   }
 
   // --------------------------------------------------------- moderation
 
   Future<bool> isBanned(String seatId) async {
-    final rows = _db.select(
-      'SELECT until_ms FROM admin_bans WHERE seat_id = ?',
-      [seatId],
-    );
-    if (rows.isEmpty) return false;
-    final until = rows.first['until_ms'] as int?;
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('SELECT until_ms FROM admin_bans WHERE seat_id = ?', [
+        seatId,
+      ]),
+    ]);
+    final row = results.first.firstRow;
+    if (row == null) return false;
+    final until = row['until_ms'] as int?;
     if (until == null) return true;
     return until > DateTime.now().millisecondsSinceEpoch;
   }
@@ -381,31 +406,40 @@ class AdminStore {
     required String by,
     int? untilMs,
   }) async {
+    await ensureSchema();
     final now = DateTime.now().millisecondsSinceEpoch;
-    _db.execute(
-      'INSERT INTO admin_bans (seat_id, reason, banned_by, banned_at, '
-      'until_ms) VALUES (?, ?, ?, ?, ?) '
-      'ON CONFLICT(seat_id) DO UPDATE SET reason = excluded.reason, '
-      'banned_by = excluded.banned_by, banned_at = excluded.banned_at, '
-      'until_ms = excluded.until_ms',
-      [seatId, reason, by, now, untilMs],
-    );
-    await _audit(action: 'ban', seatId: seatId, by: by, detail: reason);
+    await _backend.run([
+      SqlStatement(
+        'INSERT INTO admin_bans (seat_id, reason, banned_by, banned_at, '
+        'until_ms) VALUES (?, ?, ?, ?, ?) '
+        'ON CONFLICT(seat_id) DO UPDATE SET reason = excluded.reason, '
+        'banned_by = excluded.banned_by, banned_at = excluded.banned_at, '
+        'until_ms = excluded.until_ms',
+        [seatId, reason, by, now, untilMs],
+      ),
+      _auditStatement(action: 'ban', seatId: seatId, by: by, detail: reason),
+    ]);
   }
 
   Future<void> unban(String seatId, {String by = 'admin'}) async {
-    _db.execute('DELETE FROM admin_bans WHERE seat_id = ?', [seatId]);
-    await _audit(action: 'unban', seatId: seatId, by: by);
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement('DELETE FROM admin_bans WHERE seat_id = ?', [seatId]),
+      _auditStatement(action: 'unban', seatId: seatId, by: by),
+    ]);
   }
 
   Future<List<AuditEntry>> auditLog({int limit = 50}) async {
-    final rows = _db.select(
-      'SELECT action, seat_id, by_name, detail, at_ms FROM admin_audit '
-      'ORDER BY id DESC LIMIT ?',
-      [limit],
-    );
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT action, seat_id, by_name, detail, at_ms FROM admin_audit '
+        'ORDER BY id DESC LIMIT ?',
+        [limit],
+      ),
+    ]);
     return [
-      for (final r in rows)
+      for (final r in results.first.rows)
         AuditEntry(
           action: r['action'] as String,
           seatId: r['seat_id'] as String,
@@ -416,17 +450,26 @@ class AdminStore {
     ];
   }
 
+  static SqlStatement _auditStatement({
+    required String action,
+    required String seatId,
+    required String by,
+    String? detail,
+  }) => SqlStatement(
+    'INSERT INTO admin_audit (action, seat_id, by_name, detail, at_ms) '
+    'VALUES (?, ?, ?, ?, ?)',
+    [action, seatId, by, detail, DateTime.now().millisecondsSinceEpoch],
+  );
+
   Future<void> _audit({
     required String action,
     required String seatId,
     required String by,
     String? detail,
   }) async {
-    _db.execute(
-      'INSERT INTO admin_audit (action, seat_id, by_name, detail, at_ms) '
-      'VALUES (?, ?, ?, ?, ?)',
-      [action, seatId, by, detail, DateTime.now().millisecondsSinceEpoch],
-    );
+    await _backend.run([
+      _auditStatement(action: action, seatId: seatId, by: by, detail: detail),
+    ]);
   }
 
   // --------------------------------------------------- leaderboard edits
@@ -439,26 +482,31 @@ class AdminStore {
     required int rank,
     String color = 'red',
   }) async {
+    await ensureSchema();
     final now = DateTime.now().millisecondsSinceEpoch;
-    _db.execute(
-      'INSERT OR IGNORE INTO results '
-      '(game_id, seat_id, name, color, rank, played_at, game) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [gameId, seatId, name, color, rank, now, game],
-    );
-    _db.execute(
-      'INSERT INTO players (seat_id, name) VALUES (?, ?) '
-      'ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name',
-      [seatId, name],
-    );
+    await _backend.run([
+      SqlStatement(
+        'INSERT OR IGNORE INTO results '
+        '(game_id, seat_id, name, color, rank, played_at, game) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [gameId, seatId, name, color, rank, now, game],
+      ),
+      SqlStatement(
+        'INSERT INTO players (seat_id, name) VALUES (?, ?) '
+        'ON CONFLICT(seat_id) DO UPDATE SET name = excluded.name',
+        [seatId, name],
+      ),
+    ]);
   }
 
   Future<List<LeaderboardEntry>> topPlayers({
     int limit = 10,
     String? game,
   }) async {
-    final rows = _db.select(
-      '''
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement(
+        '''
       SELECT r.seat_id AS seat_id,
              p.name AS name,
              SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END) AS wins,
@@ -471,10 +519,11 @@ class AdminStore {
       ORDER BY wins DESC, avg_rank ASC, games DESC
       LIMIT ?
     ''',
-      [?game, limit],
-    );
+        [?game, limit],
+      ),
+    ]);
     return [
-      for (final row in rows)
+      for (final row in results.first.rows)
         LeaderboardEntry(
           seatId: row['seat_id'] as String,
           name: row['name'] as String,
@@ -485,38 +534,43 @@ class AdminStore {
     ];
   }
 
-  Future<int> totalGames({String? game}) async => _db
-      .select(
+  Future<int> totalGames({String? game}) async {
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement(
         'SELECT COUNT(DISTINCT game_id) AS n FROM results'
         '${game != null ? ' WHERE game = ?' : ''}',
         [?game],
-      )
-      .first['n'] as int;
+      ),
+    ]);
+    return results.first.rows.first['n'] as int;
+  }
 
   Future<void> renamePlayer({
     required String seatId,
     required String name,
     required String by,
   }) async {
-    _db.execute('UPDATE players SET name = ? WHERE seat_id = ?', [
-      name,
-      seatId,
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement('UPDATE players SET name = ? WHERE seat_id = ?', [
+        name,
+        seatId,
+      ]),
+      SqlStatement('UPDATE admin_players SET name = ? WHERE seat_id = ?', [
+        name,
+        seatId,
+      ]),
+      _auditStatement(action: 'rename', seatId: seatId, by: by, detail: name),
     ]);
-    _db.execute('UPDATE admin_players SET name = ? WHERE seat_id = ?', [
-      name,
-      seatId,
-    ]);
-    await _audit(
-      action: 'rename',
-      seatId: seatId,
-      by: by,
-      detail: name,
-    );
   }
 
   Future<void> deleteGame(String gameId, {String by = 'admin'}) async {
-    _db.execute('DELETE FROM results WHERE game_id = ?', [gameId]);
-    await _audit(action: 'deleteGame', seatId: gameId, by: by);
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement('DELETE FROM results WHERE game_id = ?', [gameId]),
+      _auditStatement(action: 'deleteGame', seatId: gameId, by: by),
+    ]);
   }
 
   // -------------------------------------------------------------- rooms
@@ -526,21 +580,34 @@ class AdminStore {
     required String game,
     required String instance,
   }) async {
-    _db.execute(
-      'INSERT INTO admin_rooms '
-      '(code, game, instance, created_at, status, player_count) '
-      'VALUES (?, ?, ?, ?, ?, ?)',
-      [code, game, instance, DateTime.now().millisecondsSinceEpoch, 'lobby', 1],
-    );
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement(
+        'INSERT INTO admin_rooms '
+        '(code, game, instance, created_at, status, player_count) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          code,
+          game,
+          instance,
+          DateTime.now().millisecondsSinceEpoch,
+          'lobby',
+          1,
+        ],
+      ),
+    ]);
   }
 
   Future<void> recordRoomStarted(String code) async {
-    _db.execute(
-      'UPDATE admin_rooms SET status = ?, started_at = ? '
-      'WHERE id = (SELECT id FROM admin_rooms WHERE code = ? '
-      'ORDER BY id DESC LIMIT 1)',
-      ['live', DateTime.now().millisecondsSinceEpoch, code],
-    );
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement(
+        'UPDATE admin_rooms SET status = ?, started_at = ? '
+        'WHERE id = (SELECT id FROM admin_rooms WHERE code = ? '
+        'ORDER BY id DESC LIMIT 1)',
+        ['live', DateTime.now().millisecondsSinceEpoch, code],
+      ),
+    ]);
   }
 
   Future<void> recordRoomClosed(
@@ -548,30 +615,36 @@ class AdminStore {
     String? winnerSeat,
     int playerCount = 0,
   }) async {
-    _db.execute(
-      'UPDATE admin_rooms SET status = ?, closed_at = ?, winner_seat = ?, '
-      'player_count = ? '
-      'WHERE id = (SELECT id FROM admin_rooms WHERE code = ? '
-      'ORDER BY id DESC LIMIT 1)',
-      [
-        'closed',
-        DateTime.now().millisecondsSinceEpoch,
-        winnerSeat,
-        playerCount,
-        code,
-      ],
-    );
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement(
+        'UPDATE admin_rooms SET status = ?, closed_at = ?, winner_seat = ?, '
+        'player_count = ? '
+        'WHERE id = (SELECT id FROM admin_rooms WHERE code = ? '
+        'ORDER BY id DESC LIMIT 1)',
+        [
+          'closed',
+          DateTime.now().millisecondsSinceEpoch,
+          winnerSeat,
+          playerCount,
+          code,
+        ],
+      ),
+    ]);
   }
 
   Future<List<AdminRoom>> recentRooms({int limit = 50}) async {
-    final rows = _db.select(
-      'SELECT code, game, instance, created_at, started_at, closed_at, '
-      'status, player_count, winner_seat FROM admin_rooms '
-      'ORDER BY id DESC LIMIT ?',
-      [limit],
-    );
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT code, game, instance, created_at, started_at, closed_at, '
+        'status, player_count, winner_seat FROM admin_rooms '
+        'ORDER BY id DESC LIMIT ?',
+        [limit],
+      ),
+    ]);
     return [
-      for (final r in rows)
+      for (final r in results.first.rows)
         AdminRoom(
           code: r['code'] as String,
           game: r['game'] as String,
@@ -586,32 +659,32 @@ class AdminStore {
     ];
   }
 
-  Future<int> totalRooms() async =>
-      _db.select('SELECT COUNT(*) AS n FROM admin_rooms').first['n'] as int;
+  Future<int> totalRooms() async {
+    await ensureSchema();
+    final results = await _backend.run(const [
+      SqlStatement('SELECT COUNT(*) AS n FROM admin_rooms'),
+    ]);
+    return results.first.rows.first['n'] as int;
+  }
 
   Future<AdminOverview> overview() async {
-    final players =
-        _db.select('SELECT COUNT(*) AS n FROM admin_players').first['n']
-            as int;
-    final gamesRow = _db
-        .select('SELECT COUNT(DISTINCT game_id) AS n FROM results')
-        .first['n'];
-    final rooms = await totalRooms();
+    await ensureSchema();
     final now = DateTime.now().millisecondsSinceEpoch;
-    final banned =
-        _db
-            .select(
-              'SELECT COUNT(*) AS n FROM admin_bans '
-              'WHERE until_ms IS NULL OR until_ms > ?',
-              [now],
-            )
-            .first['n']
-            as int;
+    final results = await _backend.run([
+      const SqlStatement('SELECT COUNT(*) AS n FROM admin_players'),
+      const SqlStatement('SELECT COUNT(DISTINCT game_id) AS n FROM results'),
+      const SqlStatement('SELECT COUNT(*) AS n FROM admin_rooms'),
+      SqlStatement(
+        'SELECT COUNT(*) AS n FROM admin_bans '
+        'WHERE until_ms IS NULL OR until_ms > ?',
+        [now],
+      ),
+    ]);
     return AdminOverview(
-      totalPlayers: players,
-      totalGames: (gamesRow as int?) ?? 0,
-      totalRooms: rooms,
-      bannedPlayers: banned,
+      totalPlayers: results[0].rows.first['n'] as int,
+      totalGames: results[1].rows.first['n'] as int,
+      totalRooms: results[2].rows.first['n'] as int,
+      bannedPlayers: results[3].rows.first['n'] as int,
     );
   }
 
@@ -624,12 +697,17 @@ class AdminStore {
 
   static const _userRoles = {'admin', 'moderator', 'user'};
 
-  Future<int> userCount() async =>
-      _db.select('SELECT COUNT(*) AS n FROM auth_users').first['n'] as int;
+  Future<int> userCount() async {
+    await ensureSchema();
+    final results = await _backend.run(const [
+      SqlStatement('SELECT COUNT(*) AS n FROM auth_users'),
+    ]);
+    return results.first.rows.first['n'] as int;
+  }
 
   Future<bool> get needsSetup async => await userCount() == 0;
 
-  AuthUser _userFromRow(Row row) => AuthUser(
+  AuthUser _userFromRow(Map<String, Object?> row) => AuthUser(
     id: row['id'] as int,
     email: row['email'] as String,
     name: row['name'] as String,
@@ -649,6 +727,7 @@ class AdminStore {
     int iterations = defaultPbkdf2Iterations,
     String by = 'system',
   }) async {
+    await ensureSchema();
     final normalized = normalizeEmail(email);
     if (normalized.isEmpty || !normalized.contains('@')) {
       throw ArgumentError('valid email required');
@@ -659,41 +738,51 @@ class AdminStore {
       );
     }
     if (!_userRoles.contains(role)) throw ArgumentError('unknown role $role');
-    final exists = _db.select('SELECT id FROM auth_users WHERE email = ?', [
-      normalized,
+    final existing = await _backend.run([
+      SqlStatement('SELECT id FROM auth_users WHERE email = ?', [normalized]),
     ]);
-    if (exists.isNotEmpty) throw StateError('email already registered');
+    if (existing.first.rows.isNotEmpty) {
+      throw StateError('email already registered');
+    }
     final now = DateTime.now().millisecondsSinceEpoch;
-    _db.execute(
-      'INSERT INTO auth_users '
-      '(email, name, password_hash, role, seat_id, created_at) '
-      'VALUES (?, ?, ?, ?, ?, ?)',
-      [
-        normalized,
-        name.trim().isEmpty ? normalized : name.trim(),
-        hashPassword(password, iterations: iterations),
-        role,
-        seatId,
-        now,
-      ],
-    );
-    final id = _db.lastInsertRowId;
-    await _audit(action: 'userCreate', seatId: normalized, by: by);
-    return (await findUserById(id))!;
+    final results = await _backend.run([
+      SqlStatement(
+        'INSERT INTO auth_users '
+        '(email, name, password_hash, role, seat_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          normalized,
+          name.trim().isEmpty ? normalized : name.trim(),
+          hashPassword(password, iterations: iterations),
+          role,
+          seatId,
+          now,
+        ],
+      ),
+      _auditStatement(action: 'userCreate', seatId: normalized, by: by),
+      SqlStatement('SELECT * FROM auth_users WHERE email = ?', [normalized]),
+    ]);
+    return _userFromRow(results.last.rows.first);
   }
 
   Future<AuthUser?> findUserByEmail(String email) async {
-    final rows = _db.select('SELECT * FROM auth_users WHERE email = ?', [
-      normalizeEmail(email),
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('SELECT * FROM auth_users WHERE email = ?', [
+        normalizeEmail(email),
+      ]),
     ]);
-    if (rows.isEmpty) return null;
-    return _userFromRow(rows.first);
+    final row = results.first.firstRow;
+    return row == null ? null : _userFromRow(row);
   }
 
   Future<AuthUser?> findUserById(int id) async {
-    final rows = _db.select('SELECT * FROM auth_users WHERE id = ?', [id]);
-    if (rows.isEmpty) return null;
-    return _userFromRow(rows.first);
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('SELECT * FROM auth_users WHERE id = ?', [id]),
+    ]);
+    final row = results.first.firstRow;
+    return row == null ? null : _userFromRow(row);
   }
 
   /// Null on unknown email OR wrong password — callers must not
@@ -703,27 +792,30 @@ class AdminStore {
   /// unregistered address costs the same PBKDF2 work as a wrong password
   /// on a real one (CWE-208).
   Future<AuthUser?> checkCredentials(String email, String password) async {
-    final rows = _db.select(
-      'SELECT * FROM auth_users WHERE email = ?',
-      [normalizeEmail(email)],
-    );
-    if (rows.isEmpty) {
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('SELECT * FROM auth_users WHERE email = ?', [
+        normalizeEmail(email),
+      ]),
+    ]);
+    final row = results.first.firstRow;
+    if (row == null) {
       // Spend the verification work anyway; its result is discarded
       // because there is no account to admit.
       _verifier(password, _absentAccountHash);
       return null;
     }
-    final hash = rows.first['password_hash'] as String;
+    final hash = row['password_hash'] as String;
     if (!_verifier(password, hash)) return null;
-    return _userFromRow(rows.first);
+    return _userFromRow(row);
   }
 
   Future<List<AuthUser>> listUsers({int limit = 100}) async {
-    final rows = _db.select(
-      'SELECT * FROM auth_users ORDER BY id ASC LIMIT ?',
-      [limit],
-    );
-    return [for (final r in rows) _userFromRow(r)];
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('SELECT * FROM auth_users ORDER BY id ASC LIMIT ?', [limit]),
+    ]);
+    return [for (final r in results.first.rows) _userFromRow(r)];
   }
 
   Future<void> setUserRole({
@@ -731,8 +823,14 @@ class AdminStore {
     required String role,
     required String by,
   }) async {
+    await ensureSchema();
     if (!_userRoles.contains(role)) throw ArgumentError('unknown role $role');
-    _db.execute('UPDATE auth_users SET role = ? WHERE id = ?', [role, userId]);
+    await _backend.run([
+      SqlStatement('UPDATE auth_users SET role = ? WHERE id = ?', [
+        role,
+        userId,
+      ]),
+    ]);
     final user = await findUserById(userId);
     await _audit(
       action: 'roleChange',
@@ -748,47 +846,60 @@ class AdminStore {
     int userId, {
     Duration ttl = defaultSessionTtl,
   }) async {
+    await ensureSchema();
     final token = randomToken();
     final now = DateTime.now().millisecondsSinceEpoch;
-    _db.execute(
-      'INSERT INTO auth_sessions '
-      '(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
-      [hashToken(token), userId, now, now + ttl.inMilliseconds],
-    );
+    await _backend.run([
+      SqlStatement(
+        'INSERT INTO auth_sessions '
+        '(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+        [hashToken(token), userId, now, now + ttl.inMilliseconds],
+      ),
+    ]);
     return SessionToken(token: token, expiresAt: now + ttl.inMilliseconds);
   }
 
   /// The session's user, or null when unknown/expired. Expired rows are
   /// deleted lazily on sight.
   Future<AuthUser?> validateSession(String token) async {
+    await ensureSchema();
     final digest = hashToken(token);
-    final rows = _db.select(
-      'SELECT u.* FROM auth_users u '
-      'JOIN auth_sessions s ON s.user_id = u.id '
-      'WHERE s.token_hash = ?',
-      [digest],
-    );
-    if (rows.isEmpty) return null;
-    final expiry = _db
-        .select('SELECT expires_at FROM auth_sessions WHERE token_hash = ?', [
-          digest,
-        ])
-        .first['expires_at'] as int;
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT u.*, s.expires_at AS session_expires_at FROM auth_users u '
+        'JOIN auth_sessions s ON s.user_id = u.id '
+        'WHERE s.token_hash = ?',
+        [digest],
+      ),
+    ]);
+    final row = results.first.firstRow;
+    if (row == null) return null;
+    final expiry = row['session_expires_at'] as int;
     if (expiry <= DateTime.now().millisecondsSinceEpoch) {
-      _db.execute('DELETE FROM auth_sessions WHERE token_hash = ?', [digest]);
+      await _backend.run([
+        SqlStatement('DELETE FROM auth_sessions WHERE token_hash = ?', [
+          digest,
+        ]),
+      ]);
       return null;
     }
-    return _userFromRow(rows.first);
+    return _userFromRow(row);
   }
 
   Future<void> revokeSession(String token) async {
-    _db.execute('DELETE FROM auth_sessions WHERE token_hash = ?', [
-      hashToken(token),
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement('DELETE FROM auth_sessions WHERE token_hash = ?', [
+        hashToken(token),
+      ]),
     ]);
   }
 
   Future<void> revokeUserSessions(int userId) async {
-    _db.execute('DELETE FROM auth_sessions WHERE user_id = ?', [userId]);
+    await ensureSchema();
+    await _backend.run([
+      SqlStatement('DELETE FROM auth_sessions WHERE user_id = ?', [userId]),
+    ]);
   }
 
   // ------------------------------------------------- generic table CRUD
@@ -800,33 +911,13 @@ class AdminStore {
 
   /// One page of rows. [q] is a naive substring match across every
   /// column (text-cast) — enough for a triage/lookup tool.
-  List<Map<String, dynamic>> tableRows(
+  Future<List<Map<String, dynamic>>> tableRows(
     AdminTableSpec spec, {
     int limit = 100,
     int offset = 0,
     String? q,
-  }) {
-    final where = <String>[];
-    final args = <dynamic>[];
-    if (q != null && q.trim().isNotEmpty) {
-      final needle = '%${q.trim()}%';
-      where.add(
-        [
-          for (final c in spec.columns) "CAST($c AS TEXT) LIKE ?",
-        ].join(' OR '),
-      );
-      args.addAll([for (final _ in spec.columns) needle]);
-    }
-    final rows = _db.select(
-      'SELECT ${spec.columns.join(', ')} FROM ${spec.name} '
-      '${where.isEmpty ? '' : 'WHERE (${where.first}) '}'
-      'ORDER BY ${spec.orderBy} LIMIT ? OFFSET ?',
-      [...args, limit, offset],
-    );
-    return [for (final r in rows) Map<String, dynamic>.of(r)];
-  }
-
-  int tableCount(AdminTableSpec spec, {String? q}) {
+  }) async {
+    await ensureSchema();
     final where = <String>[];
     final args = <dynamic>[];
     if (q != null && q.trim().isNotEmpty) {
@@ -836,13 +927,36 @@ class AdminStore {
       );
       args.addAll([for (final _ in spec.columns) needle]);
     }
-    return _db
-        .select(
-          'SELECT COUNT(*) AS n FROM ${spec.name} '
-          '${where.isEmpty ? '' : 'WHERE (${where.first})'}',
-          args,
-        )
-        .first['n'] as int;
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT ${spec.columns.join(', ')} FROM ${spec.name} '
+        '${where.isEmpty ? '' : 'WHERE (${where.first}) '}'
+        'ORDER BY ${spec.orderBy} LIMIT ? OFFSET ?',
+        [...args, limit, offset],
+      ),
+    ]);
+    return [for (final r in results.first.rows) Map<String, dynamic>.of(r)];
+  }
+
+  Future<int> tableCount(AdminTableSpec spec, {String? q}) async {
+    await ensureSchema();
+    final where = <String>[];
+    final args = <dynamic>[];
+    if (q != null && q.trim().isNotEmpty) {
+      final needle = '%${q.trim()}%';
+      where.add(
+        [for (final c in spec.columns) "CAST($c AS TEXT) LIKE ?"].join(' OR '),
+      );
+      args.addAll([for (final _ in spec.columns) needle]);
+    }
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT COUNT(*) AS n FROM ${spec.name} '
+        '${where.isEmpty ? '' : 'WHERE (${where.first})'}',
+        args,
+      ),
+    ]);
+    return results.first.rows.first['n'] as int;
   }
 
   /// Only [AdminTableSpec.editable] columns are accepted; text primary
@@ -851,7 +965,11 @@ class AdminStore {
   /// references. DB defaults fill the rest (status/priority/timestamps);
   /// values are bound, never inlined. Throws [ArgumentError] on an
   /// unknown column.
-  void insertTableRow(AdminTableSpec spec, Map<String, dynamic> values) {
+  Future<void> insertTableRow(
+    AdminTableSpec spec,
+    Map<String, dynamic> values,
+  ) async {
+    await ensureSchema();
     if (!spec.insertable) {
       throw ArgumentError("table '${spec.name}' does not allow inserts");
     }
@@ -863,14 +981,16 @@ class AdminStore {
         throw ArgumentError("column '${e.key}' is not writable");
       }
       cols.add(e.key);
-      args.add(_sqliteValue(e.value));
+      args.add(_boundValue(e.value));
     }
     if (cols.isEmpty) throw ArgumentError('no values to insert');
-    _db.execute(
-      'INSERT INTO ${spec.name} (${cols.join(', ')}) '
-      'VALUES (${cols.map((_) => '?').join(', ')})',
-      args,
-    );
+    await _backend.run([
+      SqlStatement(
+        'INSERT INTO ${spec.name} (${cols.join(', ')}) '
+        'VALUES (${cols.map((_) => '?').join(', ')})',
+        args,
+      ),
+    ]);
   }
 
   /// Updates one row by primary key. Returns false when no row matched.
@@ -879,6 +999,7 @@ class AdminStore {
     String pkValue,
     Map<String, dynamic> values,
   ) async {
+    await ensureSchema();
     final sets = <String>[];
     final args = <dynamic>[];
     for (final e in values.entries) {
@@ -886,33 +1007,37 @@ class AdminStore {
         throw ArgumentError("column '${e.key}' is not writable");
       }
       sets.add('${e.key} = ?');
-      args.add(_sqliteValue(e.value));
+      args.add(_boundValue(e.value));
     }
     if (sets.isEmpty) return true;
     args.add(_coercePk(spec, pkValue));
-    _db.execute(
-      'UPDATE ${spec.name} SET ${sets.join(', ')} '
-      'WHERE ${spec.pk} = ?',
-      args,
-    );
-    return _db.updatedRows > 0;
+    final results = await _backend.run([
+      SqlStatement(
+        'UPDATE ${spec.name} SET ${sets.join(', ')} '
+        'WHERE ${spec.pk} = ?',
+        args,
+      ),
+    ]);
+    return results.first.affected > 0;
   }
 
   /// Deletes one row by primary key. Returns false when no row matched.
   Future<bool> deleteTableRow(AdminTableSpec spec, String pkValue) async {
-    _db.execute(
-      'DELETE FROM ${spec.name} WHERE ${spec.pk} = ?',
-      [_coercePk(spec, pkValue)],
-    );
-    return _db.updatedRows > 0;
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('DELETE FROM ${spec.name} WHERE ${spec.pk} = ?', [
+        _coercePk(spec, pkValue),
+      ]),
+    ]);
+    return results.first.affected > 0;
   }
 
   dynamic _coercePk(AdminTableSpec spec, String raw) =>
       spec.pkIsText ? raw : (int.tryParse(raw) ?? -1);
 
   /// JSON values arrive as String/num/bool/null; booleans become ints so
-  /// SQLite stores 0/1 rather than failing to bind.
-  dynamic _sqliteValue(dynamic v) => switch (v) {
+  /// the database stores 0/1 rather than failing to bind.
+  dynamic _boundValue(dynamic v) => switch (v) {
     final bool b => b ? 1 : 0,
     final num n => n.toInt() == n ? n.toInt() : n.toDouble(),
     _ => v,
@@ -926,10 +1051,11 @@ class AdminStore {
     required String by,
     String? detail,
   }) async {
+    await ensureSchema();
     await _audit(action: action, seatId: subject, by: by, detail: detail);
   }
 
   void close() {
-    if (_ownsDb) _db.close();
+    if (_ownsBackend) _backend.close();
   }
 }

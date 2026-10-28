@@ -170,7 +170,7 @@ void main() {
       final q = await store.create(category: 'question', message: '3');
       await store.update(a.id, {'status': 'closed'});
       await store.update(q.id, {'status': 'in_progress'});
-      final counts = store.openByCategory();
+      final counts = await store.openByCategory();
       expect(counts['bug'], 1);
       expect(counts['question'], 1);
       expect(counts['feature'], isNull);

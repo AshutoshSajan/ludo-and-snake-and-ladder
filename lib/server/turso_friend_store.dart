@@ -323,6 +323,11 @@ class TursoFriendStore implements FriendStore {
 
   Future<void> _ensureSchema() => _schemaReady ??= _createSchema();
 
+  /// Creates the friend tables (and applies the additive column upgrades)
+  /// without touching any data. Boot calls this so the admin Data tab can
+  /// reach the tables before the first player opens the Friends screen.
+  Future<void> ensureSchema() => _ensureSchema();
+
   Future<void> _createSchema() async {
     try {
       await _pipeline([..._schemaSql.map(_execute), _close]);
