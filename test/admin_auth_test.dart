@@ -84,6 +84,11 @@ InternetAddress _addr(String literal) => InternetAddress.tryParse(literal)!;
 
 const _loginMiss = '{"email":"ghost@x.io","password":"wrong-1"}';
 
+/// A store whose password checks always miss and never pay PBKDF2 — for
+/// tests about rate limiting, not credential verification.
+AdminStore _rejectingStore() =>
+    AdminStore.inMemory(verifier: (password, hash) => false);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -136,6 +141,53 @@ void main() {
       expect((await store.validateSession(session.token))?.id, user.id);
       await store.revokeSession(session.token);
       expect(await store.validateSession(session.token), isNull);
+    });
+
+    test('an absent email still pays the password work factor', () async {
+      // The verifier seam records the hash each path verifies against,
+      // so this is deterministic — no timing assertion. Countershape:
+      // before the fix, the absent path called no verifier at all.
+      final verified = <String>[];
+      final store = AdminStore.inMemory(
+        verifier: (password, hash) {
+          verified.add(hash);
+          return false;
+        },
+      );
+      addTearDown(store.close);
+
+      expect(
+        await store.checkCredentials('nobody@example.com', 'long-enough-1'),
+        isNull,
+      );
+      expect(
+        verified,
+        hasLength(1),
+        reason: 'an absent account must still run the KDF',
+      );
+      final parts = verified.single.split(r'$');
+      expect(parts.first, 'pbkdf2');
+      expect(
+        int.parse(parts[1]),
+        defaultPbkdf2Iterations,
+        reason: 'the dummy hash must carry the production work factor',
+      );
+
+      // A real account's wrong password runs exactly one verification
+      // too — the same shape as the dummy path.
+      await store.createUser(
+        email: 'root@example.com',
+        name: 'Root',
+        password: 'long-enough-1',
+        iterations: 1000,
+        by: 'test',
+      );
+      verified.clear();
+      expect(
+        await store.checkCredentials('root@example.com', 'wrong-1'),
+        isNull,
+      );
+      expect(verified, hasLength(1));
     });
 
     test('expired sessions die, short passwords and dupes rejected', () async {
@@ -366,7 +418,7 @@ void main() {
     test('login rate-limits brute force', () async {
       final savedStore = adminStore;
       final savedToken = adminToken;
-      adminStore = AdminStore.inMemory();
+      adminStore = _rejectingStore();
       adminToken = '';
       addTearDown(() {
         adminStore = savedStore;
@@ -393,7 +445,7 @@ void main() {
       // one, the ten-attempt budget holds.
       final savedStore = adminStore;
       final savedToken = adminToken;
-      adminStore = AdminStore.inMemory();
+      adminStore = _rejectingStore();
       adminToken = '';
       addTearDown(() {
         adminStore = savedStore;
@@ -586,7 +638,7 @@ void main() {
         final savedStore = adminStore;
         final savedToken = adminToken;
         final savedProxies = trustedProxies;
-        adminStore = AdminStore.inMemory();
+        adminStore = _rejectingStore();
         adminToken = '';
         trustedProxies = trusted;
         addTearDown(() {
@@ -636,7 +688,7 @@ void main() {
       final savedStore = adminStore;
       final savedToken = adminToken;
       final savedProxies = trustedProxies;
-      adminStore = AdminStore.inMemory();
+      adminStore = _rejectingStore();
       adminToken = '';
       trustedProxies = trusted;
       addTearDown(() {
@@ -695,7 +747,7 @@ void main() {
         final savedStore = adminStore;
         final savedToken = adminToken;
         final savedProxies = trustedProxies;
-        adminStore = AdminStore.inMemory();
+        adminStore = _rejectingStore();
         adminToken = '';
         trustedProxies = trusted;
         addTearDown(() {

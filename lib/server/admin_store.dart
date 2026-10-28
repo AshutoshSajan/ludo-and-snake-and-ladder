@@ -155,22 +155,43 @@ class SessionToken {
   final int expiresAt;
 }
 
+/// Verifies [password] against a stored PBKDF2 [hash]. Injectable so a
+/// test can prove which hash a lookup verifies without paying the KDF.
+typedef PasswordVerifier = bool Function(String password, String hash);
+
+/// A hash of a random password that is never revealed: the absent-email
+/// path verifies against it so a missing account spends the same PBKDF2
+/// work as a populated one (CWE-208). Lazy, so the first miss after boot
+/// also pays the one-time cost of minting it; its work factor follows
+/// [defaultPbkdf2Iterations], tracking the production setting rather than
+/// pinning a stale constant.
+final String _absentAccountHash = hashPassword(
+  randomToken(),
+  iterations: defaultPbkdf2Iterations,
+);
+
 class AdminStore {
-  AdminStore._(this._db, {required bool owns}) : _ownsDb = owns {
+  AdminStore._(
+    this._db, {
+    required bool owns,
+    PasswordVerifier? verifier,
+  }) : _ownsDb = owns,
+       _verifier = verifier ?? verifyPassword {
     _migrate();
   }
 
-  factory AdminStore.inMemory() =>
-      AdminStore._(sqlite3.openInMemory(), owns: true);
+  factory AdminStore.inMemory({PasswordVerifier? verifier}) =>
+      AdminStore._(sqlite3.openInMemory(), owns: true, verifier: verifier);
 
-  factory AdminStore(String path) =>
-      AdminStore._(sqlite3.open(path), owns: true);
+  factory AdminStore(String path, {PasswordVerifier? verifier}) =>
+      AdminStore._(sqlite3.open(path), owns: true, verifier: verifier);
 
-  factory AdminStore.fromDb(Database db) =>
-      AdminStore._(db, owns: false);
+  factory AdminStore.fromDb(Database db, {PasswordVerifier? verifier}) =>
+      AdminStore._(db, owns: false, verifier: verifier);
 
   final Database _db;
   final bool _ownsDb;
+  final PasswordVerifier _verifier;
 
   void _migrate() {
     _db.execute('''
@@ -676,15 +697,24 @@ class AdminStore {
   }
 
   /// Null on unknown email OR wrong password — callers must not
-  /// distinguish the two (no account enumeration).
+  /// distinguish the two (no account enumeration), and the two paths must
+  /// not be distinguishable by *timing* either: an absent email still
+  /// runs the password KDF against [_absentAccountHash], so a probe of an
+  /// unregistered address costs the same PBKDF2 work as a wrong password
+  /// on a real one (CWE-208).
   Future<AuthUser?> checkCredentials(String email, String password) async {
     final rows = _db.select(
       'SELECT * FROM auth_users WHERE email = ?',
       [normalizeEmail(email)],
     );
-    if (rows.isEmpty) return null;
+    if (rows.isEmpty) {
+      // Spend the verification work anyway; its result is discarded
+      // because there is no account to admit.
+      _verifier(password, _absentAccountHash);
+      return null;
+    }
     final hash = rows.first['password_hash'] as String;
-    if (!verifyPassword(password, hash)) return null;
+    if (!_verifier(password, hash)) return null;
     return _userFromRow(rows.first);
   }
 
