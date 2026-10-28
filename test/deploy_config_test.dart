@@ -573,15 +573,23 @@ void main() {
           .takeWhile((l) => !RegExp(r'^  [a-z-]+:').hasMatch(l))
           .join('\n');
       expect(prep, contains("startsWith(github.ref, 'refs/tags/v')"));
+      // Writing the snap version is not enough: release-prep stages exactly the
+      // files it commits. Without this path the script update would sit
+      // uncommitted and the PR would still ship the previous snap version.
+      expect(prep, contains('snap/snapcraft.yaml'));
     });
 
     test('one script owns every place the version is declared', () {
-      // tool/version.sh is the only writer, so the three declarations cannot
+      // tool/version.sh is the only writer, so the four declarations cannot
       // drift apart again.
       final script = File('tool/version.sh').readAsStringSync();
       expect(script, contains('pubspec.yaml'));
       expect(script, contains('manifest.chrome.json'));
       expect(script, contains('manifest.firefox.json'));
+      // The snap declares its own version and build-snap refuses a tag that
+      // disagrees with it. It lagged the v1.4.0 release-prep bump precisely
+      // because it was not part of this set.
+      expect(script, contains('snap/snapcraft.yaml'));
       // Lexical tag sorting puts v1.9.0 above v1.10.0, and bumping from the
       // wrong "latest" silently moves the version backwards.
       expect(script, contains('--sort=-v:refname'));
@@ -600,6 +608,7 @@ void main() {
       final dir = Directory.systemTemp.createTempSync('game-club-version-');
       addTearDown(() => dir.deleteSync(recursive: true));
       Directory('${dir.path}/extension').createSync();
+      Directory('${dir.path}/snap').createSync();
       Directory('${dir.path}/tool').createSync();
       File('tool/version.sh').copySync('${dir.path}/tool/version.sh');
       File('${dir.path}/pubspec.yaml')
@@ -608,6 +617,8 @@ void main() {
         File('${dir.path}/extension/$name')
             .writeAsStringSync('{\n  "version": "1.3.0"\n}\n');
       }
+      final snap = File('${dir.path}/snap/snapcraft.yaml');
+      snap.writeAsStringSync("name: game-club-ludo\nversion: '1.3.0'\n");
       final git = Process.runSync('git', ['init', '-q'], workingDirectory: dir.path);
       expect(git.exitCode, 0, reason: '${git.stdout}${git.stderr}');
 
@@ -627,7 +638,14 @@ void main() {
       // Re-declaring the same version is idempotent: a retried release-prep
       // run must not move the code without a version to match it.
       expect(set('1.3.1'), 'version: 1.3.1+2');
+      // A lagging snap is repaired by that same idempotent write, without
+      // moving the Android code. This is the v1.4.0 release scenario: pubspec
+      // had already moved, the snap had not.
+      snap.writeAsStringSync("name: game-club-ludo\nversion: '1.3.0'\n");
+      expect(set('1.3.1'), 'version: 1.3.1+2');
+      expect(snap.readAsStringSync(), contains("version: '1.3.1'"));
       expect(set('1.4.0'), 'version: 1.4.0+3');
+      expect(snap.readAsStringSync(), contains("version: '1.4.0'"));
       expect(
         File('${dir.path}/extension/manifest.chrome.json').readAsStringSync(),
         contains('"version": "1.4.0"'),
