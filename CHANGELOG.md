@@ -6,10 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
+### Added
+- Feat(persistence): store all server state in Turso
 ### Documentation
+- Docs(agents): require one database and one wiring factory
+- Docs(ci): document CLI dispatch of the OpenCode review from dev
+- Docs(server): clarify ADMIN_TOKEN scope vs session auth (CWE-863 review)
 - Docs(env): TRUSTED_PROXIES replaces the loopback default wholesale (CWE-307)
 - Docs: clarify authentication, media, voice, and automation contracts
 ### Fixed
+- Fix(admin): remove the sign-in server URL and repair autofill
+- Fix(auth): spend password work on absent-email logins
+- Fix(auth): reserve login capacity before credential verification
+- Fix(media): bind announced note urls to their bytes
+- Fix(server): guard lobby reconnects against capacity and corner reuse
+- Fix(server): bound the lobby roster and skip rebuilds for inert intents
+- Fix(ci): pass prune branch refs through the environment, not the script
+- Fix(opencode): sanitize the command checkout before the model starts (CWE-61)
 - Fix(opencode): sweep reply comment and marker removal to a fixpoint (CWE-review)
 - Fix(media): keep evicted note ids reserved while their URLs could still serve (CWE-review #6)
 - Fix(friends): budget the first bind per IP and give hijacked seats an admin recovery (CWE-review #5)
@@ -27,6 +40,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(friends): require a device credential on every friends endpoint
 - Fix(server): require a seat-bound credential to replace a seat claim
 ### Other
+- Refactor(persistence): centralize store wiring behind a guarded factory
+- Ci(review): run the OpenCode review only on manual dispatch
 - Ci(review): refuse checkout symlinks that leave the workspace
 ## [v1.3.0] - 2026-10-26
 ### Added
