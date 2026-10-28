@@ -61,6 +61,13 @@ every edit, every commit, every push.
     matches the header width; a desktop window shows a centered column,
     not full-width stretched rows. Full-bleed is only for game boards and
     page backgrounds.
+12. **One database, one mode.** Durable state lives in exactly one store:
+    Turso when `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` are set, one local
+    SQLite file otherwise. Never add a store that opens its own database,
+    and never keep one family of tables on SQLite while another sits in
+    Turso. Wire every store through `openPersistence()` in
+    `lib/server/persistence.dart`; `test/persistence_test.dart` fails any PR
+    that reopens the split.
 
 ## Command map
 
