@@ -57,7 +57,7 @@ void main() {
   late ReportStore savedReports;
   late String savedToken;
 
-  setUp(() {
+  setUp(() async {
     savedAdmin = adminStore;
     savedReports = reportStore;
     savedToken = adminToken;
@@ -67,6 +67,10 @@ void main() {
     final db = sqlite3.openInMemory();
     adminStore = AdminStore.fromDb(db);
     reportStore = ReportStore.fromDb(db);
+    // main() creates both schemas at boot; mirror that here so the Data
+    // tab can reach `feedback` even before the first report is filed.
+    await adminStore.ensureSchema();
+    await reportStore.ensureSchema();
     adminToken = 'secret';
     resetFeedbackAttempts();
     addTearDown(() {
@@ -261,7 +265,7 @@ void main() {
       );
       expect(r.statusCode, 200);
       final spec = tableSpec('results')!;
-      final rows = adminStore.tableRows(spec);
+      final rows = await adminStore.tableRows(spec);
       expect(rows, hasLength(1));
       expect(rows.single['name'], 'Ana');
 
@@ -273,7 +277,7 @@ void main() {
         }, token: 'secret'),
       );
       expect(u.statusCode, 200);
-      expect(adminStore.tableRows(spec).single['name'], 'Ana P.');
+      expect((await adminStore.tableRows(spec)).single['name'], 'Ana P.');
 
       expect(
         (await adminActionHandler(
@@ -285,7 +289,7 @@ void main() {
         )).statusCode,
         200,
       );
-      expect(adminStore.tableRows(spec).single['rank'], 3);
+      expect((await adminStore.tableRows(spec)).single['rank'], 3);
 
       final d = await adminActionHandler(
         _post('admin/table/delete', {
@@ -294,12 +298,12 @@ void main() {
         }, token: 'secret'),
       );
       expect(d.statusCode, 200);
-      expect(adminStore.tableRows(spec), isEmpty);
+      expect(await adminStore.tableRows(spec), isEmpty);
     });
 
     test('read-only tables refuse writes', () async {
       final audit = tableSpec('admin_audit')!;
-      final before = adminStore.tableRows(audit).length;
+      final before = (await adminStore.tableRows(audit)).length;
       expect(
         (await adminActionHandler(
           _post('admin/table/insert', {
@@ -320,12 +324,12 @@ void main() {
         400,
         reason: 'admin_audit is not deletable',
       );
-      expect(adminStore.tableRows(audit).length, before);
+      expect((await adminStore.tableRows(audit)).length, before);
     });
 
     test('writable-value whitelist blocks column injection', () async {
       final spec = tableSpec('players')!;
-      final before = adminStore.tableRows(spec).length;
+      final before = (await adminStore.tableRows(spec)).length;
       final r = await adminActionHandler(
         _post('admin/table/insert', {
           'table': 'players',
@@ -336,7 +340,7 @@ void main() {
         }, token: 'secret'),
       );
       expect(r.statusCode, 200);
-      expect(adminStore.tableRows(spec).length, before + 1);
+      expect((await adminStore.tableRows(spec)).length, before + 1);
 
       final bad = await adminActionHandler(
         _post('admin/table/update', {
@@ -350,7 +354,7 @@ void main() {
 
     test('search narrows by substring', () async {
       final spec = tableSpec('feedback')!;
-      final r = adminStore.tableRows(spec, q: 'nomatch');
+      final r = await adminStore.tableRows(spec, q: 'nomatch');
       expect(r, isEmpty);
     });
 

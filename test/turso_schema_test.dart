@@ -31,10 +31,18 @@ void main() {
         'friend_invites',
         'friend_blocks',
         'friend_credentials',
-        // The older stores keep sharing the file.
+        // Leaderboard + room routing.
         'results',
         'players',
         'room_registry',
+        // Admin history, accounts, sessions and the feedback queue.
+        'admin_players',
+        'admin_bans',
+        'admin_audit',
+        'admin_rooms',
+        'auth_users',
+        'auth_sessions',
+        'feedback',
       ]),
     );
 
@@ -55,5 +63,22 @@ void main() {
       containsAll(['blocker', 'blocked', 'blocked_name']),
     );
     expect(columns('friend_invites'), containsAll(['status', 'updated_ms']));
+    expect(columns('results'), containsAll(['game', 'game_id', 'seat_id']));
+    expect(
+      columns('feedback'),
+      containsAll(['category', 'priority', 'status', 'admin_notes']),
+    );
+    expect(
+      columns('auth_users'),
+      containsAll(['email', 'password_hash', 'role', 'seat_id']),
+    );
+    expect(
+      columns('auth_sessions'),
+      containsAll(['token_hash', 'user_id', 'expires_at']),
+    );
+    expect(
+      columns('admin_rooms'),
+      containsAll(['code', 'status', 'winner_seat', 'player_count']),
+    );
   });
 }

@@ -267,7 +267,9 @@ works, no configuration needed.
 2. Fill the two prompts from Turso:
    `turso db create game-club && turso db tokens create game-club`
    (schema is created lazily by the stores; to provision explicitly see
-   `deploy/turso_schema.sql`).
+   `deploy/turso_schema.sql`). With both variables set, Turso is the single
+   store of record — leaderboard, admin history, accounts, feedback, friends
+   and the room registry. Without them the server uses one local SQLite file.
 3. Health checks hit `GET /stats`; local env vars come from `.env`
    (see `.env.example`) or the service dashboard — the dashboard always wins.
 

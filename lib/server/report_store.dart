@@ -3,13 +3,16 @@
 /// the admin dashboard triages — priority sorting, status workflow, and
 /// full row CRUD from the Data tab.
 ///
-/// Lives in the same SQLite file as the admin history (one DB holds
-/// everything the dashboard shows). Categories are the automation hook:
+/// Lives in the same database as the admin history — local SQLite or
+/// Turso, whichever the deployment configured — so one store holds
+/// everything the dashboard shows. Categories are the automation hook:
 /// bug/feature/question route to different follow-up workflows, 'other'
 /// is the catch-all for anything else.
 library;
 
 import 'package:sqlite3/sqlite3.dart';
+
+import 'sql_backend.dart';
 
 /// What kind of issue this is. The admin tooling filters and automates on
 /// these, so the set is deliberately small and closed.
@@ -76,8 +79,7 @@ class FeedbackEntry {
     if (contact != null && contact!.isNotEmpty) 'contact': contact,
     if (seatId != null && seatId!.isNotEmpty) 'seatId': seatId,
     if (gameId != null && gameId!.isNotEmpty) 'gameId': gameId,
-    if (appVersion != null && appVersion!.isNotEmpty)
-      'appVersion': appVersion,
+    if (appVersion != null && appVersion!.isNotEmpty) 'appVersion': appVersion,
     'status': status,
     'priority': priority,
     if (adminNotes.isNotEmpty) 'adminNotes': adminNotes,
@@ -87,43 +89,63 @@ class FeedbackEntry {
 }
 
 class ReportStore {
-  ReportStore._(this._db, {required bool owns}) : _ownsDb = owns {
-    _migrate();
-  }
+  ReportStore._(this._backend, this._ownsBackend);
 
   factory ReportStore.inMemory() =>
-      ReportStore._(sqlite3.openInMemory(), owns: true);
+      ReportStore._(SqliteBackend.inMemory(), true);
 
-  factory ReportStore(String path) => ReportStore._(sqlite3.open(path), owns: true);
+  factory ReportStore(String path) =>
+      ReportStore._(SqliteBackend.open(path), true);
 
-  factory ReportStore.fromDb(Database db) => ReportStore._(db, owns: false);
+  factory ReportStore.fromDb(Database db) =>
+      ReportStore._(SqliteBackend.fromDb(db), false);
 
-  final Database _db;
-  final bool _ownsDb;
+  /// Wraps any [SqlBackend] (the caller keeps ownership) — this is how a
+  /// Turso-backed deployment gets the same feedback queue as SQLite.
+  factory ReportStore.fromBackend(SqlBackend backend) =>
+      ReportStore._(backend, false);
 
-  void _migrate() {
-    _db.execute('''
-      CREATE TABLE IF NOT EXISTS feedback (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        category TEXT NOT NULL,
-        source TEXT NOT NULL DEFAULT 'report',
-        title TEXT NOT NULL DEFAULT '',
-        message TEXT NOT NULL,
-        contact TEXT,
-        seat_id TEXT,
-        game_id TEXT,
-        app_version TEXT,
-        status TEXT NOT NULL DEFAULT 'open',
-        priority TEXT NOT NULL DEFAULT 'medium',
-        admin_notes TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
-      CREATE INDEX IF NOT EXISTS idx_feedback_created
-          ON feedback(created_at);
-    ''');
+  final SqlBackend _backend;
+  final bool _ownsBackend;
+
+  /// Schema is created lazily and memoized: a Turso deployment cannot run
+  /// migrations in a constructor. A failed attempt is cleared so the next
+  /// call retries (every statement is idempotent).
+  Future<void>? _schemaReady;
+
+  Future<void> ensureSchema() => _schemaReady ??= _createSchema();
+
+  Future<void> _createSchema() async {
+    try {
+      await _backend.run([
+        for (final sql in _schemaSql) SqlStatement(sql),
+      ], atomic: false);
+    } catch (_) {
+      _schemaReady = null; // let the next call retry
+      rethrow;
+    }
   }
+
+  static const _schemaSql = <String>[
+    'CREATE TABLE IF NOT EXISTS feedback ('
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+        'category TEXT NOT NULL, '
+        "source TEXT NOT NULL DEFAULT 'report', "
+        "title TEXT NOT NULL DEFAULT '', "
+        'message TEXT NOT NULL, '
+        'contact TEXT, '
+        'seat_id TEXT, '
+        'game_id TEXT, '
+        'app_version TEXT, '
+        "status TEXT NOT NULL DEFAULT 'open', "
+        "priority TEXT NOT NULL DEFAULT 'medium', "
+        "admin_notes TEXT NOT NULL DEFAULT '', "
+        'created_at INTEGER NOT NULL, '
+        'updated_at INTEGER NOT NULL)',
+    'CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status)',
+    'CREATE INDEX IF NOT EXISTS idx_feedback_created '
+        'ON feedback(created_at)',
+  ];
 
   // ---------------------------------------------------------- validation
 
@@ -146,7 +168,9 @@ class ReportStore {
       );
     }
     if (!feedbackSources.contains(source)) {
-      throw ArgumentError('source must be one of ${feedbackSources.join(', ')}');
+      throw ArgumentError(
+        'source must be one of ${feedbackSources.join(', ')}',
+      );
     }
     if (message.trim().isEmpty) {
       throw ArgumentError('message required');
@@ -158,7 +182,7 @@ class ReportStore {
     }
   }
 
-  FeedbackEntry _fromRow(Row r) => FeedbackEntry(
+  FeedbackEntry _fromRow(Map<String, Object?> r) => FeedbackEntry(
     id: r['id'] as int,
     category: r['category'] as String,
     source: r['source'] as String,
@@ -189,46 +213,45 @@ class ReportStore {
     String? gameId,
     String? appVersion,
   }) async {
-    _validate(
-      category: category,
-      source: source,
-      message: message,
-    );
+    await ensureSchema();
+    _validate(category: category, source: source, message: message);
     final now = DateTime.now().millisecondsSinceEpoch;
-    _db.execute(
-      'INSERT INTO feedback '
-      '(category, source, title, message, contact, seat_id, game_id, '
-      'app_version, status, priority, admin_notes, created_at, updated_at) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        category,
-        source,
-        (title ?? '').trim().substring(
-          0,
-          (title ?? '').trim().length.clamp(0, maxTitleLength),
-        ),
-        message.trim(),
-        _clamp(contact, maxContactLength),
-        _clamp(seatId, maxTagLength),
-        _clamp(gameId, maxTagLength),
-        _clamp(appVersion, maxTagLength),
-        'open',
-        'medium',
-        '',
-        now,
-        now,
-      ],
-    );
-    return (await byId(_db.lastInsertRowId))!;
+    final results = await _backend.run([
+      SqlStatement(
+        'INSERT INTO feedback '
+        '(category, source, title, message, contact, seat_id, game_id, '
+        'app_version, status, priority, admin_notes, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          category,
+          source,
+          (title ?? '').trim().substring(
+            0,
+            (title ?? '').trim().length.clamp(0, maxTitleLength),
+          ),
+          message.trim(),
+          _clamp(contact, maxContactLength),
+          _clamp(seatId, maxTagLength),
+          _clamp(gameId, maxTagLength),
+          _clamp(appVersion, maxTagLength),
+          'open',
+          'medium',
+          '',
+          now,
+          now,
+        ],
+      ),
+      const SqlStatement(
+        'SELECT * FROM feedback WHERE id = last_insert_rowid()',
+      ),
+    ]);
+    return _fromRow(results.last.rows.first);
   }
 
   /// Partial update. Only the fields present in [patch] change. Unknown
   /// or out-of-whitelist values throw [ArgumentError]; the handler turns
   /// that into a 400.
-  Future<FeedbackEntry?> update(
-    int id,
-    Map<String, dynamic> patch,
-  ) async {
+  Future<FeedbackEntry?> update(int id, Map<String, dynamic> patch) async {
     final existing = await byId(id);
     if (existing == null) return null;
     final sets = <String>[];
@@ -255,10 +278,14 @@ class ReportStore {
           sets.add('title = ?');
           args.add(
             (e.value as String?)?.trim().substring(
-              0,
-              (e.value as String?)?.trim().length.clamp(0, maxTitleLength) ??
                   0,
-            ) ?? '',
+                  (e.value as String?)?.trim().length.clamp(
+                        0,
+                        maxTitleLength,
+                      ) ??
+                      0,
+                ) ??
+                '',
           );
         case 'message':
           final m = e.value as String? ?? '';
@@ -283,13 +310,15 @@ class ReportStore {
           args.add(_clamp(e.value as String?, maxTagLength));
         case 'adminNotes':
           sets.add('admin_notes = ?');
-          args.add((e.value as String? ?? '').trim().substring(
-            0,
-            (e.value as String? ?? '')
-                .trim()
-                .length
-                .clamp(0, maxMessageLength),
-          ));
+          args.add(
+            (e.value as String? ?? '').trim().substring(
+              0,
+              (e.value as String? ?? '').trim().length.clamp(
+                0,
+                maxMessageLength,
+              ),
+            ),
+          );
         default:
           throw ArgumentError('unknown field ${e.key}');
       }
@@ -299,29 +328,30 @@ class ReportStore {
     args
       ..add(DateTime.now().millisecondsSinceEpoch)
       ..add(id);
-    _db.execute(
-      'UPDATE feedback SET ${sets.join(', ')} WHERE id = ?',
-      args,
-    );
+    await _backend.run([
+      SqlStatement('UPDATE feedback SET ${sets.join(', ')} WHERE id = ?', args),
+    ]);
     return byId(id);
   }
 
   /// True when a row was deleted.
   Future<bool> delete(int id) async {
-    final rows = _db.select('SELECT id FROM feedback WHERE id = ?', [id]);
-    if (rows.isEmpty) return false;
-    _db.execute('DELETE FROM feedback WHERE id = ?', [id]);
-    return true;
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('DELETE FROM feedback WHERE id = ?', [id]),
+    ]);
+    return results.first.affected > 0;
   }
 
   // ----------------------------------------------------------- reading
 
   Future<FeedbackEntry?> byId(int id) async {
-    final rows = _db.select(
-      'SELECT * FROM feedback WHERE id = ?',
-      [id],
-    );
-    return rows.isEmpty ? null : _fromRow(rows.first);
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('SELECT * FROM feedback WHERE id = ?', [id]),
+    ]);
+    final row = results.first.firstRow;
+    return row == null ? null : _fromRow(row);
   }
 
   /// The triage queue. Default order: actionable first (open before
@@ -334,6 +364,7 @@ class ReportStore {
     int limit = 100,
     int offset = 0,
   }) async {
+    await ensureSchema();
     final where = <String>[];
     final args = <dynamic>[];
     if (category != null && category.isNotEmpty) {
@@ -348,39 +379,46 @@ class ReportStore {
         ? 'created_at DESC, id DESC'
         // Actionable-first, priority-ranked, newest tiebreak.
         : "CASE status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 "
-            "WHEN 'resolved' THEN 2 ELSE 3 END, "
-            "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
-            "WHEN 'medium' THEN 2 ELSE 3 END, "
-            'created_at DESC, id DESC';
-    final rows = _db.select(
-      'SELECT * FROM feedback '
-      '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')} '}'
-      'ORDER BY $order LIMIT ? OFFSET ?',
-      [...args, limit, offset],
-    );
-    return [for (final r in rows) _fromRow(r)];
+              "WHEN 'resolved' THEN 2 ELSE 3 END, "
+              "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+              "WHEN 'medium' THEN 2 ELSE 3 END, "
+              'created_at DESC, id DESC';
+    final results = await _backend.run([
+      SqlStatement(
+        'SELECT * FROM feedback '
+        '${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')} '}'
+        'ORDER BY $order LIMIT ? OFFSET ?',
+        [...args, limit, offset],
+      ),
+    ]);
+    return [for (final r in results.first.rows) _fromRow(r)];
   }
 
   Future<int> count({String? status}) async {
-    if (status == null || status.isEmpty) {
-      return _db.select('SELECT COUNT(*) AS n FROM feedback').first['n'] as int;
-    }
-    return _db
-        .select(
-          'SELECT COUNT(*) AS n FROM feedback WHERE status = ?',
-          [status],
-        )
-        .first['n'] as int;
+    await ensureSchema();
+    final results = await _backend.run([
+      if (status == null || status.isEmpty)
+        const SqlStatement('SELECT COUNT(*) AS n FROM feedback')
+      else
+        SqlStatement('SELECT COUNT(*) AS n FROM feedback WHERE status = ?', [
+          status,
+        ]),
+    ]);
+    return results.first.rows.first['n'] as int;
   }
 
   /// Per-category open counts — the automation hook for the dashboard.
-  Map<String, int> openByCategory() {
-    final rows = _db.select(
-      "SELECT category, COUNT(*) AS n FROM feedback "
-      "WHERE status IN ('open', 'in_progress') GROUP BY category",
-    );
+  Future<Map<String, int>> openByCategory() async {
+    await ensureSchema();
+    final results = await _backend.run(const [
+      SqlStatement(
+        "SELECT category, COUNT(*) AS n FROM feedback "
+        "WHERE status IN ('open', 'in_progress') GROUP BY category",
+      ),
+    ]);
     return {
-      for (final r in rows) r['category'] as String: r['n'] as int,
+      for (final r in results.first.rows)
+        r['category'] as String: r['n'] as int,
     };
   }
 
@@ -391,6 +429,6 @@ class ReportStore {
   }
 
   void close() {
-    if (_ownsDb) _db.close();
+    if (_ownsBackend) _backend.close();
   }
 }

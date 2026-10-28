@@ -87,6 +87,7 @@ import 'package:game_club/server/leaderboard_store.dart';
 import 'package:game_club/server/media.dart';
 import 'package:game_club/server/report_store.dart';
 import 'package:game_club/server/room_registry.dart';
+import 'package:game_club/server/sql_backend.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_friend_store.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
@@ -2066,7 +2067,7 @@ Future<shelf.Response> adminOverviewHandler(shelf.Request req) async {
           'snakes': await leaderboardStore.totalGames(game: 'snakes'),
         },
         'openFeedback': await reportStore.count(status: 'open'),
-        'feedbackByCategory': reportStore.openByCategory(),
+        'feedbackByCategory': await reportStore.openByCategory(),
       },
       'leaderboardBackend': leaderboardBackend,
     }),
@@ -2221,7 +2222,7 @@ Future<shelf.Response> adminFeedbackHandler(shelf.Request req) async {
       'feedback': [for (final e in entries) e.toJson()],
       'openCount': await reportStore.count(status: 'open'),
       'totalCount': await reportStore.count(),
-      'openByCategory': reportStore.openByCategory(),
+      'openByCategory': await reportStore.openByCategory(),
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -2250,13 +2251,13 @@ Future<shelf.Response> adminTableHandler(shelf.Request req) async {
       'editable': spec.editable.toList(),
       'insertable': spec.insertable,
       'deletable': spec.deletable,
-      'rows': adminStore.tableRows(
+      'rows': await adminStore.tableRows(
         spec,
         limit: limit,
         offset: int.tryParse(q['offset'] ?? '')?.clamp(0, 100000) ?? 0,
         q: query,
       ),
-      'total': adminStore.tableCount(spec, q: query),
+      'total': await adminStore.tableCount(spec, q: query),
     }),
     headers: {'content-type': 'application/json'},
   );
@@ -2426,7 +2427,7 @@ Future<shelf.Response> adminActionHandler(shelf.Request req) async {
       final spec = tableSpec(body['table'] as String? ?? '');
       if (spec == null) return _badAdminAction('unknown table');
       try {
-        adminStore.insertTableRow(
+        await adminStore.insertTableRow(
           spec,
           (body['values'] as Map?)?.cast<String, dynamic>() ?? {},
         );
@@ -2545,37 +2546,59 @@ Future<void> main(List<String> args) async {
     preferred: env['GIF_PROVIDER'] ?? '',
   );
 
-  // Persistence for production runs: a hosted Turso database when
-  // TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set (the leaderboard then
-  // survives on ephemeral hosts), otherwise the local SQLite file. Tests
-  // swap the globals.
+  // Persistence for production runs. When TURSO_DATABASE_URL +
+  // TURSO_AUTH_TOKEN are set, Turso is the single store of record for
+  // EVERYTHING — leaderboard, admin history, accounts, sessions, feedback,
+  // friends and the room registry — and no local SQLite file is opened at
+  // all. Without those variables the local SQLite file is the fallback,
+  // never a second copy running beside Turso. Tests swap the globals.
   final turso = TursoLeaderboardStore.fromEnvironment(env);
+  final useTurso = turso != null;
+  final tursoBackend = useTurso ? TursoBackend.fromEnvironment(env) : null;
   leaderboardStore = turso ?? SqliteLeaderboardStore(dbPath);
-  // Admin history lives in the same SQLite file so one DB holds players,
-  // bans, audit and room lifecycle beside the leaderboard rows. When the
-  // leaderboard is Turso-backed the file still exists locally for admin
-  // history (single-replica deployments); multi-replica admin history
-  // needs a shared store.
+
   try {
     adminStore.close();
   } catch (_) {}
-  // One shared SQLite connection for admin history + feedback: the
-  // generic Data-tab CRUD reaches every whitelisted table through
-  // [adminStore], so the tables must live on the same connection (and
-  // file) the feature stores own.
-  final sharedDb = sqlite3.open(dbPath);
-  adminStore = AdminStore.fromDb(sharedDb);
-  reportStore = ReportStore.fromDb(sharedDb);
-  // Friends state: Turso when configured, so friendships, requests, DMs and
-  // invites survive a redeploy on an ephemeral host; otherwise the shared
-  // SQLite file. The local friend tables are created either way — the admin
-  // Data tab whitelists them and reaches them through [sharedDb], so they
-  // must exist on that connection even when Turso is the store of record
-  // (they receive no writes then).
+  try {
+    reportStore.close();
+  } catch (_) {}
+
+  // Admin history + feedback. In Turso mode both stores share one remote
+  // backend; locally they share one SQLite connection, exactly like the
+  // feature stores below. The generic Data-tab CRUD reaches every
+  // whitelisted table through [adminStore], so every table must live in
+  // the same database.
+  final sharedDb = useTurso ? null : sqlite3.open(dbPath);
+  adminStore = useTurso
+      ? AdminStore.fromBackend(tursoBackend!)
+      : AdminStore.fromDb(sharedDb!);
+  reportStore = useTurso
+      ? ReportStore.fromBackend(tursoBackend!)
+      : ReportStore.fromDb(sharedDb!);
+
+  // Friends state shares the same choice. In Turso mode the friend tables
+  // are created by [TursoFriendStore] itself; locally they share the one
+  // SQLite connection.
   friendStore.close();
-  final localFriendStore = SqliteFriendStore.fromDb(sharedDb);
   final tursoFriends = TursoFriendStore.fromEnvironment(env);
-  friendStore = tursoFriends ?? localFriendStore;
+  friendStore = tursoFriends ?? SqliteFriendStore.fromDb(sharedDb!);
+
+  // Create the shared schema up front (every statement is idempotent) so a
+  // Turso deployment fails loudly here instead of on the first admin
+  // request, and so the Data tab can reach the friend tables before the
+  // first player opens the Friends screen.
+  try {
+    await adminStore.ensureSchema();
+    await reportStore.ensureSchema();
+    if (tursoFriends != null) await tursoFriends.ensureSchema();
+  } catch (e) {
+    stderr.writeln(
+      '!! could not create the shared schema: $e\n'
+      '   The server will keep starting, but admin/feedback requests fail '
+      'until the database is reachable.',
+    );
+  }
   adminToken = (env['ADMIN_TOKEN'] ?? '').trim();
   authority = GameAuthority(
     leaderboard: leaderboardStore,
@@ -2808,8 +2831,7 @@ Future<void> main(List<String> args) async {
     'Game Club server listening on '
     'ws://${server.address.host}:${server.port}/ws '
     '(instance: $instanceId, '
-    'leaderboard: ${turso != null ? 'Turso' : dbPath}, '
-    'friends: ${tursoFriends != null ? 'Turso' : dbPath}, '
+    'data: ${useTurso ? 'Turso (all stores)' : dbPath}, '
     'room registry: ${tursoRegistry != null ? 'Turso' : 'in-memory'}, '
     'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})',
   );
