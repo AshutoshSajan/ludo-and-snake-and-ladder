@@ -10,9 +10,11 @@ name: OpenCode review
 # human decides a review is worth them. Drafts are reviewable on request; the
 # PR must be open and its head must live in this repository.
 #
-# GitHub only lists a workflow_dispatch workflow in Actions once the file exists
-# on the default branch, so this becomes runnable from the UI when it reaches
-# `main` through the regular release promotion.
+# Dispatch it with the PR number:
+#   gh workflow run opencode-review.yml --ref dev -f pr=<number>
+# CLI dispatch works from any branch whose copy of this file declares
+# workflow_dispatch (dev has it); GitHub lists the workflow in the Actions UI
+# only once the file exists on the default branch.
 #
 # Two jobs deliberately:
 #   * `review` only needs read-only repository scopes and never receives a

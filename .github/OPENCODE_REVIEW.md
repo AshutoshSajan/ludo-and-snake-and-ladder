@@ -55,9 +55,16 @@ more capable model can be selected with the variable without a code change.
 ## What runs, and when
 
 `opencode-review.yml` is **manual only**: no pull-request event starts it.
-A maintainer runs it from **Actions → OpenCode review → Run workflow** with a
-pull-request number input (`gh workflow run opencode-review.yml -f pr=<number>`
-once the workflow is on the default branch). Nothing is reviewed, and no model
+A maintainer dispatches it — from the CLI with the PR number:
+
+```bash
+gh workflow run opencode-review.yml --ref dev -f pr=<number>
+```
+
+or from **Actions → OpenCode review → Run workflow** once the file is on the
+default branch (GitHub lists dispatch workflows in the UI only from there).
+CLI dispatch works from any branch whose copy of the workflow declares
+`workflow_dispatch`, which `dev` has now. Nothing is reviewed, and no model
 key is spent, until that dispatch happens.
 
 The dispatch fails closed — the run goes red before any PR code is checked out
