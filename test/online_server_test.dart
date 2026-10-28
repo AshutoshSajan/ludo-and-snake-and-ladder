@@ -847,6 +847,195 @@ void main() {
     });
   });
 
+  group('GameAuthority: lobby cost bound (CWE-400)', () {
+    test('intents that cannot touch the roster report no rebuild', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: (_) {}));
+      auth.joinRoom(room.code, _member(LudoColor.blue, id: 'guest'));
+
+      // The transport only rebuilds the lobby feed when this answer is true.
+      for (final msg in <Map<String, dynamic>>[
+        {}, // a two-byte junk object
+        {'type': 'not-a-thing'},
+        {'type': 'roll'}, // no game running yet
+        {'type': 'chat', 'text': 'hello'},
+        {'type': 'chat', 'text': ''}, // nothing at all is not a message
+        {'type': 'voice', 'k': 'offer', 'to': 'red', 's': 'x'},
+      ]) {
+        expect(
+          auth.handleIntent(room: room, connectionId: 'guest', msg: msg),
+          isFalse,
+          reason: '$msg cannot change the roster',
+        );
+      }
+    });
+
+    test('intents that touch the roster report a rebuild', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: (_) {}));
+      auth.joinRoom(room.code, _member(LudoColor.blue, id: 'guest'));
+
+      expect(
+        auth.handleIntent(
+          room: room,
+          connectionId: 'guest',
+          msg: {'type': 'autoplay', 'on': true},
+        ),
+        isTrue,
+        reason: 'the corner badge shows autoplay',
+      );
+      expect(
+        auth.handleIntent(
+          room: room,
+          connectionId: 'guest',
+          msg: {'type': 'autoplay', 'on': true},
+        ),
+        isFalse,
+        reason: 'repeating the current flag changes nothing',
+      );
+      expect(
+        auth.handleIntent(
+          room: room,
+          connectionId: 'guest',
+          msg: {'type': 'leave'},
+        ),
+        isTrue,
+        reason: 'a walk-out changes the roster',
+      );
+    });
+
+    test('starting the game reports a roster change, then junk is quiet', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: (_) {}));
+      auth.joinRoom(room.code, _member(LudoColor.blue, id: 'guest'));
+
+      expect(
+        auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'start'},
+        ),
+        isTrue,
+        reason: 'the lobby feed carries the started flag',
+      );
+      expect(
+        auth.handleIntent(room: room, connectionId: 'red', msg: {}),
+        isFalse,
+        reason: 'junk during a running game cannot change the roster',
+      );
+    });
+
+    test('a lobby retires the oldest vacated seat claims', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: (_) {}));
+
+      // Join → disconnect cycles with a fresh seat id each time. Nothing
+      // bounds that history except the room's own claim budget.
+      for (var i = 0; i < 40; i++) {
+        final seatId = 'guest-$i';
+        expect(
+          auth.joinRoom(
+            room.code,
+            _member(LudoColor.blue, id: seatId, seatId: seatId),
+          ),
+          isNotNull,
+        );
+        auth.leaveRoom(room.code, seatId);
+      }
+
+      expect(
+        room.seatRegistry.length,
+        1 + Room.maxDepartedSeatClaims,
+        reason: 'the host plus a bounded set of departed claims',
+      );
+      expect(
+        room.seatRegistry.containsKey('guest-0'),
+        isFalse,
+        reason: 'the oldest claim is the one retired',
+      );
+
+      // The newest claim still reclaims its corner with its credential.
+      final seatId = 'guest-39';
+      final credential = room.seatCredentials[seatId];
+      expect(credential, isNotNull);
+      expect(
+        auth.rejoinRoom(
+          room.code,
+          _member(LudoColor.blue, id: seatId, seatId: seatId),
+          credential: credential,
+        ),
+        isNotNull,
+      );
+    });
+
+    test('a lobby retires the oldest walk-out rows', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(_member(LudoColor.red, on: (_) {}));
+
+      for (var i = 0; i < 30; i++) {
+        final seatId = 'guest-$i';
+        auth.joinRoom(
+          room.code,
+          _member(LudoColor.blue, id: seatId, seatId: seatId),
+        );
+        expect(
+          auth.handleIntent(
+            room: room,
+            connectionId: seatId,
+            msg: {'type': 'leave'},
+          ),
+          isTrue,
+        );
+      }
+
+      expect(
+        room.leftSeats.length,
+        Room.maxDepartedSeatClaims,
+        reason: 'the "left" rows a lobby carries are bounded',
+      );
+      expect(
+        room.leftSeats.last.seatId,
+        'guest-29',
+        reason: 'the newest walk-out is kept',
+      );
+      expect(
+        room.seatRegistry.length,
+        1 + Room.maxDepartedSeatClaims,
+        reason: 'retired rows take their seat claims with them',
+      );
+    });
+
+    test('a running game never forgets a reclaimable seat', () {
+      final auth = GameAuthority(rng: Random(1));
+      final room = auth.createRoom(
+        _member(LudoColor.red, on: (_) {}),
+        capacity: 2,
+      );
+      auth.joinRoom(
+        room.code,
+        _member(LudoColor.blue, id: 'guest', seatId: 'guest'),
+      );
+      expect(
+        auth.handleIntent(
+          room: room,
+          connectionId: 'red',
+          msg: {'type': 'start'},
+        ),
+        isTrue,
+      );
+
+      // The seat drops; a mid-game reconnection must still find it.
+      auth.leaveRoom(room.code, 'guest');
+      room.pruneDepartedSeats();
+
+      expect(
+        room.seatRegistry.containsKey('guest'),
+        isTrue,
+        reason: 'a running game keeps every seat for the rest of the game',
+      );
+    });
+  });
+
   group('GameAuthority: voice signalling', () {
     test('a signal routes to the addressed seat, framed with the sender', () {
       final hostLog = <String>[];
