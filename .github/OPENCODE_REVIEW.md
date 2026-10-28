@@ -173,6 +173,12 @@ it into a normal question.
 - **Fork isolation.** Fork PRs are refused by both workflows, and the command
   path requires the head repository to equal the base repository before any
   head checkout.
+- **Checkout symlink boundary.** Both model paths run the trusted
+  `sanitize_checkout.py` after the head checkout and before the model starts:
+  any symlink whose canonical target leaves the workspace is removed, and a
+  failed removal fails the run closed. A committed link therefore cannot
+  redirect a permitted `read`/`grep` into `/proc/self/environ` or any other
+  host file to fish the provider key (CWE-61).
 - **Bounded work.** Diff input is capped at 200 KB / 200 files for reviews and
   120 KB for commands. Inline comments are capped at 10; the review summary is
   capped at 12,000 characters. A command timeout is 10 minutes.
