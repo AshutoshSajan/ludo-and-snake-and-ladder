@@ -385,6 +385,80 @@ void main() {
       expect(last.statusCode, 429);
     });
 
+    test('concurrent logins cannot all pass the failure check', () async {
+      // The failure budget is checked before the body is read and only
+      // spent after credentials are verified (CWE-307). Every request in
+      // this burst reaches the check before any of them has recorded a
+      // failure, so without a reservation all fifteen are verified; with
+      // one, the ten-attempt budget holds.
+      final savedStore = adminStore;
+      final savedToken = adminToken;
+      adminStore = AdminStore.inMemory();
+      adminToken = '';
+      addTearDown(() {
+        adminStore = savedStore;
+        adminToken = savedToken;
+        resetLoginAttempts();
+      });
+      resetLoginAttempts();
+
+      final responses = await Future.wait([
+        for (var i = 0; i < 15; i++)
+          adminLoginHandler(
+            _post('admin/login', {
+              'email': 'ghost@x.io',
+              'password': 'wrong-$i',
+            }),
+          ),
+      ]);
+      final codes = responses.map((r) => r.statusCode).toList();
+      expect(
+        codes.where((c) => c == 401).length,
+        10,
+        reason: 'only the ten-attempt budget may reach verification',
+      );
+      expect(codes.where((c) => c == 429).length, 5);
+
+      // A reservation is capacity, not a failure: the bucket holds the
+      // ten misses, so one more sequential attempt is refused.
+      final after = await adminLoginHandler(
+        _post('admin/login', {'email': 'ghost@x.io', 'password': 'wrong-x'}),
+      );
+      expect(after.statusCode, 429);
+    });
+
+    test('a successful login frees its slot without spending the budget',
+        () async {
+      final savedStore = adminStore;
+      adminStore = AdminStore.inMemory();
+      addTearDown(() {
+        adminStore = savedStore;
+        resetLoginAttempts();
+      });
+      resetLoginAttempts();
+      await adminStore.createUser(
+        email: 'root@x.io',
+        name: 'Root',
+        password: 'long-enough-1',
+        role: 'admin',
+        iterations: 1000,
+        by: 'test',
+      );
+
+      // Successes never spend the ten-failure budget: twelve in a row all
+      // log in. An eleventh would be refused if a success were recorded
+      // as a miss, and a leaked reservation would refuse one of ten.
+      for (var i = 0; i < 12; i++) {
+        final res = await adminLoginHandler(
+          _post('admin/login', {
+            'email': 'root@x.io',
+            'password': 'long-enough-1',
+          }),
+        );
+        expect(res.statusCode, 200, reason: 'login ${i + 1} of 12');
+      }
+    });
+
     test('admin can list and create users', () async {
       final savedStore = adminStore;
       final savedToken = adminToken;
