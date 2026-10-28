@@ -916,19 +916,57 @@ Future<bool> isAdminAuthorized(shelf.Request req) async {
 
 // ------------------------------------------------------------------ login
 // rate limiting: per-IP sliding window on FAILED logins only. Successes
-// never count, so a correct password always works. Test-only reset via
-// [resetLoginAttempts].
+// never count, so a correct password always works once earlier misses age
+// out. Test-only reset via [resetLoginAttempts].
+//
+// Every verification also holds a reservation while it runs: the failure
+// list alone cannot bound a concurrent burst, because a request that has
+// passed the check has not yet had the chance to record its failure — so
+// a whole batch admitted in one turn would all reach credential
+// verification even though the budget is ten (CWE-307). A reservation is
+// capacity, not a failure: it is released on success, on a rejected
+// password (where it is converted into the failure it spent), and on any
+// error, so an abandoned request cannot hold a slot.
 const _loginWindow = Duration(seconds: 60);
 const _maxLoginFailures = 10;
 
 final _loginFailures = <String, List<int>>{};
+
+/// Verifications in flight per client. Counted alongside the failures in
+/// [loginRateLimited]: with the check and the increment in one synchronous
+/// turn, a burst of simultaneous requests cannot all pass a budget that
+/// any one of them would exhaust by failing.
+final _loginInFlight = <String, int>{};
 
 bool loginRateLimited(String ip) {
   final now = DateTime.now().millisecondsSinceEpoch;
   final cutoff = now - _loginWindow.inMilliseconds;
   final hits = (_loginFailures[ip] ?? []).where((t) => t > cutoff).toList();
   _loginFailures[ip] = hits;
-  return hits.length >= _maxLoginFailures;
+  return hits.length + (_loginInFlight[ip] ?? 0) >= _maxLoginFailures;
+}
+
+/// Checks the budget and, in the same synchronous turn, takes one slot
+/// from it for [ip]. Returns false — without taking a slot — when the
+/// client is already at the limit. Every true return must be settled with
+/// [_releaseLoginAttempt].
+bool _reserveLoginAttempt(String ip) {
+  if (loginRateLimited(ip)) return false;
+  _loginInFlight[ip] = (_loginInFlight[ip] ?? 0) + 1;
+  return true;
+}
+
+/// Ends a reserved verification. A rejected password is recorded as the
+/// failure that slot stood for; a success or an error simply gives the
+/// capacity back.
+void _releaseLoginAttempt(String ip, {bool failed = false}) {
+  final left = (_loginInFlight[ip] ?? 0) - 1;
+  if (left <= 0) {
+    _loginInFlight.remove(ip);
+  } else {
+    _loginInFlight[ip] = left;
+  }
+  if (failed) _recordLoginFailure(ip);
 }
 
 void _recordLoginFailure(String ip) {
@@ -937,7 +975,10 @@ void _recordLoginFailure(String ip) {
 }
 
 /// Test-only: clears the in-memory login failure buckets.
-void resetLoginAttempts() => _loginFailures.clear();
+void resetLoginAttempts() {
+  _loginFailures.clear();
+  _loginInFlight.clear();
+}
 
 // Feedback throttling: the report/contact endpoints are unauthenticated,
 // so per-IP buckets keep the queue (and the DB) from being flooded. Two
@@ -1867,41 +1908,63 @@ Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
   }
 }
 
+/// The one refusal for a client over the login budget — used both by the
+/// cheap pre-body check and by the authoritative reservation below.
+shelf.Response _loginLimitedResponse() => shelf.Response(
+  429,
+  body: jsonEncode({
+    'ok': false,
+    'text': 'too many attempts — wait a minute',
+  }),
+  headers: {'content-type': 'application/json'},
+);
+
 Future<shelf.Response> adminLoginHandler(shelf.Request req) async {
   final ip = _clientIp(req);
+  // Cheap early refusal: a client already at the limit never has its body
+  // read. This is only a fast path — the decisive check is the reserve
+  // below, after the body awaits.
   if (loginRateLimited(ip)) {
-    return shelf.Response(
-      429,
-      body: jsonEncode({
-        'ok': false,
-        'text': 'too many attempts — wait a minute',
+    return _loginLimitedResponse();
+  }
+  final body = await _readJsonBody(req);
+  // Recheck and take a verification slot in one synchronous turn. Every
+  // request that failed the early check's test but has not yet recorded
+  // its failure counts against the budget here, so a simultaneous burst
+  // is verified at most ten times — not all of it.
+  if (!_reserveLoginAttempt(ip)) {
+    return _loginLimitedResponse();
+  }
+  var rejected = false;
+  try {
+    final user = await adminStore.checkCredentials(
+      (body['email'] as String? ?? ''),
+      (body['password'] as String? ?? ''),
+    );
+    if (user == null) {
+      rejected = true;
+      return shelf.Response(
+        401,
+        body: jsonEncode({'ok': false, 'text': 'invalid credentials'}),
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    final session = await adminStore.createSession(user.id);
+    return shelf.Response.ok(
+      jsonEncode({
+        'ok': true,
+        'token': session.token,
+        'expiresAt': session.expiresAt,
+        'user': user.toJson(),
       }),
       headers: {'content-type': 'application/json'},
     );
+  } finally {
+    // Always give the capacity back: a rejected password spends its slot
+    // as the failure it is, while a success or an error frees it. The
+    // slot cannot leak, so abandoned requests cannot lock a client out.
+    _releaseLoginAttempt(ip, failed: rejected);
   }
-  final body = await _readJsonBody(req);
-  final user = await adminStore.checkCredentials(
-    (body['email'] as String? ?? ''),
-    (body['password'] as String? ?? ''),
-  );
-  if (user == null) {
-    _recordLoginFailure(ip);
-    return shelf.Response(
-      401,
-      body: jsonEncode({'ok': false, 'text': 'invalid credentials'}),
-      headers: {'content-type': 'application/json'},
-    );
-  }
-  final session = await adminStore.createSession(user.id);
-  return shelf.Response.ok(
-    jsonEncode({
-      'ok': true,
-      'token': session.token,
-      'expiresAt': session.expiresAt,
-      'user': user.toJson(),
-    }),
-    headers: {'content-type': 'application/json'},
-  );
 }
 
 Future<shelf.Response> adminLogoutHandler(shelf.Request req) async {
