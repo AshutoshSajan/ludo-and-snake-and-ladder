@@ -5,6 +5,7 @@ import '../app_routes.dart';
 import '../providers/app_providers.dart';
 import '../screens/admin/admin_dashboard_screen.dart';
 import '../services/admin_client.dart';
+import '../services/server_url.dart';
 import 'theme.dart';
 
 /// The signed-in admin identity chip: shield + email, tapping opens the
@@ -27,7 +28,7 @@ class AdminBadge extends StatelessWidget {
       name: AppRoutes.adminDashboard,
       builder: (_) => AdminDashboardScreen(
         client: AdminClient(
-          serverUrl: session.serverUrl,
+          serverUrl: defaultServerUrl(),
           token: session.token,
         ),
       ),

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,9 +7,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/main.dart';
 import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/screens/admin/admin_login_screen.dart';
+import 'package:game_club/services/admin_client.dart';
 import 'package:game_club/ui/admin_badge_web.dart';
 import 'package:game_club/ui/page_app_bar.dart';
 import 'package:game_club/ui/theme.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -58,12 +63,7 @@ void main() {
     // The app shell resolves the stub on non-web builds, so the real badge
     // is exercised directly: this is the widget the web build compiles in.
     SharedPreferences.setMockInitialValues({});
-    const session = AdminSession(
-      token: 't',
-      email: 'root@x.io',
-      name: 'Root',
-      serverUrl: 'ws://localhost:8080/ws',
-    );
+    const session = AdminSession(token: 't', email: 'root@x.io', name: 'Root');
     await tester.pumpWidget(
       const ProviderScope(
         child: MaterialApp(
@@ -107,12 +107,7 @@ void main() {
     final notifier = ProviderScope.containerOf(ctx)
         .read(adminSessionProvider.notifier);
     notifier.signIn(
-      const AdminSession(
-        token: 't',
-        email: 'root@x.io',
-        name: 'Root',
-        serverUrl: 'ws://localhost:8080/ws',
-      ),
+      const AdminSession(token: 't', email: 'root@x.io', name: 'Root'),
     );
     await tester.pumpAndSettle();
     expect(find.text('Admin · root@x.io'), findsOneWidget);
@@ -140,7 +135,7 @@ void main() {
     );
 
     await tester.pumpWidget(
-      const ProviderScope(child: MaterialApp(home: AdminLoginScreen())),
+      ProviderScope(child: MaterialApp(home: _loginScreen())),
     );
     await tester.pumpAndSettle();
 
@@ -161,16 +156,132 @@ void main() {
     expect(find.text('s3cr3t-pass'), findsOneWidget);
   });
 
+  testWidgets('admin sign-in asks for credentials only, not a server', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(child: MaterialApp(home: _loginScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    // The target is a build-time fact (dart-define, same-origin, or the dev
+    // default), exactly like the online lobby — no field may redirect the
+    // back office at a foreign host.
+    expect(find.text('Server WS URL'), findsNothing);
+    expect(find.byIcon(Icons.dns_outlined), findsNothing);
+    expect(find.widgetWithText(TextField, 'Email'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
+  });
+
+  testWidgets('admin fields advertise the login autofill pair', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(child: MaterialApp(home: _loginScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    final email = tester.widget<TextField>(
+      find.widgetWithText(TextField, 'Email'),
+    );
+    final password = tester.widget<TextField>(
+      find.widgetWithText(TextField, 'Password'),
+    );
+    // Password managers match the identifier and secret hints as a pair; one
+    // group keeps them from being split across two forms.
+    expect(email.autofillHints, const [AutofillHints.username]);
+    expect(password.autofillHints, const [AutofillHints.password]);
+    expect(
+      find.descendant(
+        of: find.byType(AutofillGroup),
+        matching: find.widgetWithText(TextField, 'Password'),
+      ),
+      findsOneWidget,
+    );
+
+    // Leaving without a successful sign-in discards the context instead of
+    // prompting to save a credential the server never accepted.
+    final group = tester.widget<AutofillGroup>(find.byType(AutofillGroup));
+    expect(group.onDisposeAction, AutofillContextAction.cancel);
+  });
+
+  testWidgets('email Next advances to the password instead of submitting', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(child: MaterialApp(home: _loginScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    final email = find.widgetWithText(TextField, 'Email');
+    await tester.tap(email);
+    await tester.pump();
+    await tester.enterText(email, 'root@x.io');
+    await tester.testTextInput.receiveAction(TextInputAction.next);
+    await tester.pumpAndSettle();
+
+    // Enter on the email used to call _submit with an empty password and
+    // paint an error; the keyboard's Next must only move focus.
+    expect(find.text('Enter email and password.'), findsNothing);
+    final password = tester.widget<EditableText>(
+      find.descendant(
+        of: find.widgetWithText(TextField, 'Password'),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(password.focusNode.hasFocus, isTrue);
+  });
+
+  testWidgets(
+    'first-run setup hints a new password and advances to the token',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(home: _loginScreen(setupRequired: true)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final name = tester.widget<TextField>(
+        find.widgetWithText(TextField, 'Name (optional)'),
+      );
+      final password = tester.widget<TextField>(
+        find.widgetWithText(TextField, 'Password'),
+      );
+      expect(name.autofillHints, const [AutofillHints.name]);
+      expect(password.autofillHints, const [AutofillHints.newPassword]);
+
+      final field = find.widgetWithText(TextField, 'Password');
+      await tester.tap(field);
+      await tester.pump();
+      await tester.enterText(field, 'a-long-enough-password');
+      await tester.testTextInput.receiveAction(TextInputAction.next);
+      await tester.pumpAndSettle();
+
+      // Next must reach the setup token, not fire a half-filled setup request.
+      expect(find.text('Enter email and password.'), findsNothing);
+      final token = tester.widget<EditableText>(
+        find.descendant(
+          of: find.widgetWithText(
+            TextField,
+            'Setup token (server ADMIN_TOKEN)',
+          ),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(token.focusNode.hasFocus, isTrue);
+    },
+  );
+
   testWidgets('admin fields sit on the dark input fill with ivory type', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       ProviderScope(
-        child: MaterialApp(
-          theme: AppTheme.dark(),
-          home: const AdminLoginScreen(),
-        ),
+        child: MaterialApp(theme: AppTheme.dark(), home: _loginScreen()),
       ),
     );
     await tester.pumpAndSettle();
@@ -221,4 +332,25 @@ void main() {
     final columnRight = tester.getRect(find.byKey(marker)).right;
     expect(columnRight - actionRight, closeTo(16, 0.5));
   });
+}
+
+/// The login screen against a fake admin API: the status probe answers
+/// immediately, so tests assert on a settled form instead of racing a real
+/// connection attempt to localhost.
+AdminLoginScreen _loginScreen({bool setupRequired = false}) {
+  return AdminLoginScreen(
+    clientFactory: () => AdminClient(
+      serverUrl: 'ws://localhost:8080/ws',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/admin/status') {
+          return http.Response(
+            jsonEncode({'setupRequired': setupRequired}),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    ),
+  );
 }

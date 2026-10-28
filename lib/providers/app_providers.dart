@@ -16,13 +16,11 @@ class AdminSession {
     required this.token,
     required this.email,
     required this.name,
-    required this.serverUrl,
   });
 
   final String token;
   final String email;
   final String name;
-  final String serverUrl;
 }
 
 final adminSessionProvider =
