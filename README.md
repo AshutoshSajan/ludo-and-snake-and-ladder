@@ -493,8 +493,9 @@ CI guards, commit format) is documented in
   before pushing.
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/),
   verified by the `commit-msg` hook.
-- **Automated review**: PRs into `dev`/`main` get an advisory OpenCode review;
-  trusted maintainers can ask follow-ups with `@opencode`. Setup and behaviour:
+- **Manual review**: dispatch the OpenCode review workflow with a PR number for
+  an advisory review on demand; trusted maintainers can ask follow-ups with
+  `@opencode`. Setup and behaviour:
   [.github/OPENCODE_REVIEW.md](.github/OPENCODE_REVIEW.md).
 
 ## 📜 License

@@ -1,7 +1,8 @@
 # OpenCode pull request review
 
-An advisory, read-only review for pull requests into `dev` and `main`, plus a
-trusted-maintainer follow-up command in the discussion.
+An advisory, read-only review for pull requests into `dev` and `main`, run on
+demand by a maintainer, plus a trusted-maintainer follow-up command in the
+discussion.
 
 The model **never** approves, requests changes, merges, edits, pushes, or
 resolves a thread on its own. Every published review uses GitHub's `COMMENT`
@@ -39,7 +40,7 @@ more capable model can be selected with the variable without a code change.
 
 | Path | Role |
 | --- | --- |
-| `.github/workflows/opencode-review.yml` | PR review: read-only model job, separate publisher job. |
+| `.github/workflows/opencode-review.yml` | PR review (manual dispatch): read-only model job, separate publisher job. |
 | `.github/workflows/opencode-review-command.yml` | Trusted `@opencode` questions and `/opencode resolve`. |
 | `.github/opencode/reviewer-agent.json` | Trusted read-only agent/permission config, injected with `OPENCODE_CONFIG`. |
 | `.github/opencode/review-prompt.md` | Strict JSON review contract. |
@@ -53,20 +54,30 @@ more capable model can be selected with the variable without a code change.
 
 ## What runs, and when
 
-`opencode-review.yml` runs on `pull_request` events targeting `dev` or `main`,
-for `opened`, `synchronize`, `reopened`, and `ready_for_review`.
+`opencode-review.yml` is **manual only**: no pull-request event starts it.
+A maintainer runs it from **Actions → OpenCode review → Run workflow** with a
+pull-request number input (`gh workflow run opencode-review.yml -f pr=<number>`
+once the workflow is on the default branch). Nothing is reviewed, and no model
+key is spent, until that dispatch happens.
 
-It is skipped when:
+The dispatch fails closed — the run goes red before any PR code is checked out
+or reviewed — when:
 
-- the PR is a **draft** (the `ready_for_review` event picks it up later);
-- the head repository is a **fork** (fork PRs do not receive repository
-  secrets, and the review job is not allowed to spend the key on untrusted
-  code);
-- the event sender is a **bot** (for example Dependabot).
+- the input is not a pull-request number;
+- the dispatch ref is not `dev` or `main` (the workflow YAML is trusted code
+  that carries the provider key; PR branches never supply it);
+- the PR is **closed**, or its head branch was deleted;
+- the head repository is a **fork** (same boundary as before: fork code is
+  never handed a process that holds the provider key).
 
-The review job has `contents: read` only. The model process receives a minimal
-environment with **no GitHub token**, and the agent config allows only `read`,
-`glob`, and `grep`. The separate publisher job has `pull-requests: write` and
+Drafts are reviewable on request: a manual dispatch is an explicit decision, so
+there is no `ready_for_review` waiting period to lose. Bot-authored PRs can be
+reviewed the same way when a maintainer wants one.
+
+The review job has read-only repository scopes (`contents`, and `pull-requests`
+for resolving the dispatch) and the model process receives a minimal environment
+with **no GitHub token**, and the agent config allows only `read`, `glob`, and
+`grep`. The separate publisher job has `pull-requests: write` and
 `issues: write`, and it checks out the **base commit**, not the PR head, so a
 PR cannot rewrite the code that validates or posts comments.
 
@@ -159,7 +170,7 @@ it into a normal question.
   sizes are checked. Unknown or traversal paths are discarded without being
   echoed. Bodies are capped and sanitised; `@` mentions are neutralised so a
   prompt-injected diff cannot ping a person or team.
-- **Fork isolation.** Fork PRs are skipped by both workflows, and the command
+- **Fork isolation.** Fork PRs are refused by both workflows, and the command
   path requires the head repository to equal the base repository before any
   head checkout.
 - **Bounded work.** Diff input is capped at 200 KB / 200 files for reviews and
@@ -174,11 +185,11 @@ and receives at most 10 short comments. The default `deepseek-v4.1-flash` is
 the low-cost choice; set `OPENCODE_MODEL` to a different provider/model if the
 review quality warrants it.
 
-Fork PRs are skipped before the key is used, so drive-by PRs cannot spend the
-secret. Draft PRs are skipped until they are marked ready. A re-run on the same
-SHA still runs the review job's model call, but the publisher skips posting
-because a review for that commit already exists. Push a new commit for a fresh
-review instead of re-running.
+Fork PRs are refused before the key is used, so drive-by PRs cannot spend the
+secret, and because nothing runs on push every review is an explicit spend
+decision. A dispatch for a SHA that already has a published review still runs
+the model call, but the publisher skips posting because a review for that
+commit already exists. Push a new commit and dispatch again for a fresh review.
 
 ## Local testing
 
