@@ -15,10 +15,12 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_router.dart';
 import '../app_routes.dart';
+import '../providers/app_providers.dart';
 import '../services/friend_client.dart';
 import '../services/online_client.dart';
 import '../services/server_url.dart';
@@ -26,6 +28,7 @@ import '../services/storage_service.dart';
 import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/shared/player_actions_sheet.dart';
+import '../ui/shared/chat_input_behavior.dart';
 import '../ui/shared/chat_line_view.dart';
 import '../ui/shared/player_avatar.dart';
 import '../ui/theme.dart';
@@ -1018,7 +1021,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
 /// 1:1 DM with a friend: polling reads (the room's chat is a poll, so a
 /// DM mirror keeps one mental model), optimistic sends, double-tap and
 /// long-press liking, reply-with-quote via the composer bar.
-class FriendsChatScreen extends StatefulWidget {
+class FriendsChatScreen extends ConsumerStatefulWidget {
   const FriendsChatScreen({
     super.key,
     required this.client,
@@ -1033,10 +1036,10 @@ class FriendsChatScreen extends StatefulWidget {
   final FriendEntry peer;
 
   @override
-  State<FriendsChatScreen> createState() => _FriendsChatScreenState();
+  ConsumerState<FriendsChatScreen> createState() => _FriendsChatScreenState();
 }
 
-class _FriendsChatScreenState extends State<FriendsChatScreen> {
+class _FriendsChatScreenState extends ConsumerState<FriendsChatScreen> {
   final _composer = TextEditingController();
   final _scroll = ScrollController();
 
@@ -1149,6 +1152,15 @@ class _FriendsChatScreenState extends State<FriendsChatScreen> {
       setState(() => _messages[echoIndex] = fresh);
       if (fresh.id > _lastKnown) _lastKnown = fresh.id;
       await FriendReadMarkers.stamp(widget.peer.seatId, fresh.id);
+      // Delivered — say so. The echo bubble is the visual receipt; the
+      // chime is the same two-note the table chat uses for arrivals, so
+      // sending a friend a message never lands in total silence.
+      if (mounted) {
+        ProviderScope.containerOf(
+          context,
+          listen: false,
+        ).read(soundServiceProvider).message();
+      }
     } on FriendException catch (e) {
       if (mounted) {
         setState(() => _messages.removeWhere((m) => m.id == echo.id));
@@ -1370,6 +1382,23 @@ class _FriendsChatScreenState extends State<FriendsChatScreen> {
                   controller: _composer,
                   maxLines: 4,
                   minLines: 1,
+                  onChanged: (text) {
+                    // The reply grammar is desktop's: Enter sends (see
+                    // [chatEnterSends]). A multiline field serves the
+                    // newline to the controller first, so the composer
+                    // grabs the trailing newline right here and sends —
+                    // the key lands as "sent", never as a blank streak.
+                    if (chatEnterSends && text.endsWith('\n')) {
+                      _composer
+                        ..text = text.trimRight()
+                        ..selection = TextSelection.collapsed(
+                          offset: _composer.text.length,
+                        );
+                      _send();
+                      return;
+                    }
+                    setState(() {});
+                  },
                   onSubmitted: (_) => _send(),
                   decoration: const InputDecoration(
                     hintText: 'Message…',

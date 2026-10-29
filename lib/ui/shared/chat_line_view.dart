@@ -1,5 +1,6 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import '../../engine/ludo/ludo_models.dart';
 import '../../services/online_client.dart';
@@ -219,6 +220,95 @@ class _Header extends StatelessWidget {
   }
 }
 
+/// A room code that arrived as chat text: the exact alphabet the server
+/// draws codes from (`game_server.dart`: four characters, no I/O/0/1),
+/// matched only as a standalone word. The parser here must march with the
+/// server's own spelling — a chip on "HELLO" is still harmless (it copies
+/// "HELLO"), but a chip that misses a real code is a share that never lands.
+final _roomCodePattern = RegExp(r'\b[A-HJ-NP-Z2-9]{4}\b');
+
+/// The first room-code-shaped word in [chat text], or null. One chip per
+/// bubble: two live rooms in one sentence is a chat, not a lobby list.
+String? roomCodeIn(String text) {
+  for (final match in _roomCodePattern.allMatches(text)) {
+    return match.group(0)!;
+  }
+  return null;
+}
+
+/// The tap-to-copy chip a bubble wears when its text spells a room code.
+/// One visual language across the table chat and the 1:1 friends lane —
+/// a code is a code wherever it lands.
+class _RoomCodeChip extends StatelessWidget {
+  const _RoomCodeChip({required this.code});
+
+  final String code;
+
+  void _copy(BuildContext context) {
+    Clipboard.setData(ClipboardData(text: code));
+    // The confirmation carries the next step, not just the done-ness: a
+    // player with a code on their clipboard still needs to know where it
+    // goes (the online lobby's join field).
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(milliseconds: 2200),
+        content: Text('Room code $code copied — enter it in the online lobby.'),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Copy room code $code',
+      child: Semantics(
+        button: true,
+        label: 'Copy room code $code',
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+          child: Material(
+            color: Colors.white.withValues(alpha: 0.1),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(color: AppColors.gold.withValues(alpha: 0.4)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: () => _copy(context),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 12,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.copy_rounded,
+                      size: 15,
+                      color: AppColors.gold,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      code,
+                      style: const TextStyle(
+                        color: AppColors.gold,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Content extends StatelessWidget {
   const _Content({
     required this.line,
@@ -274,6 +364,15 @@ class _Content extends StatelessWidget {
               height: 1.35,
             ),
           ),
+        // A room code that arrived as chat text is copyable right here:
+        // re-typing a four-character code from a screenshot is the dead end
+        // this chip deletes. It is drawn when the text contains a
+        // code-shaped word (the server's own alphabet), so a paragraph
+        // with a code still copies it.
+        if (roomCodeIn(line.text) case final code?) ...[
+          const SizedBox(height: 6),
+          _RoomCodeChip(code: code),
+        ],
         // The reaction: a small heart pinned to the bubble's trailing
         // edge (right for my own messages, left for theirs).
         if (liked)
