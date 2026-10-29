@@ -24,6 +24,10 @@ import 'engine/core/player_profiles.dart';
 import 'screens/admin/admin_gate.dart';
 import 'screens/admin/admin_login_screen.dart'
     if (dart.library.io) 'screens/admin/admin_login_stub.dart';
+// The gate replaces itself with the real auth screen, so it needs the
+// screen too (see admin_login_screen.dart's stub pairing on non-web).
+import 'screens/admin/admin_auth_gate.dart'
+    if (dart.library.io) 'screens/admin/admin_auth_gate_stub.dart';
 import 'screens/contact_screen.dart';
 import 'screens/friends_screen.dart';
 import 'screens/home_screen.dart';
@@ -464,10 +468,22 @@ _Target? _targetFor(AppRoute route) {
       screen: SetupScreen(game: _kind(game)),
       location: game.playPath,
     ),
-    AdminRoute() => _adminTarget(const AdminLoginScreen(), AppRoutes.admin),
-    // The dashboard needs the signed-in client; a reload starts at sign-in.
-    AdminDashboardRoute() => _adminTarget(
+    // The mode-agnostic entries: the gate asks the server whether the
+    // first admin exists and lands the tab on /admin/login or
+    // /admin/signup, so no render ever guesses the auth story.
+    AdminRoute() => _adminTarget(const AdminAuthGate(), AppRoutes.admin),
+    AdminLoginRoute() => _adminTarget(
       const AdminLoginScreen(),
+      AppRoutes.adminLogin,
+    ),
+    AdminSignupRoute() => _adminTarget(
+      const AdminLoginScreen(mode: AdminAuthMode.signup),
+      AppRoutes.adminSignup,
+    ),
+    // The dashboard needs the signed-in client; a reload restarts at the
+    // mode the server actually serves, through the same gate.
+    AdminDashboardRoute() => _adminTarget(
+      const AdminAuthGate(),
       AppRoutes.admin,
     ),
     UnknownRoute() => null,

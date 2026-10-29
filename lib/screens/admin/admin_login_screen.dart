@@ -13,26 +13,36 @@ import '../../services/server_url.dart';
 import '../../shared/admin_credentials.dart';
 import '../../ui/club_widgets.dart';
 import '../../ui/theme.dart';
+import 'admin_auth_mode.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_native_form.dart';
 
-/// Admin sign-in at /admin: email + password. On a fresh server the first
-/// visit becomes a one-time setup that creates the admin account.
-/// The session token lives in memory only and rides as a Bearer header.
+export 'admin_auth_mode.dart';
+
+/// Admin sign-in at /admin: email + password (or the first-run setup that
+/// creates the account, when the server says none exists). The session
+/// token lives in memory only and rides as a Bearer header.
 class AdminLoginScreen extends ConsumerStatefulWidget {
-  const AdminLoginScreen({super.key, this.clientFactory});
+  const AdminLoginScreen({
+    super.key,
+    this.clientFactory,
+    this.mode = AdminAuthMode.login,
+  });
 
   /// Test seam: builds the client used for the status check and auth.
   /// Null in production, where the target is [defaultServerUrl].
   final AdminClient Function()? clientFactory;
+
+  /// Login or first-run signup. Defaults to login, the safe always-valid
+  /// mode: the server has an account or the answer is a redirect anyway.
+  final AdminAuthMode mode;
 
   @override
   ConsumerState<AdminLoginScreen> createState() => _AdminLoginScreenState();
 }
 
 class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
-  final _emailCtrl = TextEditingController();
-  final _nameCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();  final _nameCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
   final _setupTokenCtrl = TextEditingController();
@@ -56,6 +66,8 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
   AdminClient get _client =>
       widget.clientFactory?.call() ??
       AdminClient(serverUrl: defaultServerUrl());
+
+  bool get _modeSignup => widget.mode == AdminAuthMode.signup;
 
   @override
   void initState() {
@@ -126,9 +138,24 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     try {
       final status = await _client.status();
       if (!mounted) return;
-      setState(
-        () => _setupRequired = status['setupRequired'] as bool? ?? false,
-      );
+      final required = status['setupRequired'] as bool? ?? false;
+      // The URL's mode and the server's state must agree before any form
+      // is drawn: /admin/signup with an account already created and
+      // /admin/login with none are both stale — one would invite a
+      // stranger to create an admin or fight a server that wants a plain
+      // sign-in. Move the tab to the URL that matches the truth instead.
+      if (required != _modeSignup) {
+        replaceAppScreen<void>(
+          context,
+          name: required ? AppRoutes.adminSignup : AppRoutes.adminLogin,
+          builder: (_) => AdminLoginScreen(
+            mode: required ? AdminAuthMode.signup : AdminAuthMode.login,
+            clientFactory: widget.clientFactory,
+          ),
+        );
+        return;
+      }
+      setState(() => _setupRequired = required);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = 'Could not reach admin API: $e');

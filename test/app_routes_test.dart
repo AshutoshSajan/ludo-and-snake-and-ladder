@@ -36,6 +36,8 @@ void main() {
         '/rules': isA<RulesRoute>(),
         '/contact': isA<ContactRoute>(),
         '/admin': isA<AdminRoute>(),
+        '/admin/login': isA<AdminLoginRoute>(),
+        '/admin/signup': isA<AdminSignupRoute>(),
         '/admin/dashboard': isA<AdminDashboardRoute>(),
       };
       for (final entry in routes.entries) {
@@ -174,10 +176,21 @@ void main() {
       // flutter test runs on the VM, so isAdminUiAvailable is false.
       expect(appRouteBuilder(const RouteSettings(name: '/admin')), isNull);
       expect(
+        appRouteBuilder(const RouteSettings(name: '/admin/login')),
+        isNull,
+      );
+      expect(
+        appRouteBuilder(const RouteSettings(name: '/admin/signup')),
+        isNull,
+      );
+      expect(
         appRouteBuilder(const RouteSettings(name: '/admin/dashboard')),
         isNull,
       );
       expect(appInitialRoutes('/admin').map((r) => r.settings.name), ['/']);
+      expect(appInitialRoutes('/admin/signup').map((r) => r.settings.name), [
+        '/',
+      ]);
     });
   });
 
