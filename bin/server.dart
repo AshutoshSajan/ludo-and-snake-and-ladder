@@ -91,6 +91,7 @@ import 'package:game_club/server/room_registry.dart';
 import 'package:game_club/server/web_cache.dart';
 import 'package:game_club/server/turso_friend_store.dart';
 import 'package:game_club/server/turso_leaderboard_store.dart';
+import 'package:game_club/shared/admin_credentials.dart';
 import 'package:http/http.dart' as http;
 
 /// Not final so tests can swap in a fresh authority + store.
@@ -1845,6 +1846,13 @@ Future<shelf.Response> adminStatusHandler(shelf.Request req) async {
   );
 }
 
+/// A 400 in the admin API's `{ok, text}` shape.
+shelf.Response _adminSetupBadRequest(String text) => shelf.Response(
+  400,
+  body: jsonEncode({'ok': false, 'text': text}),
+  headers: {'content-type': 'application/json'},
+);
+
 /// One-time bootstrap: creates the FIRST account (role admin). Allowed
 /// only while no users exist and only with the ADMIN_TOKEN setup secret —
 /// an open first-run setup lets anyone who reaches /admin first claim the
@@ -1875,6 +1883,12 @@ Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
   final email = (body['email'] as String? ?? '').trim();
   final name = (body['name'] as String? ?? '').trim();
   final password = (body['password'] as String? ?? '');
+  // The form validates before it posts, but the endpoint is the boundary:
+  // a crafted request must not create an account the UI would reject.
+  final emailProblem = adminEmailProblem(email);
+  if (emailProblem != null) return _adminSetupBadRequest(emailProblem);
+  final passwordProblem = adminNewPasswordProblem(password);
+  if (passwordProblem != null) return _adminSetupBadRequest(passwordProblem);
   try {
     final user = await adminStore.createUser(
       email: email,
@@ -1912,10 +1926,7 @@ Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
 /// cheap pre-body check and by the authoritative reservation below.
 shelf.Response _loginLimitedResponse() => shelf.Response(
   429,
-  body: jsonEncode({
-    'ok': false,
-    'text': 'too many attempts — wait a minute',
-  }),
+  body: jsonEncode({'ok': false, 'text': 'too many attempts — wait a minute'}),
   headers: {'content-type': 'application/json'},
 );
 

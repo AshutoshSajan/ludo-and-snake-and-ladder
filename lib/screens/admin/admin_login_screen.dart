@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,9 +10,11 @@ import '../../app_routes.dart';
 import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
 import '../../services/server_url.dart';
+import '../../shared/admin_credentials.dart';
 import '../../ui/club_widgets.dart';
 import '../../ui/theme.dart';
 import 'admin_dashboard_screen.dart';
+import 'admin_native_form.dart';
 
 /// Admin sign-in at /admin: email + password. On a fresh server the first
 /// visit becomes a one-time setup that creates the admin account.
@@ -31,13 +34,21 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
   final _emailCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
   final _setupTokenCtrl = TextEditingController();
+  final _confirmFocus = FocusNode();
   final _setupTokenFocus = FocusNode();
+  final _nativeForm = GlobalKey<AdminNativeFormState>();
   bool? _setupRequired;
   String? _error;
   bool _busy = false;
   bool _showPassword = false;
+  bool _showConfirm = false;
   bool _showSetupToken = false;
+  String? _emailError;
+  String? _passwordError;
+  String? _confirmError;
+  String? _tokenError;
 
   // The admin page is web-only and same-origin with its server, so the
   // target is a build-time fact — the same rule the online lobby follows.
@@ -57,7 +68,9 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     _emailCtrl.dispose();
     _nameCtrl.dispose();
     _passCtrl.dispose();
+    _confirmCtrl.dispose();
     _setupTokenCtrl.dispose();
+    _confirmFocus.dispose();
     _setupTokenFocus.dispose();
     super.dispose();
   }
@@ -122,24 +135,54 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     }
   }
 
-  Future<void> _submit() async {
-    final email = _emailCtrl.text.trim();
-    final password = _passCtrl.text;
-    if (email.isEmpty || password.isEmpty) {
-      setState(() => _error = 'Enter email and password.');
-      return;
-    }
+  Future<void> _submit() => _submitValues(
+    AdminFormValues(
+      email: _emailCtrl.text.trim(),
+      name: _nameCtrl.text.trim(),
+      password: _passCtrl.text,
+      confirmPassword: _confirmCtrl.text,
+      setupToken: _setupTokenCtrl.text.trim(),
+    ),
+  );
+
+  Future<void> _submitValues(AdminFormValues values) async {
+    final setup = _setupRequired == true;
+    final email = values.email;
+    final password = values.password;
+    // The web form validates its own fields and only calls back with a clean
+    // form; this pass is the Flutter fallback's validator and a second guard
+    // for any caller. Both use the same shared rules, so the messages match.
+    final emailProblem = adminEmailProblem(email);
+    final passwordProblem = setup
+        ? adminNewPasswordProblem(password)
+        : adminSignInPasswordProblem(password);
+    final confirmProblem = setup
+        ? adminPasswordConfirmProblem(password, values.confirmPassword)
+        : null;
     // First-run setup always requires the server's ADMIN_TOKEN (fail
     // closed): without it the server answers 403, so say so up front
     // instead of spending a round trip.
-    if (_setupRequired == true && _setupTokenCtrl.text.trim().isEmpty) {
-      setState(
-        () => _error =
-            'A setup token is required — copy ADMIN_TOKEN from the server.',
-      );
+    final tokenProblem = setup && values.setupToken.isEmpty
+        ? 'Enter the server ADMIN_TOKEN.'
+        : null;
+    if (emailProblem != null ||
+        passwordProblem != null ||
+        confirmProblem != null ||
+        tokenProblem != null) {
+      setState(() {
+        _emailError = emailProblem;
+        _passwordError = passwordProblem;
+        _confirmError = confirmProblem;
+        _tokenError = tokenProblem;
+        _error = null;
+      });
       return;
     }
     setState(() {
+      _emailError = null;
+      _passwordError = null;
+      _confirmError = null;
+      _tokenError = null;
       _busy = true;
       _error = null;
     });
@@ -150,10 +193,8 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
         authed = await client.setup(
           email: email,
           password: password,
-          name: _nameCtrl.text.trim(),
-          setupToken: _setupTokenCtrl.text.trim().isEmpty
-              ? null
-              : _setupTokenCtrl.text.trim(),
+          name: values.name,
+          setupToken: values.setupToken.isEmpty ? null : values.setupToken,
         );
       } else {
         authed = await client.login(email: email, password: password);
@@ -181,11 +222,13 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     }
     if (!mounted) return;
     // Auth succeeded, so this is the moment the browser should offer to save
-    // the credential. Unfocus first: the web engine only submits a form once
-    // its focused input has gone dormant. The group's dispose action cancels
-    // instead, so a failed or abandoned sign-in never prompts to save.
+    // the credential. The web form is a real <form>: submitting it lets the
+    // browser's password manager see the same successful sign-in a plain HTML
+    // page would. The Flutter fallback still has to finish its autofill
+    // context explicitly. Both are no-ops when the other path is active.
     FocusManager.instance.primaryFocus?.unfocus();
     TextInput.finishAutofillContext();
+    _nativeForm.currentState?.save();
     final user = authed['user'] as Map? ?? {};
     ref
         .read(adminSessionProvider.notifier)
@@ -307,129 +350,227 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                                 icon: Icons.shield_outlined,
                                 title: 'First-run setup',
                                 body:
-                                    'The setup token is the server’s '
-                                    'ADMIN_TOKEN. It is required and is never '
-                                    'stored by this screen.',
+                                    'Passwords need 8–60 characters with a '
+                                    'letter, a number and a symbol. The setup '
+                                    'token is the server’s ADMIN_TOKEN — '
+                                    'required, and never stored by this screen.',
                               ),
                               const SizedBox(height: 14),
                             ],
-                            TextField(
-                              controller: _emailCtrl,
-                              enabled: !_busy,
-                              keyboardType: TextInputType.emailAddress,
-                              autofillHints: const [AutofillHints.username],
-                              contextMenuBuilder: _menuBuilder(secret: false),
-                              textInputAction: TextInputAction.next,
-                              decoration: const InputDecoration(
-                                labelText: 'Email',
-                                prefixIcon: Icon(
-                                  Icons.alternate_email,
-                                  size: 20,
-                                ),
-                              ),
-                            ),
-                            if (setup) ...[
-                              const SizedBox(height: 12),
+                            // The web form is a real DOM <form> in a platform
+                            // view: password managers cannot fill Flutter's
+                            // zero-sized autofill proxies on the current web
+                            // engine. The VM fallback below is what widget
+                            // tests exercise; `/admin` only exists on web.
+                            if (kIsWeb)
+                              AdminNativeForm(
+                                key: _nativeForm,
+                                setup: setup,
+                                busy: _busy,
+                                onSubmit: _submitValues,
+                              )
+                            else ...[
                               TextField(
-                                controller: _nameCtrl,
+                                controller: _emailCtrl,
                                 enabled: !_busy,
-                                autofillHints: const [AutofillHints.name],
+                                keyboardType: TextInputType.emailAddress,
+                                autofillHints: const [AutofillHints.username],
+                                contextMenuBuilder: _menuBuilder(secret: false),
                                 textInputAction: TextInputAction.next,
-                                decoration: const InputDecoration(
-                                  labelText: 'Name (optional)',
-                                  prefixIcon: Icon(
-                                    Icons.badge_outlined,
+                                onChanged: (_) {
+                                  if (_emailError != null) {
+                                    setState(() => _emailError = null);
+                                  }
+                                },
+                                maxLength: adminEmailMaxLength,
+                                decoration: InputDecoration(
+                                  labelText: 'Email',
+                                  errorText: _emailError,
+                                  counterText: '',
+                                  prefixIcon: const Icon(
+                                    Icons.alternate_email,
                                     size: 20,
                                   ),
                                 ),
                               ),
-                            ],
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: _passCtrl,
-                              enabled: !_busy,
-                              obscureText: !_showPassword,
-                              enableInteractiveSelection: true,
-                              enableSuggestions: false,
-                              autocorrect: false,
-                              keyboardType: TextInputType.visiblePassword,
-                              // A first-time setup creates the credential; a
-                              // sign-in presents an existing one. The hint tells
-                              // password managers which is which — the wrong hint
-                              // invites them to fight the field
-                              // (autofill-over-paste).
-                              autofillHints: setup
-                                  ? const [AutofillHints.newPassword]
-                                  : const [AutofillHints.password],
-                              contextMenuBuilder: _menuBuilder(secret: true),
-                              // Setup advances to the token explicitly: the
-                              // Show button sits between the two fields in
-                              // default traversal order.
-                              onEditingComplete: setup
-                                  ? () {
-                                      _passCtrl.clearComposing();
-                                      _setupTokenFocus.requestFocus();
-                                    }
-                                  : null,
-                              textInputAction: setup
-                                  ? TextInputAction.next
-                                  : TextInputAction.done,
-                              decoration: InputDecoration(
-                                labelText: 'Password',
-                                prefixIcon: const Icon(
-                                  Icons.lock_outline,
-                                  size: 20,
-                                ),
-                                suffixIcon: IconButton(
-                                  tooltip: _showPassword ? 'Hide' : 'Show',
-                                  icon: Icon(
-                                    _showPassword
-                                        ? Icons.visibility_off
-                                        : Icons.visibility,
-                                  ),
-                                  onPressed: () => setState(
-                                    () => _showPassword = !_showPassword,
+                              if (setup) ...[
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _nameCtrl,
+                                  enabled: !_busy,
+                                  autofillHints: const [AutofillHints.name],
+                                  textInputAction: TextInputAction.next,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Name (optional)',
+                                    prefixIcon: Icon(
+                                      Icons.badge_outlined,
+                                      size: 20,
+                                    ),
                                   ),
                                 ),
-                              ),
-                              // Enter submits a sign-in; during first-run
-                              // setup it advances to the setup token instead
-                              // so a half-filled form is never sent.
-                              onSubmitted: setup ? null : (_) => _submit(),
-                            ),
-                            if (setup) ...[
+                              ],
                               const SizedBox(height: 12),
                               TextField(
-                                controller: _setupTokenCtrl,
-                                focusNode: _setupTokenFocus,
+                                controller: _passCtrl,
                                 enabled: !_busy,
-                                obscureText: !_showSetupToken,
+                                obscureText: !_showPassword,
                                 enableInteractiveSelection: true,
                                 enableSuggestions: false,
                                 autocorrect: false,
                                 keyboardType: TextInputType.visiblePassword,
+                                // A first-time setup creates the credential; a
+                                // sign-in presents an existing one. The hint
+                                // tells password managers which is which — the
+                                // wrong hint invites them to fight the field
+                                // (autofill-over-paste).
+                                autofillHints: setup
+                                    ? const [AutofillHints.newPassword]
+                                    : const [AutofillHints.password],
                                 contextMenuBuilder: _menuBuilder(secret: true),
-                                textInputAction: TextInputAction.done,
+                                maxLength: setup
+                                    ? adminPasswordMaxLength
+                                    : null,
+                                onChanged: (_) {
+                                  if (_passwordError != null) {
+                                    setState(() => _passwordError = null);
+                                  }
+                                },
+                                // Setup walks password → confirm → token
+                                // explicitly: the Show buttons sit between the
+                                // fields in default traversal order.
+                                onEditingComplete: setup
+                                    ? () {
+                                        _passCtrl.clearComposing();
+                                        _confirmFocus.requestFocus();
+                                      }
+                                    : null,
+                                textInputAction: setup
+                                    ? TextInputAction.next
+                                    : TextInputAction.done,
                                 decoration: InputDecoration(
-                                  labelText: 'Setup token (server ADMIN_TOKEN)',
+                                  labelText: 'Password',
+                                  errorText: _passwordError,
+                                  helperText: setup
+                                      ? '8–60 chars · letter · number · symbol'
+                                      : null,
+                                  counterText: '',
                                   prefixIcon: const Icon(
-                                    Icons.key_outlined,
+                                    Icons.lock_outline,
                                     size: 20,
                                   ),
                                   suffixIcon: IconButton(
-                                    tooltip: _showSetupToken ? 'Hide' : 'Show',
+                                    tooltip: _showPassword ? 'Hide' : 'Show',
                                     icon: Icon(
-                                      _showSetupToken
+                                      _showPassword
                                           ? Icons.visibility_off
                                           : Icons.visibility,
                                     ),
                                     onPressed: () => setState(
-                                      () => _showSetupToken = !_showSetupToken,
+                                      () => _showPassword = !_showPassword,
                                     ),
                                   ),
                                 ),
-                                onSubmitted: (_) => _submit(),
+                                // Enter submits a sign-in; during first-run
+                                // setup it advances to the confirmation
+                                // instead so a half-filled form is never sent.
+                                onSubmitted: setup ? null : (_) => _submit(),
                               ),
+                              if (setup) ...[
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _confirmCtrl,
+                                  focusNode: _confirmFocus,
+                                  enabled: !_busy,
+                                  obscureText: !_showConfirm,
+                                  enableInteractiveSelection: true,
+                                  enableSuggestions: false,
+                                  autocorrect: false,
+                                  keyboardType: TextInputType.visiblePassword,
+                                  autofillHints: const [
+                                    AutofillHints.newPassword,
+                                  ],
+                                  contextMenuBuilder: _menuBuilder(
+                                    secret: true,
+                                  ),
+                                  maxLength: adminPasswordMaxLength,
+                                  onChanged: (_) {
+                                    if (_confirmError != null) {
+                                      setState(() => _confirmError = null);
+                                    }
+                                  },
+                                  onEditingComplete: () {
+                                    _confirmCtrl.clearComposing();
+                                    _setupTokenFocus.requestFocus();
+                                  },
+                                  textInputAction: TextInputAction.next,
+                                  decoration: InputDecoration(
+                                    labelText: 'Confirm password',
+                                    errorText: _confirmError,
+                                    counterText: '',
+                                    prefixIcon: const Icon(
+                                      Icons.lock_outline,
+                                      size: 20,
+                                    ),
+                                    suffixIcon: IconButton(
+                                      tooltip: _showConfirm ? 'Hide' : 'Show',
+                                      icon: Icon(
+                                        _showConfirm
+                                            ? Icons.visibility_off
+                                            : Icons.visibility,
+                                      ),
+                                      onPressed: () => setState(
+                                        () => _showConfirm = !_showConfirm,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              if (setup) ...[
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _setupTokenCtrl,
+                                  focusNode: _setupTokenFocus,
+                                  enabled: !_busy,
+                                  obscureText: !_showSetupToken,
+                                  enableInteractiveSelection: true,
+                                  enableSuggestions: false,
+                                  autocorrect: false,
+                                  keyboardType: TextInputType.visiblePassword,
+                                  contextMenuBuilder: _menuBuilder(
+                                    secret: true,
+                                  ),
+                                  onChanged: (_) {
+                                    if (_tokenError != null) {
+                                      setState(() => _tokenError = null);
+                                    }
+                                  },
+                                  textInputAction: TextInputAction.done,
+                                  decoration: InputDecoration(
+                                    labelText:
+                                        'Setup token (server ADMIN_TOKEN)',
+                                    errorText: _tokenError,
+                                    prefixIcon: const Icon(
+                                      Icons.key_outlined,
+                                      size: 20,
+                                    ),
+                                    suffixIcon: IconButton(
+                                      tooltip: _showSetupToken
+                                          ? 'Hide'
+                                          : 'Show',
+                                      icon: Icon(
+                                        _showSetupToken
+                                            ? Icons.visibility_off
+                                            : Icons.visibility,
+                                      ),
+                                      onPressed: () => setState(
+                                        () =>
+                                            _showSetupToken = !_showSetupToken,
+                                      ),
+                                    ),
+                                  ),
+                                  onSubmitted: (_) => _submit(),
+                                ),
+                              ],
                             ],
                             if (_error != null) ...[
                               const SizedBox(height: 16),
@@ -439,7 +580,11 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                             SizedBox(
                               width: double.infinity,
                               child: FilledButton(
-                                onPressed: _busy ? null : _submit,
+                                onPressed: _busy
+                                    ? null
+                                    : kIsWeb
+                                    ? () => _nativeForm.currentState?.submit()
+                                    : _submit,
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   mainAxisAlignment: MainAxisAlignment.center,
