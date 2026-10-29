@@ -308,6 +308,14 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
     );
   }
 
+  // Each panel's FutureBuilder keys itself to its panel. Without a key the
+  // framework reuses the tab-slot's state across switches (same runtime
+  // type, same null key) and FutureBuilder keeps the previous future's
+  // resolved data until the new one completes — so for a frame or a slow
+  // round-trip, the previous panel's JSON flowed through this panel's
+  // casts (`overview`'s Map<…> `live` through `as List?`, the feedback
+  // queue through `d['pk'] as String`), throwing inside build and painting
+  // the red error widget. That was the reported dashboard flicker.
   Widget _tabBody() => switch (_tab) {
     0 => _statsTab(),
     1 => _roomsTab(),
@@ -459,6 +467,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   }
 
   Widget _statsTab() => FutureBuilder<Map<String, dynamic>>(
+    key: const ValueKey('admin-panel-stats'),
     future: _overview,
     builder: (c, s) {
       final header = _header(
@@ -559,6 +568,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   }
 
   Widget _roomsTab() => FutureBuilder<Map<String, dynamic>>(
+    key: const ValueKey('admin-panel-rooms'),
     future: _rooms ??= widget.client.rooms(),
     builder: (c, s) {
       final header = _header(
@@ -728,6 +738,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   }
 
   Widget _playersTab() => FutureBuilder<Map<String, dynamic>>(
+    key: const ValueKey('admin-panel-players'),
     future: _players ??= widget.client.players(),
     builder: (c, s) {
       final header = _header(
@@ -929,6 +940,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   }
 
   Widget _usersTab() => FutureBuilder<Map<String, dynamic>>(
+    key: const ValueKey('admin-panel-users'),
     future: _users ??= widget.client.users(),
     builder: (c, s) {
       final header = _header(
@@ -1043,6 +1055,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   }
 
   Widget _auditTab() => FutureBuilder<Map<String, dynamic>>(
+    key: const ValueKey('admin-panel-audit'),
     future: _audit ??= widget.client.audit(),
     builder: (c, s) {
       final header = _header(
@@ -1155,6 +1168,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   /// critical-first, newest tiebreak), filterable by status/category,
   /// with quick status/priority changes and delete.
   Widget _reportsTab() => FutureBuilder<Map<String, dynamic>>(
+    key: const ValueKey('admin-panel-reports'),
     future: _reports,
     builder: (c, s) {
       final header = _header(
@@ -1575,6 +1589,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   /// "all the tables": list, search, insert, edit, delete. Read-only
   /// tables (the audit log) show no write affordances.
   Widget _dataTab() => FutureBuilder<Map<String, dynamic>>(
+    key: const ValueKey('admin-panel-data'),
     future: _tableRows,
     builder: (c, s) {
       final header = _header(
