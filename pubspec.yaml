@@ -47,7 +47,7 @@ dependencies:
   web_socket_channel: ^3.0.0
   sqlite3: ^3.5.2
   http: ^1.6.0
-  crypto: ^3.0.0
+  crypto: ^3.0.8
   # Table voice chat: WebRTC peer-to-peer audio, signalled over the game's
   # WebSocket. dart_webrtc + web are the browser side of that glue
   # (MediaStreamWeb / HTMLAudioElement); both are direct deps because the
