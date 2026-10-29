@@ -1,10 +1,10 @@
-/// The back gesture on an online table routes through the screen's leave
-/// flow instead of popping raw — a raw pop only drops the socket, and the
-/// server reads that silence as "might be back soon", keeping the seat
-/// seated while the others wait on a player who is not coming back. Here:
-/// does the gesture reach the flow, does a confirmed leave Carry the flow
-/// through both of its phases, and does an offline board (where nobody is
-/// waiting on anybody) pass the back press straight through.
+/// The back gesture on a running game routes through the screen's leave
+/// flow instead of popping raw — a raw pop only drops the socket (the server
+/// reads that silence as "might be back soon" and seats a ghost) or simply
+/// erases the in-memory match on a local board. Here: does the gesture reach
+/// the flow, does a confirmed leave carry the flow through both of its
+/// phases, and does a board with nothing at stake pass the back press
+/// straight through.
 ///
 /// One boundary by design: the interceptor never pops the route itself —
 /// the screen owns its exit (the online lobby swaps its body for the
@@ -13,7 +13,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:game_club/ui/shared/online_leave_pop.dart';
+import 'package:game_club/ui/shared/leave_guard.dart';
 
 void main() {
   final key = GlobalKey<NavigatorState>();
@@ -27,7 +27,7 @@ void main() {
         initialRoute: '/table',
         routes: {
           '/': (_) => const Scaffold(body: Text('home')),
-          '/table': (_) => OnlineLeavePop(
+          '/table': (_) => LeaveGuard(
             active: active,
             // Mirrors the screens' `_leave`: confirm first, then do the leave
             // work. Recording 'left' is the flow's second phase landing.
