@@ -71,10 +71,7 @@ shelf.Request _postFrom(
   return shelf.Request(
     'POST',
     Uri.parse('http://localhost/$path'),
-    headers: {
-      'content-type': 'application/json',
-      'x-forwarded-for': ?xff,
-    },
+    headers: {'content-type': 'application/json', 'x-forwarded-for': ?xff},
     context: {'shelf.io.connection_info': ?conn},
     body: Stream.fromIterable([utf8.encode(bodyJson)]),
   );
@@ -247,6 +244,39 @@ void main() {
         }),
       );
       expect(weak.statusCode, 400);
+
+      // The endpoint applies the form's shared strength rules: a password
+      // that has length but no symbol, an invalid email, and an overlong
+      // password are all refused before anything is created.
+      final noSymbol = await adminSetupHandler(
+        _post('admin/setup', {
+          'email': 'r@x.io',
+          'password': 'alllettersonly1',
+          'setupToken': 'test-secret',
+        }),
+      );
+      expect(noSymbol.statusCode, 400);
+      expect((await _json(noSymbol))['text'], 'Add at least one symbol.');
+
+      final badEmail = await adminSetupHandler(
+        _post('admin/setup', {
+          'email': 'root@',
+          'password': 'long-enough-1',
+          'setupToken': 'test-secret',
+        }),
+      );
+      expect(badEmail.statusCode, 400);
+      expect((await _json(badEmail))['text'], 'Enter a valid email address.');
+
+      final tooLong = await adminSetupHandler(
+        _post('admin/setup', {
+          'email': 'r@x.io',
+          'password': 'a1!${'x' * 58}',
+          'setupToken': 'test-secret',
+        }),
+      );
+      expect(tooLong.statusCode, 400);
+      expect((await _json(tooLong))['text'], 'Use at most 60 characters.');
 
       final setup = await adminSetupHandler(
         _post('admin/setup', {
@@ -479,37 +509,39 @@ void main() {
       expect(after.statusCode, 429);
     });
 
-    test('a successful login frees its slot without spending the budget',
-        () async {
-      final savedStore = adminStore;
-      adminStore = AdminStore.inMemory();
-      addTearDown(() {
-        adminStore = savedStore;
+    test(
+      'a successful login frees its slot without spending the budget',
+      () async {
+        final savedStore = adminStore;
+        adminStore = AdminStore.inMemory();
+        addTearDown(() {
+          adminStore = savedStore;
+          resetLoginAttempts();
+        });
         resetLoginAttempts();
-      });
-      resetLoginAttempts();
-      await adminStore.createUser(
-        email: 'root@x.io',
-        name: 'Root',
-        password: 'long-enough-1',
-        role: 'admin',
-        iterations: 1000,
-        by: 'test',
-      );
-
-      // Successes never spend the ten-failure budget: twelve in a row all
-      // log in. An eleventh would be refused if a success were recorded
-      // as a miss, and a leaked reservation would refuse one of ten.
-      for (var i = 0; i < 12; i++) {
-        final res = await adminLoginHandler(
-          _post('admin/login', {
-            'email': 'root@x.io',
-            'password': 'long-enough-1',
-          }),
+        await adminStore.createUser(
+          email: 'root@x.io',
+          name: 'Root',
+          password: 'long-enough-1',
+          role: 'admin',
+          iterations: 1000,
+          by: 'test',
         );
-        expect(res.statusCode, 200, reason: 'login ${i + 1} of 12');
-      }
-    });
+
+        // Successes never spend the ten-failure budget: twelve in a row all
+        // log in. An eleventh would be refused if a success were recorded
+        // as a miss, and a leaked reservation would refuse one of ten.
+        for (var i = 0; i < 12; i++) {
+          final res = await adminLoginHandler(
+            _post('admin/login', {
+              'email': 'root@x.io',
+              'password': 'long-enough-1',
+            }),
+          );
+          expect(res.statusCode, 200, reason: 'login ${i + 1} of 12');
+        }
+      },
+    );
 
     test('admin can list and create users', () async {
       final savedStore = adminStore;

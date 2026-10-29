@@ -8,6 +8,7 @@ import 'package:game_club/main.dart';
 import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/screens/admin/admin_login_screen.dart';
 import 'package:game_club/services/admin_client.dart';
+import 'package:game_club/shared/admin_credentials.dart';
 import 'package:game_club/ui/admin_badge_web.dart';
 import 'package:game_club/ui/page_app_bar.dart';
 import 'package:game_club/ui/theme.dart';
@@ -223,7 +224,7 @@ void main() {
 
     // Enter on the email used to call _submit with an empty password and
     // paint an error; the keyboard's Next must only move focus.
-    expect(find.text('Enter email and password.'), findsNothing);
+    expect(find.text('Enter your password.'), findsNothing);
     final password = tester.widget<EditableText>(
       find.descendant(
         of: find.widgetWithText(TextField, 'Password'),
@@ -234,7 +235,7 @@ void main() {
   });
 
   testWidgets(
-    'first-run setup hints a new password and advances to the token',
+    'first-run setup hints a new password and walks confirm to the token',
     (tester) async {
       SharedPreferences.setMockInitialValues({});
       await tester.pumpWidget(
@@ -250,18 +251,39 @@ void main() {
       final password = tester.widget<TextField>(
         find.widgetWithText(TextField, 'Password'),
       );
+      final confirm = tester.widget<TextField>(
+        find.widgetWithText(TextField, 'Confirm password'),
+      );
       expect(name.autofillHints, const [AutofillHints.name]);
       expect(password.autofillHints, const [AutofillHints.newPassword]);
+      expect(confirm.autofillHints, const [AutofillHints.newPassword]);
+      expect(password.maxLength, adminPasswordMaxLength);
+      expect(confirm.maxLength, adminPasswordMaxLength);
 
       final field = find.widgetWithText(TextField, 'Password');
       await tester.tap(field);
       await tester.pump();
-      await tester.enterText(field, 'a-long-enough-password');
+      await tester.enterText(field, 'a-long-enough-1');
       await tester.testTextInput.receiveAction(TextInputAction.next);
       await tester.pumpAndSettle();
 
-      // Next must reach the setup token, not fire a half-filled setup request.
-      expect(find.text('Enter email and password.'), findsNothing);
+      // Next must reach the confirmation, not fire a half-filled setup.
+      expect(find.text('Enter your email address.'), findsNothing);
+      final confirmField = tester.widget<EditableText>(
+        find.descendant(
+          of: find.widgetWithText(TextField, 'Confirm password'),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(confirmField.focusNode.hasFocus, isTrue);
+
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Confirm password'),
+        'a-long-enough-1',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.next);
+      await tester.pumpAndSettle();
+
       final token = tester.widget<EditableText>(
         find.descendant(
           of: find.widgetWithText(
@@ -301,6 +323,214 @@ void main() {
     expect(ink, isNotNull);
     expect(fill!.computeLuminance(), lessThan(0.05));
     expect(ink!.computeLuminance(), greaterThan(0.5));
+  });
+
+  testWidgets('setup submits every field through the shared value mapping', (
+    tester,
+  ) async {
+    // The web form and the Flutter fallback hand the same
+    // [AdminFormValues] to the screen, so the fallback pins the mapping:
+    // name and setup token must survive the trip, not just email/password.
+    Map<String, dynamic>? posted;
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminLoginScreen(
+            clientFactory: () => AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': true}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                if (request.url.path == '/admin/setup') {
+                  posted = jsonDecode(request.body) as Map<String, dynamic>;
+                  return http.Response(
+                    jsonEncode({
+                      'token': 'tok',
+                      'user': {'email': 'root@x.io', 'name': 'Root'},
+                    }),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                return http.Response('{}', 404);
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Email'),
+      'root@x.io',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Name (optional)'),
+      'Root',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'a-new-long-password1',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm password'),
+      'a-new-long-password1',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Setup token (server ADMIN_TOKEN)'),
+      'admin-token-123',
+    );
+    final submit = find.widgetWithText(FilledButton, 'Create admin account');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(posted, {
+      'email': 'root@x.io',
+      'password': 'a-new-long-password1',
+      'name': 'Root',
+      'setupToken': 'admin-token-123',
+    });
+  });
+
+  testWidgets('sign-in refuses a malformed email before the API call', (
+    tester,
+  ) async {
+    var posted = false;
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminLoginScreen(
+            clientFactory: () => AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': false}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                posted = true;
+                return http.Response('{}', 200);
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.widgetWithText(TextField, 'Email'), 'root@');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'hunter2!',
+    );
+    final submit = find.widgetWithText(FilledButton, 'Sign in');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enter a valid email address.'), findsOneWidget);
+    expect(posted, isFalse);
+  });
+
+  testWidgets('setup enforces password strength and confirmation', (
+    tester,
+  ) async {
+    var posted = false;
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminLoginScreen(
+            clientFactory: () => AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': true}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                posted = true;
+                return http.Response('{}', 200);
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Email'),
+      'root@x.io',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'alllettersonly',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm password'),
+      'alllettersonly',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Setup token (server ADMIN_TOKEN)'),
+      'admin-token-123',
+    );
+    final submit = find.widgetWithText(FilledButton, 'Create admin account');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    // Letters alone are not enough.
+    expect(find.text('Add at least one number.'), findsOneWidget);
+    expect(posted, isFalse);
+
+    // A strong password with a confirmation typo is still refused.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'alllettersonly1!',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm password'),
+      'alllettersonly1?',
+    );
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Passwords do not match.'), findsOneWidget);
+    expect(posted, isFalse);
+  });
+
+  testWidgets('setup caps a new password at 60 characters', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: _loginScreen(setupRequired: true)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final password = find.widgetWithText(TextField, 'Password');
+    await tester.enterText(password, 'a1!${'x' * 80}');
+    await tester.pump();
+
+    final field = tester.widget<TextField>(password);
+    expect(field.controller!.text.length, adminPasswordMaxLength);
   });
 
   testWidgets('page bar content honors the 16px body inset', (tester) async {
