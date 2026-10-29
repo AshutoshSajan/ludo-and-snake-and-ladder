@@ -4,14 +4,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../controllers/ludo_session.dart';
 import '../../engine/ludo/ludo_models.dart';
 import '../../providers/app_providers.dart';
+import '../shared/quit_confirm.dart';
 import '../shared/seat_manager.dart';
 import '../theme.dart';
 
 /// Pause menu + mid-game player management for the Ludo view.
 void showLudoPauseMenu(
-    BuildContext context, WidgetRef ref, LudoSession session) {
+  BuildContext screen,
+  WidgetRef ref,
+  LudoSession session,
+) {
   showModalBottomSheet(
-    context: context,
+    context: screen,
     backgroundColor: AppColors.feltLight,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -29,20 +33,32 @@ void showLudoPauseMenu(
               showLudoSeatManager(context, ref, session);
             },
           ),
-          Consumer(builder: (context, ref, _) {
-            final on = ref.watch(soundEnabledProvider);
-            return ListTile(
-              leading: Icon(on ? Icons.volume_up : Icons.volume_off),
-              title: Text(on ? 'Sound: on' : 'Sound: off'),
-              onTap: () => ref.read(soundEnabledProvider.notifier).toggle(),
-            );
-          }),
+          Consumer(
+            builder: (context, ref, _) {
+              final on = ref.watch(soundEnabledProvider);
+              return ListTile(
+                leading: Icon(on ? Icons.volume_up : Icons.volume_off),
+                title: Text(on ? 'Sound: on' : 'Sound: off'),
+                onTap: () => ref.read(soundEnabledProvider.notifier).toggle(),
+              );
+            },
+          ),
           ListTile(
             leading: const Icon(Icons.home_outlined),
             title: const Text('Quit to home'),
-            onTap: () {
+            onTap: () async {
+              // A local match lives only in memory, so quitting ends it for
+              // good — confirm before anything is thrown away. The sheet's
+              // own `context` dies with the sheet, so the confirmation and
+              // the walk home run on the game screen's [screen]; only the
+              // dismissal belongs to the sheet.
               Navigator.of(context).pop();
-              Navigator.of(context).popUntil((r) => r.isFirst);
+              final quit = await showQuitConfirm(
+                screen,
+                content: 'The match ends when you leave. Nothing is saved.',
+              );
+              if (!quit || !screen.mounted) return;
+              Navigator.of(screen).popUntil((r) => r.isFirst);
             },
           ),
           const SizedBox(height: 12),
@@ -53,7 +69,10 @@ void showLudoPauseMenu(
 }
 
 void showLudoSeatManager(
-    BuildContext context, WidgetRef ref, LudoSession session) {
+  BuildContext context,
+  WidgetRef ref,
+  LudoSession session,
+) {
   final s = session.state;
   showSeatManager(
     context,
@@ -80,7 +99,10 @@ void showLudoSeatManager(
 }
 
 Future<void> _showAddPlayerDialog(
-    BuildContext context, WidgetRef ref, LudoSession session) async {
+  BuildContext context,
+  WidgetRef ref,
+  LudoSession session,
+) async {
   final profiles = ref.read(profilesProvider);
   final freeColors = session.freeColors();
   if (freeColors.isEmpty) return;
@@ -118,8 +140,9 @@ Future<void> _showAddPlayerDialog(
                 decoration: const InputDecoration(labelText: 'Profile'),
                 items: [
                   const DropdownMenuItem(value: null, child: Text('— none —')),
-                  ...profiles.map((p) =>
-                      DropdownMenuItem(value: p.id, child: Text(p.name))),
+                  ...profiles.map(
+                    (p) => DropdownMenuItem(value: p.id, child: Text(p.name)),
+                  ),
                 ],
                 onChanged: (v) => setLocal(() {
                   profileId = v;
@@ -143,11 +166,17 @@ Future<void> _showAddPlayerDialog(
                   decoration: const InputDecoration(labelText: 'Difficulty'),
                   items: const [
                     DropdownMenuItem(
-                        value: AIDifficulty.easy, child: Text('Easy')),
+                      value: AIDifficulty.easy,
+                      child: Text('Easy'),
+                    ),
                     DropdownMenuItem(
-                        value: AIDifficulty.medium, child: Text('Medium')),
+                      value: AIDifficulty.medium,
+                      child: Text('Medium'),
+                    ),
                     DropdownMenuItem(
-                        value: AIDifficulty.hard, child: Text('Hard')),
+                      value: AIDifficulty.hard,
+                      child: Text('Hard'),
+                    ),
                   ],
                   onChanged: (v) =>
                       setLocal(() => difficulty = v ?? AIDifficulty.medium),
@@ -157,8 +186,9 @@ Future<void> _showAddPlayerDialog(
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () {
               final name = nameCtrl.text.trim();

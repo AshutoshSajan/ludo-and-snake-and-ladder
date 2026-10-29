@@ -3,14 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../controllers/snakes_session.dart';
 import '../../providers/app_providers.dart';
+import '../shared/quit_confirm.dart';
 import '../shared/seat_manager.dart';
 import '../theme.dart';
 
 /// Pause menu + mid-game player management for the Snakes & Ladders view.
 void showSnakesPauseMenu(
-    BuildContext context, WidgetRef ref, SnakesSession session) {
+  BuildContext screen,
+  WidgetRef ref,
+  SnakesSession session,
+) {
   showModalBottomSheet(
-    context: context,
+    context: screen,
     backgroundColor: AppColors.feltLight,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -28,20 +32,32 @@ void showSnakesPauseMenu(
               showSnakesSeatManager(context, ref, session);
             },
           ),
-          Consumer(builder: (context, ref, _) {
-            final on = ref.watch(soundEnabledProvider);
-            return ListTile(
-              leading: Icon(on ? Icons.volume_up : Icons.volume_off),
-              title: Text(on ? 'Sound: on' : 'Sound: off'),
-              onTap: () => ref.read(soundEnabledProvider.notifier).toggle(),
-            );
-          }),
+          Consumer(
+            builder: (context, ref, _) {
+              final on = ref.watch(soundEnabledProvider);
+              return ListTile(
+                leading: Icon(on ? Icons.volume_up : Icons.volume_off),
+                title: Text(on ? 'Sound: on' : 'Sound: off'),
+                onTap: () => ref.read(soundEnabledProvider.notifier).toggle(),
+              );
+            },
+          ),
           ListTile(
             leading: const Icon(Icons.home_outlined),
             title: const Text('Quit to home'),
-            onTap: () {
+            onTap: () async {
+              // A local match lives only in memory, so quitting ends it for
+              // good — confirm before anything is thrown away. The sheet's
+              // own `context` dies with the sheet, so the confirmation and
+              // the walk home run on the game screen's [screen]; only the
+              // dismissal belongs to the sheet.
               Navigator.of(context).pop();
-              Navigator.of(context).popUntil((r) => r.isFirst);
+              final quit = await showQuitConfirm(
+                screen,
+                content: 'The match ends when you leave. Nothing is saved.',
+              );
+              if (!quit || !screen.mounted) return;
+              Navigator.of(screen).popUntil((r) => r.isFirst);
             },
           ),
           const SizedBox(height: 12),
@@ -52,7 +68,10 @@ void showSnakesPauseMenu(
 }
 
 void showSnakesSeatManager(
-    BuildContext context, WidgetRef ref, SnakesSession session) {
+  BuildContext context,
+  WidgetRef ref,
+  SnakesSession session,
+) {
   final s = session.state;
   showSeatManager(
     context,
@@ -64,12 +83,14 @@ void showSnakesSeatManager(
         SeatRowData(
           index: i,
           name: s.players[i].name,
-          color: AppColors.snakesColors[
-              s.players[i].tokenIndex % AppColors.snakesColors.length],
+          color:
+              AppColors.snakesColors[s.players[i].tokenIndex %
+                  AppColors.snakesColors.length],
           isAI: s.players[i].isAI,
           isCurrent: i == s.currentPlayerIndex,
           canRemove: session.canRemovePlayer,
-          subtitle: 'Square: ${s.players[i].square == 0 ? 'start' : s.players[i].square}',
+          subtitle:
+              'Square: ${s.players[i].square == 0 ? 'start' : s.players[i].square}',
         ),
     ],
     onSwapAI: session.swapToAI,
@@ -80,7 +101,10 @@ void showSnakesSeatManager(
 }
 
 Future<void> _showAddPlayerDialog(
-    BuildContext context, WidgetRef ref, SnakesSession session) async {
+  BuildContext context,
+  WidgetRef ref,
+  SnakesSession session,
+) async {
   final profiles = ref.read(profilesProvider);
   String? profileId;
   final nameCtrl = TextEditingController();
@@ -101,8 +125,9 @@ Future<void> _showAddPlayerDialog(
                 decoration: const InputDecoration(labelText: 'Profile'),
                 items: [
                   const DropdownMenuItem(value: null, child: Text('— none —')),
-                  ...profiles.map((p) =>
-                      DropdownMenuItem(value: p.id, child: Text(p.name))),
+                  ...profiles.map(
+                    (p) => DropdownMenuItem(value: p.id, child: Text(p.name)),
+                  ),
                 ],
                 onChanged: (v) => setLocal(() {
                   profileId = v;
@@ -125,13 +150,17 @@ Future<void> _showAddPlayerDialog(
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () {
               final name = nameCtrl.text.trim();
               if (name.isEmpty) return;
-              session.addPlayer(profileId: asBot ? null : profileId, name: name);
+              session.addPlayer(
+                profileId: asBot ? null : profileId,
+                name: name,
+              );
               Navigator.of(context).pop();
             },
             child: const Text('Add'),

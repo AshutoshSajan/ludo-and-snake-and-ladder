@@ -15,7 +15,8 @@ import '../../engine/ludo/ludo_models.dart';
 import '../../engine/ludo/ludo_rules.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
-import '../shared/online_leave_pop.dart';
+import '../shared/leave_guard.dart';
+import '../shared/quit_confirm.dart';
 import '../shared/voice_button.dart';
 import '../../services/saved_game.dart';
 import '../../services/sound_service.dart';
@@ -295,6 +296,18 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
     );
   }
 
+  /// Walking out of a local match is a statement too: the whole game lives
+  /// in memory, so the back press (like the pause menu's quit) ends the
+  /// table for good — ask first, because there is no coming back.
+  Future<void> _quitLocal() async {
+    final quit = await showQuitConfirm(
+      context,
+      content: 'The match ends when you leave. Nothing is saved.',
+    );
+    if (!quit || !mounted) return;
+    Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
   /// Spectators watch; they don't hand a seat to anyone, including themselves.
   bool get _canToggleAuto =>
       !(widget.onlineClient?.isSpectator ?? false) && !session.isBusy;
@@ -303,27 +316,15 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
   /// forfeited, the pieces come off the board, and the others are told — so it
   /// asks first, because none of that can be undone by coming back.
   Future<void> _leave() async {
-    final sure = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Leave the game?'),
-        content: const Text(
+    final sure = await showQuitConfirm(
+      context,
+      title: 'Leave the game?',
+      confirmLabel: 'Leave',
+      content:
           'Your pieces leave the board and the other players are told you '
           'went. You can\'t rejoin this game after that.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Stay'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Leave'),
-          ),
-        ],
-      ),
     );
-    if (sure != true || !mounted) return;
+    if (!sure || !mounted) return;
     await session.leaveOnline();
     final onLeave = widget.onOnlineLeave;
     if (onLeave != null) {
@@ -471,9 +472,12 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
       _hintToken = null;
     }
 
-    return OnlineLeavePop(
-      active: widget.onlineClient != null,
-      onLeave: _leave,
+    return LeaveGuard(
+      // Online tables route the gesture through their leave flow; a local
+      // match still asks before it is thrown away — but a finished game has
+      // nothing left to lose, so there the gesture is plain navigation.
+      active: widget.onlineClient != null || s.phase != LudoPhase.gameOver,
+      onLeave: widget.onlineClient != null ? _leave : _quitLocal,
       child: Scaffold(
         // The online dock lives in the lobby's Scaffold body, which already
         // shrinks for the keyboard. Letting this inner Scaffold subtract the
@@ -895,9 +899,7 @@ class _LudoGameViewState extends ConsumerState<LudoGameView>
                           // Only the seat whose clock this is gets the
                           // ten-second tone; the others are watching.
                           onTenSeconds: p.id == widget.onlineClient!.seatId
-                              ? () => ref
-                                    .read(soundServiceProvider)
-                                    .countdown()
+                              ? () => ref.read(soundServiceProvider).countdown()
                               : null,
                         )
                       : null),

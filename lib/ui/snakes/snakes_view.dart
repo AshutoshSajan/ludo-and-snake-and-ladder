@@ -1,4 +1,5 @@
 import '../page_app_bar.dart';
+
 import 'dart:async';
 import 'dart:math' show Random;
 import 'dart:math' as math;
@@ -15,6 +16,8 @@ import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
 import '../../services/saved_game.dart';
 import '../shared/dice_widget.dart';
+import '../shared/leave_guard.dart';
+import '../shared/quit_confirm.dart';
 import '../shared/victory_dialog.dart';
 import '../theme.dart';
 import 'snakes_board_painter.dart';
@@ -145,6 +148,19 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     if (mounted) setState(() {});
   }
 
+  /// The back gesture on a running local match ends it for good — the game
+  /// lives only in memory — so it asks first, exactly like the pause menu's
+  /// "Quit to home". A finished game has nothing left to lose: the guard is
+  /// inert and back is plain navigation.
+  Future<void> _quit() async {
+    final quit = await showQuitConfirm(
+      context,
+      content: 'The match ends when you leave. Nothing is saved.',
+    );
+    if (!quit || !mounted) return;
+    Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
   void _onGameOver(SnakesState s) {
     ref
         .read(profilesProvider.notifier)
@@ -199,82 +215,83 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
     final s = session.state;
     final movingToken = session.activeAnim?.tokenIndex;
 
-    return Scaffold(
-      appBar: PageAppBar(
-        title: const Text('Snakes & Ladders'),
-        actions: [
-          const SoundToggleButton(),
-          IconButton(
-            icon: Icon(
-              session.autoPlay ? Icons.auto_mode : Icons.auto_mode_outlined,
+    return LeaveGuard(
+      active: s.phase != SnakesPhase.gameOver,
+      onLeave: _quit,
+      child: Scaffold(
+        appBar: PageAppBar(
+          title: const Text('Snakes & Ladders'),
+          actions: [
+            const SoundToggleButton(),
+            IconButton(
+              icon: Icon(
+                session.autoPlay ? Icons.auto_mode : Icons.auto_mode_outlined,
+              ),
+              color: session.autoPlay ? AppColors.gold : null,
+              tooltip: session.autoPlay
+                  ? 'Autoplay on — tap to take over'
+                  : 'Autoplay — the table plays your turns',
+              onPressed: session.toggleAutoPlay,
             ),
-            color: session.autoPlay ? AppColors.gold : null,
-            tooltip: session.autoPlay
-                ? 'Autoplay on — tap to take over'
-                : 'Autoplay — the table plays your turns',
-            onPressed: session.toggleAutoPlay,
-          ),
-          IconButton(
-            icon: const Icon(Icons.pause),
-            onPressed: () => showSnakesPauseMenu(context, ref, session),
-            tooltip: 'Pause / players',
-          ),
-          IconButton(
-            icon: const Icon(Icons.bug_report_outlined),
-            tooltip: 'Report an issue',
-            onPressed: () => BugReportSheet.show(
-              context,
-              serverUrl: defaultServerUrl(),
+            IconButton(
+              icon: const Icon(Icons.pause),
+              onPressed: () => showSnakesPauseMenu(context, ref, session),
+              tooltip: 'Pause / players',
             ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, cons) {
-                  // The board and the single home panel share one stage, so
-                  // the ghost that leaves a home chip and the chip itself use
-                  // the same coordinate space. The stage chooses the side
-                  // rail when that buys a larger board (desktop), and the
-                  // under-board strip when it does not (narrow phone).
-                  final metrics = SnakesStageMetrics.layout(
-                    available: cons.biggest,
-                    players: s.players.length,
-                  );
-                  return SnakesStage(
-                    metrics: metrics,
-                    board: Semantics(
-                      label: _boardSemanticLabel(s),
-                      liveRegion: true,
-                      child: CustomPaint(
-                        painter: SnakesBoardPainter(
-                          highlightSquare: s.phase == SnakesPhase.awaitingMove
-                              ? _pendingTarget()
-                              : null,
+            IconButton(
+              icon: const Icon(Icons.bug_report_outlined),
+              tooltip: 'Report an issue',
+              onPressed: () =>
+                  BugReportSheet.show(context, serverUrl: defaultServerUrl()),
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, cons) {
+                    // The board and the single home panel share one stage, so
+                    // the ghost that leaves a home chip and the chip itself use
+                    // the same coordinate space. The stage chooses the side
+                    // rail when that buys a larger board (desktop), and the
+                    // under-board strip when it does not (narrow phone).
+                    final metrics = SnakesStageMetrics.layout(
+                      available: cons.biggest,
+                      players: s.players.length,
+                    );
+                    return SnakesStage(
+                      metrics: metrics,
+                      board: Semantics(
+                        label: _boardSemanticLabel(s),
+                        liveRegion: true,
+                        child: CustomPaint(
+                          painter: SnakesBoardPainter(
+                            highlightSquare: s.phase == SnakesPhase.awaitingMove
+                                ? _pendingTarget()
+                                : null,
+                          ),
                         ),
                       ),
-                    ),
-                    home: _homeArea(metrics, s, movingToken),
-                    overlays: [
-                      ..._pawnWidgets(metrics, s, movingToken),
-                      if (session.activeAnim != null) _ghost(metrics),
-                    ],
-                  );
-                },
+                      home: _homeArea(metrics, s, movingToken),
+                      overlays: [
+                        ..._pawnWidgets(metrics, s, movingToken),
+                        if (session.activeAnim != null) _ghost(metrics),
+                      ],
+                    );
+                  },
+                ),
               ),
-            ),
-            _controls(s),
-          ],
+              _controls(s),
+            ],
+          ),
         ),
       ),
     );
   }
 
   // ------------------------------------------------------------- home area
-
   /// The one home panel. [SnakesStageMetrics] owns every size and centre;
   /// this method only decides who is still waiting and paints them. The
   /// moving pawn is omitted because the ghost draws it.
@@ -339,10 +356,7 @@ class _SnakesGameViewState extends ConsumerState<SnakesGameView> {
         final shift = players.length > 1 ? cell * 0.16 : 0.0;
         final c =
             metrics.boardOrigin +
-            SnakesBoardPainter.squareCenter(
-              sq,
-              Size.square(metrics.boardSize),
-            );
+            SnakesBoardPainter.squareCenter(sq, Size.square(metrics.boardSize));
         widgets.add(
           AnimatedPositioned(
             key: ValueKey('pawn-${p.id}'),
