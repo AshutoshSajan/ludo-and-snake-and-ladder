@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/main.dart';
 import 'package:game_club/providers/app_providers.dart';
+import 'package:game_club/screens/admin/admin_auth_gate.dart';
 import 'package:game_club/screens/admin/admin_login_screen.dart';
 import 'package:game_club/services/admin_client.dart';
 import 'package:game_club/shared/admin_credentials.dart';
@@ -562,13 +563,151 @@ void main() {
     final columnRight = tester.getRect(find.byKey(marker)).right;
     expect(columnRight - actionRight, closeTo(16, 0.5));
   });
+
+  testWidgets('a cold /admin lands on /admin/login when the server is set up', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: AdminAuthGate(clientFactory: _goodApi(false))),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final ctx = tester.element(find.text('Admin sign in'));
+    expect(
+      ModalRoute.of(ctx)?.settings.name,
+      '/admin/login',
+      reason: 'the gate replaces itself with the URL it served',
+    );
+  });
+
+  testWidgets('a fresh server lands on /admin/signup from /admin', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: AdminAuthGate(clientFactory: _goodApi(true))),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open the first table'), findsOneWidget);
+    final ctx = tester.element(find.text('Open the first table'));
+    expect(ModalRoute.of(ctx)?.settings.name, '/admin/signup');
+  });
+
+  testWidgets('a dead admin API keeps the gate with a retry, not a form', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    var healthy = false;
+    AdminClient stubFor() => AdminClient(
+      serverUrl: 'ws://localhost:8080/ws',
+      httpClient: MockClient((request) async {
+        if (!healthy) return http.Response('unavailable', 503);
+        return http.Response(
+          jsonEncode({'setupRequired': false}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: AdminAuthGate(clientFactory: stubFor)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Nothing credential-shaped may render while the server is a question
+    // mark: a dead API is a service problem, not a form problem.
+    expect(find.text('The admin API did not answer.'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Email'), findsNothing);
+
+    healthy = true;
+    await tester.tap(find.text('Check the server again'));
+    await tester.pumpAndSettle();
+    expect(find.text('Admin sign in'), findsOneWidget);
+  });
+
+  testWidgets(
+    '/admin/signup redirects to /admin/login when an account exists',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      // The signup URL assumed the first admin was still to be created; the
+      // server disagrees, so the tab must move where the truth is.
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(home: _loginScreen(mode: AdminAuthMode.signup)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(_currentRouteName(tester), '/admin/login');
+      expect(find.text('Admin sign in'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Confirm password'), findsNothing);
+    },
+  );
+
+  testWidgets('/admin/login redirects to /admin/signup on a fresh server', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: _loginScreen(setupRequired: true, mode: AdminAuthMode.login),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(_currentRouteName(tester), '/admin/signup');
+    expect(find.text('Open the first table'), findsOneWidget);
+    expect(
+      find.widgetWithText(TextField, 'Confirm password'),
+      findsOneWidget,
+      reason: 'the setup form has the confirmation the story needs',
+    );
+  });
+}
+
+/// The name of the route that currently owns the screen's front-most
+/// element — how the clipboard-free world asserts a redirect happened.
+String _currentRouteName(WidgetTester tester) {
+  final ctx = tester.element(find.byType(AdminLoginScreen).last);
+  return ModalRoute.of(ctx)?.settings.name ?? 'none';
+}
+
+/// The status half of the fake API, shared by the gate tests.
+AdminClient Function() _goodApi(bool setupRequired) {
+  return () => AdminClient(
+    serverUrl: 'ws://localhost:8080/ws',
+    httpClient: MockClient((request) async {
+      if (request.url.path == '/admin/status') {
+        return http.Response(
+          jsonEncode({'setupRequired': setupRequired}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return http.Response('{}', 404);
+    }),
+  );
 }
 
 /// The login screen against a fake admin API: the status probe answers
 /// immediately, so tests assert on a settled form instead of racing a real
 /// connection attempt to localhost.
-AdminLoginScreen _loginScreen({bool setupRequired = false}) {
+AdminLoginScreen _loginScreen({
+  bool setupRequired = false,
+  AdminAuthMode mode = AdminAuthMode.login,
+}) {
   return AdminLoginScreen(
+    mode: mode,
     clientFactory: () => AdminClient(
       serverUrl: 'ws://localhost:8080/ws',
       httpClient: MockClient((request) async {

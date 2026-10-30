@@ -26,6 +26,8 @@ abstract final class AppRoutes {
   static const gameLudo = '/game/ludo';
   static const gameSnakes = '/game/snakes';
   static const admin = '/admin';
+  static const adminLogin = '/admin/login';
+  static const adminSignup = '/admin/signup';
   static const adminDashboard = '/admin/dashboard';
 
   /// The shareable room path, optionally as a spectator.
@@ -163,11 +165,32 @@ final class GameRoute extends AppRoute {
   String get location => game.playPath;
 }
 
+/// The /admin entry: the server's state decides what opens here, so the
+/// URL stays mode-neutral and the auth gate hands off (see
+/// [app_router.dart]).
 final class AdminRoute extends AppRoute {
   const AdminRoute();
 
   @override
   String get location => AppRoutes.admin;
+}
+
+/// The sign-in screen, at its own URL. A cold load is honest about the
+/// mode it serves and re-checks the server on mount; if the mode is stale
+/// the screen moves to the matching URL instead of fighting the server.
+final class AdminLoginRoute extends AppRoute {
+  const AdminLoginRoute();
+
+  @override
+  String get location => AppRoutes.adminLogin;
+}
+
+/// First-run setup (creating the club's first admin), as its own URL.
+final class AdminSignupRoute extends AppRoute {
+  const AdminSignupRoute();
+
+  @override
+  String get location => AppRoutes.adminSignup;
 }
 
 /// The signed-in dashboard. It needs a live [AdminClient], so a cold load
@@ -219,6 +242,8 @@ AppRoute parseAppRoute(Uri uri) {
     ['game', 'ludo'] => const GameRoute(PlayGame.ludo),
     ['game', 'snakes'] => const GameRoute(PlayGame.snakes),
     ['admin'] => const AdminRoute(),
+    ['admin', 'login'] => const AdminLoginRoute(),
+    ['admin', 'signup'] => const AdminSignupRoute(),
     ['admin', 'dashboard'] => const AdminDashboardRoute(),
     ['join', final code] when _roomCode.hasMatch(code.toUpperCase()) =>
       JoinRoute(code, watch: _wantsWatch(uri)),

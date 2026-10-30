@@ -329,15 +329,19 @@ class AdminNativeFormState extends State<AdminNativeForm> {
     if (secret) {
       final reveal = web.HTMLButtonElement()
         ..type = 'button'
-        ..className = 'gc-admin-reveal'
-        ..textContent = 'Show';
+        ..className = 'gc-admin-reveal';
+      // The affordance everyone knows: an eye while the secret is hidden,
+      // an eye-off once it is shown. The button carries the same
+      // aria-label as before, so screen readers keep their words even
+      // though the pixels are now a picture.
+      reveal.innerHTML = _iconEye.toJS;
       reveal.setAttribute('aria-label', 'Show $label');
       reveal.addEventListener(
         'click',
         ((web.Event _) {
           final showing = input.type == 'text';
           input.type = showing ? 'password' : 'text';
-          reveal.textContent = showing ? 'Show' : 'Hide';
+          reveal.innerHTML = (showing ? _iconEye : _iconEyeOff).toJS;
           reveal.setAttribute(
             'aria-label',
             '${showing ? 'Show' : 'Hide'} $label',
@@ -450,11 +454,11 @@ class AdminNativeFormState extends State<AdminNativeForm> {
 .gc-admin-reveal {
   position: absolute; right: 4px; top: 50%;
   transform: translateY(-50%);
-  min-width: 44px; height: 44px; padding: 0 8px;
+  min-width: 44px; height: 44px; padding: 0 10px;
+  display: flex; align-items: center; justify-content: center;
   border: 0; border-radius: 10px;
   background: transparent;
   color: #B5B3A2;
-  font: 700 11.5px Manrope, system-ui, sans-serif;
   cursor: pointer;
 }
 .gc-admin-reveal:hover { color: #F5EFE0; background: rgba(217, 164, 65, .08); }
@@ -495,5 +499,23 @@ class AdminNativeFormState extends State<AdminNativeForm> {
       '<path d="M21 10h-8.35C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69'
       ' 6 6 6c2.61 0 4.83-1.67 5.65-4H13l2 2 2-2 2 2 4-4.04L21 10zM7 15'
       'c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z"/>'
+      '</svg>';
+  static const _iconEye =
+      '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">'
+      '<path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 '
+      '11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 '
+      '5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 '
+      '3-3-1.34-3-3-3z"/>'
+      '</svg>';
+  static const _iconEyeOff =
+      '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">'
+      '<path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 '
+      '2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25'
+      '-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 '
+      '8.3 1.78 10.03 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 '
+      '4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21'
+      '-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33'
+      '-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm11.88 '
+      '5.58L11.13 7.1c.29-.06.57-.1.87-.1l.01 0a5 5 0 0 1 5 5c0 .3-.04.58-.1.87z"/>'
       '</svg>';
 }
