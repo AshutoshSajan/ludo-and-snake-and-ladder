@@ -6,7 +6,7 @@
 # Publish (needs a Snap Store account):
 #   snapcraft register game-club-ludo
 #   snapcraft upload game-club-ludo_1.2.2_amd64.snap --release=edge
-# Keep `version` in sync with pubspec.yaml.
+# Keep `version` in sync with pubspec.yaml; `tool/version.sh --set` writes both.
 name: game-club-ludo
 version: '1.3.0'
 # Flutter ships prebuilt engines for x64 and ARM64 only; other arches

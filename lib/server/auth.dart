@@ -14,12 +14,15 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 
+import '../shared/admin_credentials.dart';
+
 /// Production work factor. Tests pass a small value explicitly — never
 /// mutate this global from tests; thread the parameter instead.
 const defaultPbkdf2Iterations = 100000;
 
-/// Minimum accepted password length for new users / resets.
-const minPasswordLength = 8;
+/// Minimum accepted password length for new users / resets. The admin form
+/// uses the same constant through `shared/admin_credentials.dart`.
+const minPasswordLength = adminPasswordMinLength;
 
 final _random = Random.secure();
 

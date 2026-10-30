@@ -8,7 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../engine/snakes/snakes_engine.dart';
 import '../../providers/app_providers.dart';
 import '../../services/online_client.dart';
-import '../shared/online_leave_pop.dart';
+import '../shared/leave_guard.dart';
+import '../shared/quit_confirm.dart';
 import '../shared/voice_button.dart';
 import '../../services/sound_service.dart';
 import '../shared/dice_widget.dart';
@@ -299,27 +300,15 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
   /// without saying so would leave the table staring at a pawn that simply
   /// stops moving, which looks exactly like a broken game.
   Future<void> _leave() async {
-    final sure = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Leave the game?'),
-        content: const Text(
+    final sure = await showQuitConfirm(
+      context,
+      title: 'Leave the game?',
+      confirmLabel: 'Leave',
+      content:
           'Your pawn leaves the board and the other players are told you '
           "went. You can't rejoin this game after that.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Stay'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Leave'),
-          ),
-        ],
-      ),
     );
-    if (sure != true || !mounted) return;
+    if (!sure || !mounted) return;
     await widget.client.sendLeave();
     widget.onLeave();
   }
@@ -332,7 +321,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
     if (s == null) {
       // The table has not spoken yet, but the socket is live — leaving here
       // is still a walk-out that must be said out loud, not a silent pop.
-      return OnlineLeavePop(
+      return LeaveGuard(
         active: true,
         onLeave: _leave,
         child: const Center(child: CircularProgressIndicator()),
@@ -349,7 +338,7 @@ class _OnlineSnakesViewState extends State<OnlineSnakesView> {
         myTurn ? 'Moving...' : '${s.currentPlayer.name} is moving...',
     };
 
-    return OnlineLeavePop(
+    return LeaveGuard(
       active: true,
       onLeave: _leave,
       child: Scaffold(

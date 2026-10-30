@@ -6,8 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/main.dart';
 import 'package:game_club/providers/app_providers.dart';
+import 'package:game_club/screens/admin/admin_auth_gate.dart';
 import 'package:game_club/screens/admin/admin_login_screen.dart';
 import 'package:game_club/services/admin_client.dart';
+import 'package:game_club/shared/admin_credentials.dart';
 import 'package:game_club/ui/admin_badge_web.dart';
 import 'package:game_club/ui/page_app_bar.dart';
 import 'package:game_club/ui/theme.dart';
@@ -223,7 +225,7 @@ void main() {
 
     // Enter on the email used to call _submit with an empty password and
     // paint an error; the keyboard's Next must only move focus.
-    expect(find.text('Enter email and password.'), findsNothing);
+    expect(find.text('Enter your password.'), findsNothing);
     final password = tester.widget<EditableText>(
       find.descendant(
         of: find.widgetWithText(TextField, 'Password'),
@@ -234,7 +236,7 @@ void main() {
   });
 
   testWidgets(
-    'first-run setup hints a new password and advances to the token',
+    'first-run setup hints a new password and walks confirm to the token',
     (tester) async {
       SharedPreferences.setMockInitialValues({});
       await tester.pumpWidget(
@@ -250,18 +252,39 @@ void main() {
       final password = tester.widget<TextField>(
         find.widgetWithText(TextField, 'Password'),
       );
+      final confirm = tester.widget<TextField>(
+        find.widgetWithText(TextField, 'Confirm password'),
+      );
       expect(name.autofillHints, const [AutofillHints.name]);
       expect(password.autofillHints, const [AutofillHints.newPassword]);
+      expect(confirm.autofillHints, const [AutofillHints.newPassword]);
+      expect(password.maxLength, adminPasswordMaxLength);
+      expect(confirm.maxLength, adminPasswordMaxLength);
 
       final field = find.widgetWithText(TextField, 'Password');
       await tester.tap(field);
       await tester.pump();
-      await tester.enterText(field, 'a-long-enough-password');
+      await tester.enterText(field, 'a-long-enough-1');
       await tester.testTextInput.receiveAction(TextInputAction.next);
       await tester.pumpAndSettle();
 
-      // Next must reach the setup token, not fire a half-filled setup request.
-      expect(find.text('Enter email and password.'), findsNothing);
+      // Next must reach the confirmation, not fire a half-filled setup.
+      expect(find.text('Enter your email address.'), findsNothing);
+      final confirmField = tester.widget<EditableText>(
+        find.descendant(
+          of: find.widgetWithText(TextField, 'Confirm password'),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(confirmField.focusNode.hasFocus, isTrue);
+
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Confirm password'),
+        'a-long-enough-1',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.next);
+      await tester.pumpAndSettle();
+
       final token = tester.widget<EditableText>(
         find.descendant(
           of: find.widgetWithText(
@@ -303,6 +326,214 @@ void main() {
     expect(ink!.computeLuminance(), greaterThan(0.5));
   });
 
+  testWidgets('setup submits every field through the shared value mapping', (
+    tester,
+  ) async {
+    // The web form and the Flutter fallback hand the same
+    // [AdminFormValues] to the screen, so the fallback pins the mapping:
+    // name and setup token must survive the trip, not just email/password.
+    Map<String, dynamic>? posted;
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminLoginScreen(
+            clientFactory: () => AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': true}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                if (request.url.path == '/admin/setup') {
+                  posted = jsonDecode(request.body) as Map<String, dynamic>;
+                  return http.Response(
+                    jsonEncode({
+                      'token': 'tok',
+                      'user': {'email': 'root@x.io', 'name': 'Root'},
+                    }),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                return http.Response('{}', 404);
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Email'),
+      'root@x.io',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Name (optional)'),
+      'Root',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'a-new-long-password1',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm password'),
+      'a-new-long-password1',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Setup token (server ADMIN_TOKEN)'),
+      'admin-token-123',
+    );
+    final submit = find.widgetWithText(FilledButton, 'Create admin account');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(posted, {
+      'email': 'root@x.io',
+      'password': 'a-new-long-password1',
+      'name': 'Root',
+      'setupToken': 'admin-token-123',
+    });
+  });
+
+  testWidgets('sign-in refuses a malformed email before the API call', (
+    tester,
+  ) async {
+    var posted = false;
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminLoginScreen(
+            clientFactory: () => AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': false}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                posted = true;
+                return http.Response('{}', 200);
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.widgetWithText(TextField, 'Email'), 'root@');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'hunter2!',
+    );
+    final submit = find.widgetWithText(FilledButton, 'Sign in');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enter a valid email address.'), findsOneWidget);
+    expect(posted, isFalse);
+  });
+
+  testWidgets('setup enforces password strength and confirmation', (
+    tester,
+  ) async {
+    var posted = false;
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminLoginScreen(
+            clientFactory: () => AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': true}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                posted = true;
+                return http.Response('{}', 200);
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Email'),
+      'root@x.io',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'alllettersonly',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm password'),
+      'alllettersonly',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Setup token (server ADMIN_TOKEN)'),
+      'admin-token-123',
+    );
+    final submit = find.widgetWithText(FilledButton, 'Create admin account');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    // Letters alone are not enough.
+    expect(find.text('Add at least one number.'), findsOneWidget);
+    expect(posted, isFalse);
+
+    // A strong password with a confirmation typo is still refused.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Password'),
+      'alllettersonly1!',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm password'),
+      'alllettersonly1?',
+    );
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Passwords do not match.'), findsOneWidget);
+    expect(posted, isFalse);
+  });
+
+  testWidgets('setup caps a new password at 60 characters', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: _loginScreen(setupRequired: true)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final password = find.widgetWithText(TextField, 'Password');
+    await tester.enterText(password, 'a1!${'x' * 80}');
+    await tester.pump();
+
+    final field = tester.widget<TextField>(password);
+    expect(field.controller!.text.length, adminPasswordMaxLength);
+  });
+
   testWidgets('page bar content honors the 16px body inset', (tester) async {
     // The bar's row carries the same inset as the page bodies, so trailing
     // slots (like the admin badge) end where the content ends instead of
@@ -332,13 +563,151 @@ void main() {
     final columnRight = tester.getRect(find.byKey(marker)).right;
     expect(columnRight - actionRight, closeTo(16, 0.5));
   });
+
+  testWidgets('a cold /admin lands on /admin/login when the server is set up', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: AdminAuthGate(clientFactory: _goodApi(false))),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final ctx = tester.element(find.text('Admin sign in'));
+    expect(
+      ModalRoute.of(ctx)?.settings.name,
+      '/admin/login',
+      reason: 'the gate replaces itself with the URL it served',
+    );
+  });
+
+  testWidgets('a fresh server lands on /admin/signup from /admin', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: AdminAuthGate(clientFactory: _goodApi(true))),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open the first table'), findsOneWidget);
+    final ctx = tester.element(find.text('Open the first table'));
+    expect(ModalRoute.of(ctx)?.settings.name, '/admin/signup');
+  });
+
+  testWidgets('a dead admin API keeps the gate with a retry, not a form', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    var healthy = false;
+    AdminClient stubFor() => AdminClient(
+      serverUrl: 'ws://localhost:8080/ws',
+      httpClient: MockClient((request) async {
+        if (!healthy) return http.Response('unavailable', 503);
+        return http.Response(
+          jsonEncode({'setupRequired': false}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: AdminAuthGate(clientFactory: stubFor)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Nothing credential-shaped may render while the server is a question
+    // mark: a dead API is a service problem, not a form problem.
+    expect(find.text('The admin API did not answer.'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Email'), findsNothing);
+
+    healthy = true;
+    await tester.tap(find.text('Check the server again'));
+    await tester.pumpAndSettle();
+    expect(find.text('Admin sign in'), findsOneWidget);
+  });
+
+  testWidgets(
+    '/admin/signup redirects to /admin/login when an account exists',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      // The signup URL assumed the first admin was still to be created; the
+      // server disagrees, so the tab must move where the truth is.
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(home: _loginScreen(mode: AdminAuthMode.signup)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(_currentRouteName(tester), '/admin/login');
+      expect(find.text('Admin sign in'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Confirm password'), findsNothing);
+    },
+  );
+
+  testWidgets('/admin/login redirects to /admin/signup on a fresh server', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: _loginScreen(setupRequired: true, mode: AdminAuthMode.login),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(_currentRouteName(tester), '/admin/signup');
+    expect(find.text('Open the first table'), findsOneWidget);
+    expect(
+      find.widgetWithText(TextField, 'Confirm password'),
+      findsOneWidget,
+      reason: 'the setup form has the confirmation the story needs',
+    );
+  });
+}
+
+/// The name of the route that currently owns the screen's front-most
+/// element — how the clipboard-free world asserts a redirect happened.
+String _currentRouteName(WidgetTester tester) {
+  final ctx = tester.element(find.byType(AdminLoginScreen).last);
+  return ModalRoute.of(ctx)?.settings.name ?? 'none';
+}
+
+/// The status half of the fake API, shared by the gate tests.
+AdminClient Function() _goodApi(bool setupRequired) {
+  return () => AdminClient(
+    serverUrl: 'ws://localhost:8080/ws',
+    httpClient: MockClient((request) async {
+      if (request.url.path == '/admin/status') {
+        return http.Response(
+          jsonEncode({'setupRequired': setupRequired}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return http.Response('{}', 404);
+    }),
+  );
 }
 
 /// The login screen against a fake admin API: the status probe answers
 /// immediately, so tests assert on a settled form instead of racing a real
 /// connection attempt to localhost.
-AdminLoginScreen _loginScreen({bool setupRequired = false}) {
+AdminLoginScreen _loginScreen({
+  bool setupRequired = false,
+  AdminAuthMode mode = AdminAuthMode.login,
+}) {
   return AdminLoginScreen(
+    mode: mode,
     clientFactory: () => AdminClient(
       serverUrl: 'ws://localhost:8080/ws',
       httpClient: MockClient((request) async {
