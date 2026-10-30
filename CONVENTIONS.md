@@ -151,7 +151,7 @@ the "you cannot just push to a trunk" rule is enforced by standing jobs:
 | `guard-dev-pr.yml` → `changelog-hands-off` | PR into `dev` | **fails any PR whose diff touches `CHANGELOG.md`** — the file is written only by CI's `release-prep` at the promotion (see [the changelog rule](#-changelog-git-cliff)) |
 | `pre-push` hook | every local push | rejects pushes to `main`/`dev` before they happen, then the full local suite |
 | `deps-audit.yml` | every PR + weekly cron | `pubspec.lock` scanned against OSV.dev advisories (`osv-scanner`); a known-vulnerable package fails the run — see [Dependency health](#-dependency-health) |
-| `release.yaml` | push of a `v*` tag (+ dispatch for test runs) | builds the distributables, publishes the GitHub Release, then fires the Netlify/Render deploy hooks — **the only path that deploys production hosting**; dispatches must not publish or deploy. Split/single host setup in [README](README.md) |
+| `release.yaml` | push of a `v*` tag (+ dispatch for test runs) | builds the distributables, publishes the GitHub Release, fires the Netlify/Render deploy hooks, and submits the Firefox add-on (`publish-amo`, loud-skipped while the AMO secrets are unset) — **the only path that deploys production hosting**; dispatches must not publish or deploy. Split/single host setup in [README](README.md) |
 | `prune-branch.yml` | PR into `dev`/`main` closed+merged | deletes the merged head branch (trunks and unknown prefixes excepted) |
 
 ---
@@ -190,25 +190,31 @@ still means every push was checked by the same code.
 <details>
 <summary>Which CI event runs what — and why only <code>main</code></summary>
 
-`ci.yml` runs on **PRs targeting `main`** and on **pushes to `main`**, plus
-`v*` tags.
+`ci.yml` runs on **PRs targeting `main`** and on **pushes to `main`**. It
+never fires on tags — a tag-shaped `if` in this file is unreachable dead
+code, which is exactly what the old `publish-firefox` ext-v* lane was.
 
 - A **pull request into `main`** runs the `test` job and nothing else —
   analyze, the full suite, and a release web build.
-- A **push to `main`** runs the release path, in this order:
+- A **push to `main`** (a dev→`main` promotion or a release-prep merge) runs:
   1. `release-prep` regenerates `CHANGELOG.md` and bumps the declared version,
      then **opens a pull request** with both in one commit. It cannot push to
      `main` directly: `guard-main` requires the head of `main` to be a merge
      commit, and a bot commit is not one.
   2. You merge that `chore: release prep` PR. That merge re-runs the workflow.
-  3. `verify-release` runs analyze + the full suite — the only test gate on a
-     push path, since `test` is pull-request-scoped.
-  4. `publish-firefox` builds the add-on and uploads it to addons.mozilla.org.
+  3. `verify-release` runs analyze + the full suite on exactly what became
+     live, since `test` is pull-request-scoped.
 
-So a release is: land your PR into `dev` → release-promote `dev` → `main` →
-merge the bot's `chore: release prep` PR → the add-on is uploaded. No tagging
-and nothing typed by hand. A `v*` tag runs the same path, for cutting a
-release without merging anything new.
+Everything user-facing ships from **`release.yaml`, on a `v*` tag pushed on
+the `main` tip**: the full-run `verify` gate, every distributable, the
+GitHub Release, then the publish followers — `deploy-hosting` fires the
+Netlify/Render deploy hooks, and `publish-amo` submits the Firefox add-on
+to addons.mozilla.org (loud-skipped while both AMO secrets are unset). A
+`legs:` dispatch can rebuild part of the matrix; it never publishes.
+
+So a release is: land your PR into `dev` → promote `dev` → `main` → merge
+the bot's `chore: release prep` PR → **push the tag on the `main` tip you
+intend to ship**. Hosting and the Firefox listing follow that one tag.
 
 **Why PRs into `dev` have no hosted CI.** Hosted runner minutes are metered
 and this repo exhausted them once already, so a full run happens where a

@@ -374,6 +374,18 @@ flutter build web --release              # once, or when the game changed
   for [AMO](https://addons.mozilla.org/developers/addon/submit/distribution) —
   Mozilla signs it there and rejects an unsigned upload).
 
+### Releasing the add-ons
+
+Publishing rides the same `v*` tags as every other channel: the release
+workflow builds the extension — the installable `.zip` and unsigned `.xpi`
+land on the GitHub Release — and `publish-amo` submits the add-on build to
+AMO through `web-ext sign`, where Mozilla signs it for the public listing.
+Add `AMO_API_KEY` and `AMO_API_SECRET` as repo secrets to turn the submit
+on: with both unset the tag run loudly skips (the Release still ships), and
+with exactly one set the run fails fast instead of burning a build on a
+submit that cannot succeed. Chrome Web Store publishing stays a commented
+scaffold beside it until the paid developer account exists.
+
 ### Features
 
 - **Launcher**: 300px felt-green panel with die icon, **Open Game Club** button.

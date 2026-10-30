@@ -18,10 +18,12 @@ name: Release
 # skips its dependents — so a partial test can never publish anything.
 # A tag push always runs every leg and is the only publish path.
 #
-# LUDO also ships a browser extension via AMO (`publish-firefox` in ci.yml,
-# which runs on main pushes). That path is untouched by this file: AMO takes
-# a source upload through its own API, not a GitHub Release, so the two
-# channels never interact. This file adds the Sudoku-style binary artifacts
+# LUDO also ships a browser extension: this file builds the add-ons as
+# Release artifacts (build-extension, installable zip/xpi for side-loaders)
+# and submits the Firefox build to addons.mozilla.org (publish-amo) on the
+# same tag. ci.yml once claimed that lane behind an ext-v* trigger — but
+# ci.yml fires on main pushes and PRs only, so a tag could never reach it and
+# the job was unreachable. This file adds the Sudoku-style binary artifacts
 # (apk, deb, rpm, AppImage, Windows setup, web zip, snap) that ci.yml never
 # produced.
 on:
@@ -117,6 +119,23 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - name: Verify the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        # Inherited from ci.yml's release-prep, where the step guarded a tag
+        # that workflow could never receive. `verify` is inside the tag run,
+        # so the guard is live here: a tag that names X while the declared
+        # version reads Y would otherwise ship release notes, a store listing
+        # and uploaded packages naming different versions. Fail before
+        # anything is built or published.
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(tool/version.sh)
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the declared version $declared"
+            echo "  fix: tool/version.sh --set $tagged && git commit -am 'chore: set version to $tagged'"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches the declared version"
       - name: Install Linux audio deps (audioplayers)
         run: |
           sudo apt-get update -qq
@@ -488,10 +507,12 @@ jobs:
       needs.release-legs.outputs.full == 'true' ||
       needs.release-legs.outputs.build-extension == 'true'
     # The add-ons as installable files, so the GitHub Release is complete
-    # without touching AMO or the Web Store. The store route (publish-firefox
-    # in ci.yml) still owns listing updates; this is the downloadable copy a
-    # tester can side-load. Chrome loads the folder unpacked; Firefox signs
-    # on upload, so the .xpi here is unsigned and for testing only.
+    # without touching AMO or the Web Store. The listing update on
+    # addons.mozilla.org is publish-amo's job (needs a full run; submits the
+    # freshly built source by rebuilding inside that job); this leg is the
+    # downloadable copy a tester can side-load. Chrome loads the folder
+    # unpacked; Firefox signs on upload, so the .xpi here is unsigned and
+    # for testing only.
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
@@ -643,3 +664,113 @@ jobs:
           echo "Render: deploying $VERSION (main @ $GITHUB_SHA)"
           curl -fsS --max-time 60 -X POST "$RENDER_DEPLOY_HOOK_URL" > /dev/null
           echo 'Render deploy queued (hook accepted).'
+
+  publish-amo:
+    # The release moment for the Firefox channel: after the GitHub Release
+    # exists and the quality gate passes, submit the extension build to
+    # addons.mozilla.org, which signs it. AMO takes a source upload through
+    # its own API — not a GitHub Release, hence a real job instead of
+    # another artifact beside build-extension's side-load xpi.
+    #
+    # needs publish, so the Release is out before the store learns of the
+    # version, and needs verify, because a store upload is the most public,
+    # least-revocable channel this repo ships to. (Hosting above follows the
+    # tag regardless of verify; a store listing must not.)
+    #
+    # Typed by hand: dispatch runs and secret-absence must not touch the
+    # listing, so the tag guards the job like deploy-hosting, and the
+    # credentials guard every step inside it. Job-level env rather than a
+    # step `if` on `secrets`: GitHub rejects `secrets` in an `if` outright
+    # ("Unrecognized named-value: 'secrets'", actions/runner#520 — same
+    # rationale as deploy-hosting's env above). An unset secret arrives as
+    # an empty string, which the guard below distinguishes: both missing =
+    # a loud skip (the Release is correct without the listing update, and a
+    # fresh tag that fails the whole run would hide its artifacts behind a
+    # red store job), exactly one = hard fail (a half-configured run would
+    # otherwise build for minutes and fail mid-npx).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, resolve-version, publish]
+    runs-on: ubuntu-24.04
+    env:
+      AMO_API_KEY: ${{ secrets.AMO_API_KEY }}
+      AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
+    steps:
+      - name: Check the AMO credentials
+        id: creds
+        run: |
+          if [ -z "$AMO_API_KEY" ] && [ -z "$AMO_API_SECRET" ]; then
+            echo '::warning title=AMO publish skipped::AMO_API_KEY/AMO_API_SECRET are unset — the tag ships its GitHub Release artifacts without updating the addons.mozilla.org listing. Set BOTH repo secrets to publish the add-on from a tag.'
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$AMO_API_KEY" ] || [ -z "$AMO_API_SECRET" ]; then
+            echo '::error title=AMO secrets half-configured::Exactly one of AMO_API_KEY / AMO_API_SECRET is set. Set both repo secrets — or leave both unset to always skip — and re-run.'
+            exit 1
+          fi
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.creds.outputs.ready == 'true'
+      - uses: subosito/flutter-action@v2
+        if: steps.creds.outputs.ready == 'true'
+        with:
+          channel: stable
+          cache: true
+      - name: Build the web bundle
+        if: steps.creds.outputs.ready == 'true'
+        # The extension bundles the whole Flutter payload; there is no dart-define
+        # for the server here, so an add-on build needs no configuration.
+        run: |
+          flutter pub get
+          flutter build web --release
+      - name: Package the add-on
+        if: steps.creds.outputs.ready == 'true'
+        run: ./tools/build_extension.sh --firefox --zip
+      - name: Submit to addons.mozilla.org
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          # `sign`, not `publish`: web-ext has no `publish` subcommand. The
+          # commands are build, sign, run, lint, docs, dump-config. Passing
+          # `publish` fails on argument parsing before it ever reaches AMO, so
+          # the job could not have worked however long it was left running.
+          #
+          # AMO does the signing; there is no unsigned upload route. `listed`
+          # publishes to the public channel, `unlisted` self-signs only.
+          #
+          # --approval-timeout 0 disables the wait for AMO's automatic
+          # approval. Without it `sign` blocks for the default 5 minutes on
+          # every submission, which on a runner is five minutes of doing
+          # nothing and then a timeout - the job hangs rather than finishing.
+          # New add-ons are held for human review regardless, so waiting buys
+          # nothing; the upload itself has already been accepted by then.
+          npx --yes web-ext@10.7.0 sign \
+            --source-dir build/extension-firefox \
+            --channel listed \
+            --amo-metadata extension/amo.metadata.json \
+            --api-key "$AMO_API_KEY" \
+            --api-secret "$AMO_API_SECRET" \
+            --approval-timeout 0
+
+  # publish-chrome:
+  #   COMMENTED OUT ON PURPOSE. The Chrome Web Store path needs a paid developer
+  #   account ($5 one-off, then a 5% cut), which is not set up, and a publish
+  #   job that fails on every tag is worse than no job. The build and upload
+  #   steps are kept so enabling it is a review, not a rewrite. It lives beside
+  #   publish-amo because both are store submits, not Release artifacts — see
+  #   ci.yml's store-publishing note for the secret names.
+  #
+  #   To enable: uncomment, and add the three CHROME_* secrets.
+  #
+  # if: startsWith(github.ref, 'refs/tags/v')
+  # needs: [verify, resolve-version, publish]
+  # runs-on: ubuntu-24.04
+  # steps:
+  #   - uses: actions/checkout@v7
+  #   - run: flutter pub get
+  #   - run: flutter build web --release
+  #   - run: ./tools/build_extension.sh --chrome --zip
+  #   - uses: actions/upload-artifact@v4
+  #     with:
+  #       name: game-club-chrome
+  #       path: build/game-club-chrome.zip
+  #   # Uploading to the Web Store needs the Chrome Web Store API via a
+  #   # publisher service account; the credential names are in the README.
