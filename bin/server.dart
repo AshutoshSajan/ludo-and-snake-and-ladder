@@ -2514,6 +2514,178 @@ shelf.Response _badAdminAction(String text, {int code = 400}) => shelf.Response(
   headers: {'content-type': 'application/json'},
 );
 
+/// The HTTP entry every published request sees: the chat-media path
+/// families, the API switch, and the web build for everything else.
+/// Top level rather than inline in main() so tests can drive the exact
+/// middleware chain a deployment runs instead of a parallel copy of it
+/// (see test/admin_page_serving_test.dart).
+Future<shelf.Response> httpHandler(shelf.Request req) async {
+  // Chat media: the uploads (fresh bytes into a live room's store)
+  // and the playback (a stored note out again) are path-family
+  // routes — the id lives in the path, not the switch's labels.
+  if (req.url.path == 'media/voice') {
+    return voiceNoteUpload(
+      req,
+      store: authority.mediaNotes,
+      roomIsLive: authority.rooms.containsKey,
+    );
+  }
+  if (req.url.path == 'media/image') {
+    return imageNoteUpload(
+      req,
+      store: authority.mediaNotes,
+      roomIsLive: authority.rooms.containsKey,
+    );
+  }
+  if (req.url.path.startsWith('media/voice/') ||
+      req.url.path.startsWith('media/image/')) {
+    return mediaNoteServe(req, store: authority.mediaNotes);
+  }
+  // Hoisted once: every tail below decides whether a web build is
+  // present, and they must agree on the same answer for one request.
+  final staticHandler = _webStaticHandler();
+
+  // The auth screens are real URLs (`/admin/login`, `/admin/signup`).
+  // A GET for those slugs is a browser page load — reload, deep link,
+  // bookmark — and has to reach the web build. Ordered before the API
+  // switch because the switch claims these names too and its POST-only
+  // refusal used to win: every refresh or re-sent `/admin/login` link
+  // painted a raw JSON `405 Method Not Allowed` error page instead of
+  // the app. POSTs still fall through to the switch unchanged.
+  if (staticHandler != null && req.method == 'GET') {
+    switch (req.url.path) {
+      case 'admin/login':
+      case 'admin/signup':
+        return staticHandler(req);
+    }
+  }
+
+  switch (req.url.path) {
+    case 'ws':
+      return wsHandler()(req);
+    case 'leaderboard':
+      return leaderboardHandler(req);
+    case 'stats':
+      return statsHandler(req);
+    case 'rooms/lookup':
+      return roomLookupHandler(req);
+    case 'health':
+      return healthHandler(req);
+    case 'media/gif':
+    // Compat alias for clients already shipped on the Tenor era —
+    // the same provider serves them; nothing client-side breaks.
+    case 'media/tenor':
+      return gifSearchHandler(req, provider: gifProvider);
+    case 'feedback':
+      return feedbackCreateHandler(req);
+    case 'friends/state':
+      return friendsStateHandler(req);
+    case 'friends/lookup':
+      return friendsLookupHandler(req);
+    case 'friends/players':
+      // Retired: discovery lives at the table now — every seated
+      // row carries the add. The server-wide player enumeration was
+      // removed with the directory screen.
+      return _friendBadRequest('not found', code: 404);
+    case 'friends/request':
+      return friendsRequestHandler(req);
+    case 'friends/respond':
+      return friendsRespondHandler(req);
+    case 'friends/remove':
+      return friendsRemoveHandler(req);
+    case 'friends/chat':
+      return friendsChatHandler(req);
+    case 'friends/chat/send':
+      return friendsChatSendHandler(req);
+    case 'friends/chat/like':
+      return friendsChatLikeHandler(req);
+    case 'friends/invite':
+      return friendsInviteHandler(req);
+    case 'friends/invite/respond':
+      return friendsInviteRespondHandler(req);
+    case 'friends/block':
+      return friendsBlockHandler(req);
+    case 'friends/unblock':
+      return friendsUnblockHandler(req);
+    case 'friends/report':
+      return friendsReportHandler(req);
+    case 'admin/status':
+      return adminStatusHandler(req);
+    case 'admin/me':
+      return adminMeHandler(req);
+    case 'admin/users':
+      return adminUsersHandler(req);
+    case 'admin/setup':
+      if (req.method != 'POST') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'ok': false, 'text': 'POST only'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return adminSetupHandler(req);
+    case 'admin/login':
+      if (req.method != 'POST') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'ok': false, 'text': 'POST only'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return adminLoginHandler(req);
+    case 'admin/logout':
+      if (req.method != 'POST') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'ok': false, 'text': 'POST only'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return adminLogoutHandler(req);
+    case 'admin/overview':
+      return adminOverviewHandler(req);
+    case 'admin/players':
+      return adminPlayersHandler(req);
+    case 'admin/rooms':
+      return adminRoomsHandler(req);
+    case 'admin/audit':
+      return adminAuditHandler(req);
+    case 'admin/feedback':
+      return adminFeedbackHandler(req);
+    case 'admin/table':
+      return adminTableHandler(req);
+    case 'admin/ban':
+    case 'admin/unban':
+    case 'admin/rename':
+    case 'admin/delete-game':
+    case 'admin/rooms/close':
+    case 'admin/friends/unbind':
+    case 'admin/feedback/update':
+    case 'admin/feedback/delete':
+    case 'admin/table/insert':
+    case 'admin/table/update':
+    case 'admin/table/delete':
+      if (req.method != 'POST') {
+        return shelf.Response(
+          405,
+          body: jsonEncode({'ok': false, 'text': 'POST only'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return adminActionHandler(req);
+  }
+  // Serve the Flutter web build when one ships with the image, so a
+  // single deployed service hosts both the game UI and the server
+  // (the web client's same-origin default then just works). Existing
+  // but empty builds are ignored to catch a half-uploaded copy.
+  if (staticHandler != null && req.method == 'GET') {
+    return staticHandler(req);
+  }
+  // No web build: keep the historical JSON health response at /, so
+  // API-only deployments behave exactly as before.
+  return healthHandler(req);
+}
+
 Future<void> main(List<String> args) async {
   var port = 8080;
   var dbPath = 'ludo_leaderboard.db';
@@ -2667,154 +2839,7 @@ Future<void> main(List<String> args) async {
       .addMiddleware(shelf.logRequests())
       .addMiddleware(corsMiddleware)
       .addMiddleware(jsonErrorMiddleware)
-      .addHandler((req) async {
-        // Chat media: the uploads (fresh bytes into a live room's store)
-        // and the playback (a stored note out again) are path-family
-        // routes — the id lives in the path, not the switch's labels.
-        if (req.url.path == 'media/voice') {
-          return voiceNoteUpload(
-            req,
-            store: authority.mediaNotes,
-            roomIsLive: authority.rooms.containsKey,
-          );
-        }
-        if (req.url.path == 'media/image') {
-          return imageNoteUpload(
-            req,
-            store: authority.mediaNotes,
-            roomIsLive: authority.rooms.containsKey,
-          );
-        }
-        if (req.url.path.startsWith('media/voice/') ||
-            req.url.path.startsWith('media/image/')) {
-          return mediaNoteServe(req, store: authority.mediaNotes);
-        }
-        switch (req.url.path) {
-          case 'ws':
-            return wsHandler()(req);
-          case 'leaderboard':
-            return leaderboardHandler(req);
-          case 'stats':
-            return statsHandler(req);
-          case 'rooms/lookup':
-            return roomLookupHandler(req);
-          case 'health':
-            return healthHandler(req);
-          case 'media/gif':
-          // Compat alias for clients already shipped on the Tenor era —
-          // the same provider serves them; nothing client-side breaks.
-          case 'media/tenor':
-            return gifSearchHandler(req, provider: gifProvider);
-          case 'feedback':
-            return feedbackCreateHandler(req);
-          case 'friends/state':
-            return friendsStateHandler(req);
-          case 'friends/lookup':
-            return friendsLookupHandler(req);
-          case 'friends/players':
-            // Retired: discovery lives at the table now — every seated
-            // row carries the add. The server-wide player enumeration was
-            // removed with the directory screen.
-            return _friendBadRequest('not found', code: 404);
-          case 'friends/request':
-            return friendsRequestHandler(req);
-          case 'friends/respond':
-            return friendsRespondHandler(req);
-          case 'friends/remove':
-            return friendsRemoveHandler(req);
-          case 'friends/chat':
-            return friendsChatHandler(req);
-          case 'friends/chat/send':
-            return friendsChatSendHandler(req);
-          case 'friends/chat/like':
-            return friendsChatLikeHandler(req);
-          case 'friends/invite':
-            return friendsInviteHandler(req);
-          case 'friends/invite/respond':
-            return friendsInviteRespondHandler(req);
-          case 'friends/block':
-            return friendsBlockHandler(req);
-          case 'friends/unblock':
-            return friendsUnblockHandler(req);
-          case 'friends/report':
-            return friendsReportHandler(req);
-          case 'admin/status':
-            return adminStatusHandler(req);
-          case 'admin/me':
-            return adminMeHandler(req);
-          case 'admin/users':
-            return adminUsersHandler(req);
-          case 'admin/setup':
-            if (req.method != 'POST') {
-              return shelf.Response(
-                405,
-                body: jsonEncode({'ok': false, 'text': 'POST only'}),
-                headers: {'content-type': 'application/json'},
-              );
-            }
-            return adminSetupHandler(req);
-          case 'admin/login':
-            if (req.method != 'POST') {
-              return shelf.Response(
-                405,
-                body: jsonEncode({'ok': false, 'text': 'POST only'}),
-                headers: {'content-type': 'application/json'},
-              );
-            }
-            return adminLoginHandler(req);
-          case 'admin/logout':
-            if (req.method != 'POST') {
-              return shelf.Response(
-                405,
-                body: jsonEncode({'ok': false, 'text': 'POST only'}),
-                headers: {'content-type': 'application/json'},
-              );
-            }
-            return adminLogoutHandler(req);
-          case 'admin/overview':
-            return adminOverviewHandler(req);
-          case 'admin/players':
-            return adminPlayersHandler(req);
-          case 'admin/rooms':
-            return adminRoomsHandler(req);
-          case 'admin/audit':
-            return adminAuditHandler(req);
-          case 'admin/feedback':
-            return adminFeedbackHandler(req);
-          case 'admin/table':
-            return adminTableHandler(req);
-          case 'admin/ban':
-          case 'admin/unban':
-          case 'admin/rename':
-          case 'admin/delete-game':
-          case 'admin/rooms/close':
-          case 'admin/friends/unbind':
-          case 'admin/feedback/update':
-          case 'admin/feedback/delete':
-          case 'admin/table/insert':
-          case 'admin/table/update':
-          case 'admin/table/delete':
-            if (req.method != 'POST') {
-              return shelf.Response(
-                405,
-                body: jsonEncode({'ok': false, 'text': 'POST only'}),
-                headers: {'content-type': 'application/json'},
-              );
-            }
-            return adminActionHandler(req);
-        }
-        // Serve the Flutter web build when one ships with the image, so a
-        // single deployed service hosts both the game UI and the server
-        // (the web client's same-origin default then just works). Existing
-        // but empty builds are ignored to catch a half-uploaded copy.
-        final staticHandler = _webStaticHandler();
-        if (staticHandler != null && req.method == 'GET') {
-          return staticHandler(req);
-        }
-        // No web build: keep the historical JSON health response at /, so
-        // API-only deployments behave exactly as before.
-        return healthHandler(req);
-      });
+      .addHandler(httpHandler);
 
   final server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
   stdout.writeln(
