@@ -52,7 +52,7 @@ dependencies:
   # WebSocket. dart_webrtc + web are the browser side of that glue
   # (MediaStreamWeb / HTMLAudioElement); both are direct deps because the
   # voice code imports them itself, not only via flutter_webrtc.
-  flutter_webrtc: ^1.6.2+hotfix.4
+  flutter_webrtc: ^1.6.3
   dart_webrtc: ^1.8.2
   web: ^1.1.2
   record: ^7.1.2
