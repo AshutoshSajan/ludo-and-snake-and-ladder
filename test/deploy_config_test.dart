@@ -1060,9 +1060,22 @@ void main() {
           reason: 'the scan covers the lockfile production resolves');
       expect(audit, contains('cron: '),
           reason: 'staleness cannot rely on someone remembering to look');
-      final paths = RegExp(r'pull_request:[\s\S]*?branches: \[main\]');
-      expect(paths.hasMatch(audit), isTrue,
-          reason: 'a dependency PR into main runs the scan before it ships');
+      // The scan runs on EVERY pull request: a lockfile is audited in the
+      // commit that writes it, not when it reaches main. The old trigger —
+      // main-only plus pubspec paths — used to let a task branch add a
+      // vulnerable package in silence until release week, and Dependabot's
+      // PRs into dev skipped the gate entirely.
+      final onBlock =
+          audit.substring(audit.indexOf('on:'), audit.indexOf('permissions:'));
+      expect(
+        RegExp(r'^\s+pull_request:\s*$', multiLine: true).hasMatch(onBlock),
+        isTrue,
+        reason: 'every pull request runs the scan before it ships',
+      );
+      expect(onBlock, isNot(contains('branches: ')),
+          reason: 'no base filter — dev PRs (Dependabot included) must be scanned');
+      expect(onBlock, isNot(contains('paths: ')),
+          reason: 'no path filter — any PR may change the lock via a fresh resolve');
     });
 
     test('the prune allowlist covers the bots that now open PRs', () {
