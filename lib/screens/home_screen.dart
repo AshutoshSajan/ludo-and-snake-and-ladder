@@ -5,8 +5,10 @@ import '../app_router.dart';
 import '../app_routes.dart';
 import '../engine/core/player_profiles.dart';
 import '../providers/app_providers.dart';
+import '../screens/admin/admin_dashboard_screen.dart';
+import '../services/admin_client.dart';
 import '../services/friend_signals.dart';
-import '../ui/admin_badge.dart';
+import '../services/server_url.dart';
 import '../ui/club_widgets.dart';
 import '../ui/page_app_bar.dart';
 import '../ui/ludo/ludo_board_painter.dart';
@@ -97,13 +99,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const ClubHeader(),
-                  // Signed-in admins get a visible identity chip (and a way
-                  // back to the dashboard). Nobody else sees anything: there
-                  // is deliberately no admin entry point for signed-out users.
-                  if (admin != null) ...[
-                    const SizedBox(height: 14),
-                    Center(child: AdminBadge(session: admin)),
-                  ],
                   const SizedBox(height: 22),
                   // The `tour-…` keys are the tutorial's targets: the
                   // walkthrough finds these widgets by key and spots them.
@@ -207,6 +202,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           ),
                         ),
                       ),
+                      // The admin door exists only for a signed-in operator:
+                      // there is deliberately no admin entry point for
+                      // signed-out users — the door appears beside Settings
+                      // and nothing changes for anyone else. The badge that
+                      // used to sit under the header carried the same rule;
+                      // a door in the same row as its friends is the shorter
+                      // trip back to the dashboard.
+                      if (admin != null) ...[
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ClubDoor(
+                            key: const ValueKey('home-admin-door'),
+                            icon: Icons.admin_panel_settings_outlined,
+                            label: 'Admin',
+                            detail: 'Back office',
+                            onTap: () => pushAppScreen<void>(
+                              context,
+                              name: AppRoutes.adminDashboard,
+                              builder: (_) => AdminDashboardScreen(
+                                client: AdminClient(
+                                  serverUrl: defaultServerUrl(),
+                                  token: admin.token,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 22),

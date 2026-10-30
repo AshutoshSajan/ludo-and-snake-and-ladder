@@ -96,7 +96,11 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
   void _reloadAll() {
     setState(() {
       _overview = widget.client.overview();
-      _me = widget.client.me();
+      // me() doubles as the session death watch: every data call rides the
+      // same token, so a token the server no longer accepts (expired, revoked)
+      // fails here as surely as anywhere — and through the title's future,
+      // which no error card watches. See [_reloadMe].
+      _me = _reloadMe();
       // Other tabs fetch lazily on first visit (_ensureTab): firing them
       // all here leaves futures nobody listens to when their tab never
       // opens — unhandled async errors, not just wasted requests.
@@ -108,6 +112,35 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
       _tableRows = null;
     });
     _ensureTab(_tab);
+  }
+
+  /// The dashboard's one authenticated read that nothing else depends on —
+  /// and the title's future, where an [AdminException] has no error panel to
+  /// surface through. It is also the session's death watch: a 401 here means
+  /// the server rejects this token outright (expired, revoked, deleted row),
+  /// and every other tab call would fail the same way a moment later. The
+  /// operator goes back to a fresh login rather than a dashboard of failing
+  /// buttons; the token's local record dies with it.
+  Future<Map<String, dynamic>> _reloadMe() async {
+    try {
+      return await widget.client.me();
+    } on AdminException catch (e) {
+      if (e.statusCode == 401) {
+        if (mounted) {
+          ref.read(adminSessionProvider.notifier).signOut();
+          // Same landing as the sign-out button: the login screen as the
+          // stack root, so back cannot return to a signed-out dashboard.
+          resetAppScreen<void>(
+            context,
+            name: AppRoutes.admin,
+            builder: (_) => const AdminLoginScreen(),
+          );
+        }
+      }
+      // The FutureBuilder shows its error snapshot either way; the stack is
+      // being discarded, so nothing consuming this future survives.
+      rethrow;
+    }
   }
 
   void _ensureTab(int i) {
@@ -208,6 +241,14 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
         return Scaffold(
           backgroundColor: AppColors.felt,
           appBar: AppBar(
+            // The game icon where the default back arrow would sit: same
+            // pop (the route beneath is the game's home screen), it just
+            // says where back goes instead of implying an escape.
+            leading: IconButton(
+              icon: const Icon(Icons.sports_esports),
+              tooltip: 'Back to the game',
+              onPressed: () => Navigator.of(context).maybePop(),
+            ),
             title: FutureBuilder<Map<String, dynamic>>(
               future: _me,
               builder: (c, s) {

@@ -1,37 +1,49 @@
 /// The /admin front door that knows nothing yet.
 ///
-/// Deep links to `/admin` (and cold loads of `/admin/dashboard`, whose
-/// live client died with the tab that owned it) arrive before the app
-/// knows which auth story is true: has the club's first admin been
-/// created or not? Instead of guessing — a wrong guess paints a New
-/// Password form on a server that wants just email+password, or asks a
-/// stranger to create the first admin — this gate asks the server one
-/// question (`/admin/status`) and hands the tab to the URL that matches:
-/// `/admin/login` when an account exists, `/admin/signup` when the first
-/// one is still to be created.
+/// Deep links to `/admin` (and cold loads of `/admin/dashboard`, whose live
+/// client died with the tab that owned it) arrive before the app knows which
+/// auth story is true: has the club's first admin been created or not?
+/// Instead of guessing — a wrong guess paints a New Password form on a
+/// server that wants just email+password, or asks a stranger to create the
+/// first admin — this gate asks the server one question (`/admin/status`)
+/// and hands the tab to the URL that matches: `/admin/login` when an
+/// account exists, `/admin/signup` when the first one is still to be
+/// created.
 ///
-/// The handoff happens through [replaceAppScreen], so the browser URL
-/// lands on the real auth page (deep-linkable, refreshable) and "back"
-/// skips the gate. Only an unreachable server keeps the gate on screen —
-/// with a retry card, worded like one, because a dead API is a service
-/// problem, not a credentials problem.
+/// The handoff happens through [replaceAppScreen], so the browser URL lands
+/// on the real auth page (deep-linkable, refreshable) and "back" skips the
+/// gate. Only an unreachable server keeps the gate on screen — with a retry
+/// card, worded like one, because a dead API is a service problem, not a
+/// credentials problem.
 ///
-/// Compiled only on the web (`app_router.dart` conditional import);
-/// native builds get [admin_auth_gate_stub.dart]'s placeholder and the
-/// route arms never register it.
+/// A cold load of `/admin/dashboard` skips that story entirely when a
+/// persisted session still validates client-side (see
+/// `services/admin_session_store.dart`): the stored token is re-entered into
+/// a client and the provider, and the operator is back where they were.
+/// The server is the source of truth on top of that — a token the server has
+/// revoked or expired 401s on the dashboard's first read and the dashboard
+/// throws the operator back to the login form itself.
+///
+/// Compiled only on the web (`app_router.dart` conditional import); native
+/// builds get [admin_auth_gate_stub.dart]'s placeholder and the route arms
+/// never register it.
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_router.dart';
 import '../../app_routes.dart';
+import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
+import '../../services/admin_session_store.dart';
 import '../../services/server_url.dart';
 import '../../ui/club_widgets.dart';
 import '../../ui/theme.dart';
+import 'admin_dashboard_screen.dart';
 import 'admin_login_screen.dart';
 
-class AdminAuthGate extends StatefulWidget {
+class AdminAuthGate extends ConsumerStatefulWidget {
   const AdminAuthGate({super.key, this.clientFactory});
 
   /// Test seam: builds the client used for the status check. Null in
@@ -39,10 +51,10 @@ class AdminAuthGate extends StatefulWidget {
   final AdminClient Function()? clientFactory;
 
   @override
-  State<AdminAuthGate> createState() => _AdminAuthGateState();
+  ConsumerState<AdminAuthGate> createState() => _AdminAuthGateState();
 }
 
-class _AdminAuthGateState extends State<AdminAuthGate> {
+class _AdminAuthGateState extends ConsumerState<AdminAuthGate> {
   bool _failed = false;
 
   AdminClient get _client =>
@@ -61,8 +73,6 @@ class _AdminAuthGateState extends State<AdminAuthGate> {
       final status = await client.status();
       if (!mounted) return;
       final clientFactory = widget.clientFactory;
-      // URL and server truth agree by construction from here on: the
-      // replaced route names the mode, the screen mounts knowing it.
       if (status['setupRequired'] as bool? ?? false) {
         replaceAppScreen<void>(
           context,
@@ -70,14 +80,44 @@ class _AdminAuthGateState extends State<AdminAuthGate> {
           builder: (_) =>
               AdminLoginScreen(mode: AdminAuthMode.signup, clientFactory: clientFactory),
         );
-      } else {
+        return;
+      }
+      final restored = restoreAdminSession();
+      if (restored != null) {
+        // The persisted session outlives the tab this client belonged to:
+        // re-seat the token into a fresh client and the provider, then put
+        // the operator back on the dashboard at the same URL. A dead token
+        // (revoked server-side, clock drifted) cannot be told apart from a
+        // live one here without an extra request — the dashboard's first
+        // read is that request, and a 401 there ends the session and lands
+        // the login form, so no second status round-trip is spent.
+        final dashClient = widget.clientFactory?.call() ?? _client;
+        dashClient.token = restored.token;
+        ref.read(adminSessionProvider.notifier).signIn(
+          AdminSession(
+            token: restored.token,
+            email: restored.email,
+            name: restored.name,
+            expiresAt: restored.expiresAt,
+          ),
+        );
         replaceAppScreen<void>(
           context,
-          name: AppRoutes.adminLogin,
+          name: AppRoutes.adminDashboard,
           builder: (_) =>
-              AdminLoginScreen(mode: AdminAuthMode.login, clientFactory: clientFactory),
+              AdminDashboardScreen(client: dashClient),
         );
+        return;
       }
+      // No usable session: the URL and server truth agree by construction
+      // from here on — the replaced route names the mode, the screen mounts
+      // knowing it.
+      replaceAppScreen<void>(
+        context,
+        name: AppRoutes.adminLogin,
+        builder: (_) =>
+            AdminLoginScreen(mode: AdminAuthMode.login, clientFactory: clientFactory),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _failed = true);
