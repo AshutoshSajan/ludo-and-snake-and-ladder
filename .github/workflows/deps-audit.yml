@@ -1,15 +1,20 @@
 name: Dependency audit
 
 # Known-vulnerability gate for the packages the game actually ships, against
-# OSV.dev advisories (Dart/pub is a first-class ecosystem there). Weekly on
-# schedule, and once per PR into main that touches the dependency files.
+# OSV.dev advisories (Dart/pub is a first-class ecosystem there). Runs on
+# EVERY pull request, because the moment a lockfile version is worth a
+# failing run is when it is written, not when it reaches main: the weekly
+# schedule is the trunk drift backstop, a path/base filter here used to let
+# a task branch add a vulnerable package in silence and only hear about it
+# at release time.
 #
 # Deliberately NO Flutter SDK here: the scan reads the committed pubspec.lock,
 # which is exactly what production will resolve. Keeping the job SDK-free
-# keeps it to seconds (runner minutes are metered in this repo — see ci.yml).
+# keeps it to seconds (runner minutes are metered in this repo — see ci.yml),
+# which is what makes every-PR affordable.
 #
 # Update PRs themselves come from Dependabot (.github/dependabot.yml, weekly,
-# targeted at dev); this workflow is the adverse-side backstop.
+# targeted at dev).
 on:
   schedule:
     # Weekly, Monday 04:11 UTC — an off-round minute, so the first run isn't
@@ -17,12 +22,6 @@ on:
     - cron: '11 4 * * 1'
   workflow_dispatch:
   pull_request:
-    branches: [main]
-    paths:
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - 'tool/deps.sh'
-      - '.github/workflows/deps-audit.yml'
 
 permissions: {}
 

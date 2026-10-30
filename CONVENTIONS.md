@@ -150,7 +150,7 @@ the "you cannot just push to a trunk" rule is enforced by standing jobs:
 | `guard-dev.yml` → `guard-dev` | push to `dev` | same merge-commit rule for `dev` — cheap (parents are disproved from git, not the event payload — that payload variant failed real merges) |
 | `guard-dev-pr.yml` → `changelog-hands-off` | PR into `dev` | **fails any PR whose diff touches `CHANGELOG.md`** — the file is written only by CI's `release-prep` at the promotion (see [the changelog rule](#-changelog-git-cliff)) |
 | `pre-push` hook | every local push | rejects pushes to `main`/`dev` before they happen, then the full local suite |
-| `deps-audit.yml` | weekly cron + PRs into `main` touching `pubspec*` | `pubspec.lock` scanned against OSV.dev advisories (`osv-scanner`); a known-vulnerable package fails the run — see [Dependency health](#-dependency-health) |
+| `deps-audit.yml` | every PR + weekly cron | `pubspec.lock` scanned against OSV.dev advisories (`osv-scanner`); a known-vulnerable package fails the run — see [Dependency health](#-dependency-health) |
 | `prune-branch.yml` | PR into `dev`/`main` closed+merged | deletes the merged head branch (trunks and unknown prefixes excepted) |
 
 ---
@@ -165,10 +165,12 @@ task branch:
 - **Dependabot** (`.github/dependabot.yml`, weekly, targets `dev`) raises the
   update PRs — pub packages and the pinned GitHub Actions themselves. Review
   and merge them like any other PR; stale branches prune themselves.
-- **OSV scan** (`.github/workflows/deps-audit.yml`, weekly + on dependency
-  PRs into `main`) runs Google's `osv-scanner` over the committed
+- **OSV scan** (`.github/workflows/deps-audit.yml`, on every PR + weekly)
+  runs Google's `osv-scanner` over the committed
   `pubspec.lock` — a known-advisory version **fails the run** with a patch
-  hint, so a critical package cannot quietly ship.
+  hint, so a critical package cannot quietly ship. The job is SDK-free and
+  seconds long, which is what makes every-PR affordable; the scan runs when
+  the lockfile is written, not when it reaches main.
 - **Locally**: `tool/deps.sh` runs the same scan (when `osv-scanner` is
   installed) plus `dart pub outdated`. Run it when adding or bumping deps and
   before trusting that weekly cron to catch a crisis.
