@@ -103,4 +103,96 @@ void main() {
       expect(await store.totalGames(), 1);
     });
   });
+
+  group('AdminStore: sessions & KDF hardening', () {
+    test('a default session lives one fixed 12-hour window', () async {
+      // The window the client's persisted record trusts as its worst case —
+      // "few hours" per the product ask. Fixed from creation, no renewal.
+      final store = AdminStore.inMemory(kdfIterations: 10);
+      final user = await store.createUser(
+        email: 'root@x.io',
+        name: 'Root',
+        password: 'long-enough-1',
+        role: 'admin',
+        iterations: 10,
+      );
+      final before = DateTime.now().millisecondsSinceEpoch;
+      final session = await store.createSession(user.id);
+      final expected = before + const Duration(hours: 12).inMilliseconds;
+      // Sequence + clock jitter inside a couple seconds is fine; a 7-day
+      // or renewal-on-read window would blow far past it.
+      expect(
+        (session.expiresAt - expected).abs(),
+        lessThan(5000),
+      );
+    });
+
+    test('a user created without an explicit work factor gets the store '
+        'factor', () async {
+      final store = AdminStore.inMemory(kdfIterations: 1000);
+      await store.createUser(
+        email: 'isolate@x.io',
+        name: 'Iso',
+        password: 'long-enough-1',
+      );
+      final user = (await store.findUserByEmail('isolate@x.io'))!;
+      expect(
+        await store.debugPasswordHash(user.id),
+        startsWith('pbkdf2\$1000\$'),
+        reason: 'no call-site iteration = kdfIterations, whatever worker '
+            'computed it',
+      );
+    });
+
+    test('signing in upgrades a hash minted below the store factor', () async {
+      final store = AdminStore.inMemory(kdfIterations: 1000);
+      final original = await store.createUser(
+        email: 'old@x.io',
+        name: 'Old',
+        password: 'long-enough-1',
+        // A row from a lower-work-factor era.
+        iterations: 500,
+      );
+      expect(
+        await store.debugPasswordHash(original.id),
+        startsWith('pbkdf2\$500\$'),
+      );
+
+      final user = await store.checkCredentials('old@x.io', 'long-enough-1');
+      expect(user, isNotNull);
+      final upgraded = await store.debugPasswordHash(user!.id);
+      expect(upgraded, startsWith('pbkdf2\$1000\$'),
+          reason: 'the first credential check rewrites the row at the '
+              'store factor — the password itself is unchanged');
+      // ...and the rewritten row still verifies the same password.
+      expect(
+        await store.checkCredentials('old@x.io', 'long-enough-1'),
+        isNotNull,
+      );
+      expect(
+        await store.checkCredentials('old@x.io', 'nope-nope-1'),
+        isNull,
+      );
+    });
+
+    test('signing in never rewrites a hash already at the store factor',
+        () async {
+      final store = AdminStore.inMemory(kdfIterations: 1000);
+      final seeded = await store.createUser(
+        email: 'current@x.io',
+        name: 'Cur',
+        password: 'long-enough-1',
+      );
+      final before = await store.debugPasswordHash(seeded.id);
+      expect(
+        await store.checkCredentials('current@x.io', 'long-enough-1'),
+        isNotNull,
+      );
+      expect(
+        await store.debugPasswordHash(seeded.id),
+        before,
+        reason: 'no churn per login: same factor = no write',
+      );
+    });
+  });
 }

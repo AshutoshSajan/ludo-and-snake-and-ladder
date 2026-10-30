@@ -111,7 +111,7 @@ void main() {
 
   group('users & sessions store', () {
     test('create/validate/revoke session', () async {
-      final store = AdminStore.inMemory();
+      final store = AdminStore.inMemory(kdfIterations: 1000);
       addTearDown(store.close);
       final user = await store.createUser(
         email: 'Root@Example.com',
@@ -164,11 +164,10 @@ void main() {
       );
       final parts = verified.single.split(r'$');
       expect(parts.first, 'pbkdf2');
-      expect(
-        int.parse(parts[1]),
-        defaultPbkdf2Iterations,
-        reason: 'the dummy hash must carry the production work factor',
-      );
+      expect(int.parse(parts[1]), greaterThanOrEqualTo(1),
+          reason: 'a seeded, format-declared hash — with a test verifier '
+              'injected the factor is the seam\'s business, the '
+              'production coupling is the test below');
 
       // A real account's wrong password runs exactly one verification
       // too — the same shape as the dummy path.
@@ -185,6 +184,37 @@ void main() {
         isNull,
       );
       expect(verified, hasLength(1));
+    });
+
+    test('the absent-email decoy carries the store work factor', () async {
+      // The CWE-208 contract, made observable: a real account is verified
+      // at its stored factor and an absent probe against the decoy — both
+      // must cost the same PBKDF2, so the decoy is minted at the very
+      // factor this store would give its next user, not a stale global.
+      final store = AdminStore.inMemory(kdfIterations: 1000);
+      addTearDown(store.close);
+
+      // A miss has to happen first: the decoy is lazy, not an import-time
+      // global.
+      expect(
+        await store.checkCredentials('nobody@example.com', 'long-enough-1'),
+        isNull,
+      );
+      final decoy = await store.debugAbsentHash();
+      expect(decoy, startsWith('pbkdf2\$1000\$'),
+          reason: 'a probe cannot time-distinguish an unregistered address: '
+          'the decoy works exactly as hard as an account this store creates');
+
+      // And with a *default* store the store factor is the global floor
+      // the production handler also gives its users — the coupling above
+      // (decoy factor = store factor) then reads: decoy = OWASP floor,
+      // without paying a 600k mint inside the suite.
+      expect(
+        AdminStore.inMemory().kdfIterations,
+        defaultPbkdf2Iterations,
+        reason: 'a store built by the production handler faces the same '
+            'factor for its users as this file\'s decoy contract asserts',
+      );
     });
 
     test('expired sessions die, short passwords and dupes rejected', () async {
@@ -222,7 +252,7 @@ void main() {
     test('status, one-time setup, login, me, logout', () async {
       final savedStore = adminStore;
       final savedToken = adminToken;
-      adminStore = AdminStore.inMemory();
+      adminStore = AdminStore.inMemory(kdfIterations: 1000);
       adminToken = 'test-secret';
       addTearDown(() {
         adminStore = savedStore;
@@ -395,7 +425,7 @@ void main() {
     test('non-admin sessions cannot touch admin endpoints', () async {
       final savedStore = adminStore;
       final savedToken = adminToken;
-      adminStore = AdminStore.inMemory();
+      adminStore = AdminStore.inMemory(kdfIterations: 1000);
       adminToken = 'legacy';
       addTearDown(() {
         adminStore = savedStore;
@@ -513,7 +543,7 @@ void main() {
       'a successful login frees its slot without spending the budget',
       () async {
         final savedStore = adminStore;
-        adminStore = AdminStore.inMemory();
+        adminStore = AdminStore.inMemory(kdfIterations: 1000);
         addTearDown(() {
           adminStore = savedStore;
           resetLoginAttempts();
@@ -546,7 +576,7 @@ void main() {
     test('admin can list and create users', () async {
       final savedStore = adminStore;
       final savedToken = adminToken;
-      adminStore = AdminStore.inMemory();
+      adminStore = AdminStore.inMemory(kdfIterations: 1000);
       adminToken = 'legacy-2';
       addTearDown(() {
         adminStore = savedStore;

@@ -17,6 +17,11 @@ AdminStore _store(FakeTursoPipeline fake) => AdminStore.fromBackend(
     authToken: 'test-token',
     client: fake.client,
   ),
+  // Every credential in this file hashes explicitly at 1000; matching the
+  // store factor keeps the successful-login rehash off — a 600k upgrade
+  // attempt (and an UPDATE the fake pipeline would log) is not what these
+  // tests are about.
+  kdfIterations: 1000,
 );
 
 void main() {
