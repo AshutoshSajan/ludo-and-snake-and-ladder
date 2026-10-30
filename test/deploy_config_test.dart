@@ -117,6 +117,48 @@ void main() {
       expect(release, contains('sha256sum -- * > SHA256SUMS.txt'));
       expect(release, contains('files: dist/*'));
     });
+
+    test('production hosting follows release tags, not every main push', () {
+      // deploy-hosting is the job that tells Netlify and Render to ship.
+      // Its tag guard must sit at the JOB level: a full-dispatch test run
+      // walks the same publish job a real tag does, so a step-level guard
+      // (or none) would redeploy production hosting from a dry run.
+      final job = release.substring(release.indexOf('  deploy-hosting:'));
+      expect(job, contains("if: startsWith(github.ref, 'refs/tags/v')"),
+          reason: 'workflow_dispatch runs build artifacts but must never '
+              're-point production hosting');
+      expect(
+        job,
+        contains('needs: [resolve-version, publish]'),
+        reason: 'the GitHub Release exists before the hosts learn of it',
+      );
+      for (final secret in const [
+        'NETLIFY_DEPLOY_HOOK_URL',
+        'RENDER_DEPLOY_HOOK_URL',
+      ]) {
+        expect(release, contains(secret),
+            reason: 'the deploy hooks are repo secrets the workflow '
+                'requires — a release without them fails, never silently '
+                'skips');
+      }
+    });
+  });
+
+  group('render.yaml', () {
+    late String render;
+    setUpAll(() {
+      render = File('render.yaml').readAsStringSync();
+    });
+
+    test('the service does not auto-deploy on pushes', () {
+      // Render's Git integration used to redeploy the game server on every
+      // push to main — every dev->main promotion bounced live player
+      // sockets mid-session. Deploys now originate from release.yaml's
+      // Render deploy hook when the GitHub Release ships, and from nowhere
+      // else.
+      expect(render, contains('autoDeploy: false'),
+          reason: 'a promotion merge must not restart a running game server');
+    });
   });
 
   group('netlify.toml', () {
@@ -137,6 +179,19 @@ void main() {
 
     test('publishes the Flutter web output', () {
       expect(toml, contains('publish = "build/web"'));
+    });
+
+    test('no Git-triggered build deploys — hosting rides release tags', () {
+      // The ignore command is the whole gate: Netlify evaluates it on every
+      // Git-event build (branch deploys, PR previews, production pushes) and
+      // skips the run when it exits 0. The flat `exit 0` below skips ALL of
+      // them — merging into dev and promoting dev->main both become invisible
+      // to the site. Production deploys instead come from release.yaml's
+      // Build Hook (`NETLIFY_DEPLOY_HOOK_URL`) when a `v*` tag ships, which
+      // is not subject to the ignore command — exactly why a flat skip
+      // breaks nothing.
+      expect(toml, contains("ignore = \"bash -c 'exit 0'\""),
+          reason: 'a merge can no longer be a web release, visibly or not');
     });
 
     test('passes GAME_SERVER_URL through, since the socket is not on Netlify',
@@ -330,14 +385,16 @@ void main() {
       expect(toml, isNot(contains('force = true')));
     });
 
-    test('only main may build: the gate decides at the branch, not the UI', () {
+    test('no Git event may build: the release tag is the deploy gate', () {
       // Netlify's GitHub app proposes a run for every push to every branch
-      // and every PR head. This repo promotes dev into main, so a dev merge
-      // deploying the whole site was both a surprise rebuild and Netlify's
-      // build minutes on a step that is not a release. The `ignore` command
-      // is the gate, and it is PINNED by running it: exiting 0 tells
-      // Netlify to skip the run, so main must be the only branch that
-      // keeps it alive.
+      // and every PR head. Hosting deploys now ride release tags: when a
+      // `v*` tag publishes its GitHub Release, release.yaml's deploy-hosting
+      // job fires this site's Build Hook — a tag is not a branch, so Git
+      // alone can never express "release". The ignore command therefore
+      // skips EVERY branch, and hook-triggered builds are not subject to
+      // it, which is why a flat skip breaks nothing. Still pinned by
+      // running it: exiting 0 tells Netlify to skip the run, so for any
+      // branch name the verdict must be skip.
       final m = RegExp(r'ignore = "((?:[^"\\]|\\.)+)"').firstMatch(toml);
       expect(m, isNotNull, reason: 'the deploy gate must be an ignore command');
       // TOML unescapes \" to " before the shell sees it; the regex above
@@ -349,8 +406,16 @@ void main() {
         environment: {'BRANCH': branch, 'PATH': '/usr/bin:/bin'},
         workingDirectory: Directory.current.path,
       ).exitCode;
-      expect(verdict('dev'), 0, reason: 'a dev merge must not build the site');
-      expect(verdict('main'), isNot(0), reason: 'main is the only deploy lane');
+      for (final branch in ['dev', 'main', 'release/v1.4.0', '']) {
+        expect(verdict(branch), 0,
+            reason: '"$branch" is a Git event; only a release tag may '
+                'deploy the site');
+      }
+      // The forbidden shape is a branch-shaped gate like the old
+      // "build on main": a branch comparison means a promotion merge is
+      // once again a web release.
+      expect(command.contains('main'), isFalse,
+          reason: 'no branch may ever be named as a build lane');
     }, skip: Platform.isWindows);
   });
 

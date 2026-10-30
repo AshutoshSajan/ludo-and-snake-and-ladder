@@ -151,6 +151,7 @@ the "you cannot just push to a trunk" rule is enforced by standing jobs:
 | `guard-dev-pr.yml` → `changelog-hands-off` | PR into `dev` | **fails any PR whose diff touches `CHANGELOG.md`** — the file is written only by CI's `release-prep` at the promotion (see [the changelog rule](#-changelog-git-cliff)) |
 | `pre-push` hook | every local push | rejects pushes to `main`/`dev` before they happen, then the full local suite |
 | `deps-audit.yml` | every PR + weekly cron | `pubspec.lock` scanned against OSV.dev advisories (`osv-scanner`); a known-vulnerable package fails the run — see [Dependency health](#-dependency-health) |
+| `release.yaml` | push of a `v*` tag (+ dispatch for test runs) | builds the distributables, publishes the GitHub Release, then fires the Netlify/Render deploy hooks — **the only path that deploys production hosting**; dispatches must not publish or deploy. Split/single host setup in [README](README.md) |
 | `prune-branch.yml` | PR into `dev`/`main` closed+merged | deletes the merged head branch (trunks and unknown prefixes excepted) |
 
 ---

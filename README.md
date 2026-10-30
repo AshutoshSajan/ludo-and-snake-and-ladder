@@ -302,14 +302,30 @@ HTTP origin is derived from that same URL, so it follows automatically. CORS is
 already handled server-side (`corsMiddleware` echoes the request origin), and
 browsers do not apply CORS to WebSockets at all.
 
-**When it deploys.** Merging into `dev` does not deploy. The `ignore` command
-in `netlify.toml` skips every run whose branch is not `main`, so the site
-rebuilds exactly when a change is promoted — dev→main — and dev merges are
-tested the way work is tested: `./tool/ci.sh` locally, or a run on the GitHub
-Actions tab after promoting. Keep **Site settings → Build & deploy →
-Continuous deployment → Production branch** pointed at `main`, so a main push
-lands on the production URL rather than a branch alias; branch deploys and PR
-previews are skipped by the gate regardless.
+**When it deploys.** Release tags, not merges. Pushing a `v*` tag on `main`
+calls the whole release pipeline (`.github/workflows/release.yaml`): the GitHub
+Release with every distributable is published first, then the same run fires
+the two hosting deploy hooks — the Netlify site and the Render server both
+follow the tag. Merging into `dev` or promoting dev→`main` changes nothing
+for players: `netlify.toml`'s `ignore` command skips every Git-triggered
+build and `render.yaml` turns `autoDeploy` off, so neither host deploys from
+git activity anymore. The hooks are GitHub secrets the release workflow
+requires:
+
+- `NETLIFY_DEPLOY_HOOK_URL` — Site settings → Build & deploy → Build hooks →
+  Add build hook (name it `v* release`; scope: Production deploy).
+- `RENDER_DEPLOY_HOOK_URL` — the service that runs the game server →
+  Settings → Deploy hook → Add. If that service was created as a Blueprint,
+  the committed `autoDeploy: false` flips the dashboard setting on the next
+  sync; otherwise turn Auto-Deploy off yourself once, or it keeps deploying
+  every not-yet-gated main push.
+
+A deployment is a rebuild of
+`main`'s tip, so cut the tag on the exact commit meant to ship (the release
+step is always: merge to `main`, then tag that merge commit). A run without
+both secrets fails fast *before* either hook fires, so re-running it after
+adding them deploys both hosts in one pass; hook-triggered builds ignore
+`netlify.toml`'s skip gate, which applies to Git-event builds only.
 
 **Cold starts.** Render's free plan sleeps after ~15 idle minutes, and the
 proxy refuses connections until the process is listening again. That is a wait,

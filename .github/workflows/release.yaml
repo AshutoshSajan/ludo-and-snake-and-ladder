@@ -4,6 +4,14 @@ name: Release
 # for a dry run) and every distributable is built and attached to the
 # GitHub Release. Extension tags (`ext-v*`) are NOT matched here.
 #
+# The tag is also the only path that republishes production hosting: once
+# the GitHub Release is out, this file fires the Netlify and Render deploy
+# hooks (deploy-hosting), so merging into main — and the dev->main promo —
+# is no longer a web release. Neither platform's own Git integration
+# deploys anymore: netlify.toml's ignore command skips every Git-triggered
+# build and render.yaml turns autoDeploy off. Hosts rebuild from the branch
+# tip of main, so cut the tag ON the main commit you intend to ship.
+#
 # Test runs can rebuild only the legs that failed before: dispatch with
 # `legs: build-linux,build-appimage` (comma- or space-separated job names).
 # A subset run leaves `publish` skipped — a `needs` leg that never runs
@@ -579,3 +587,59 @@ jobs:
           name: Game Club ${{ env.VERSION }}
           generate_release_notes: true
           files: dist/*
+
+  deploy-hosting:
+    # The release moment, continued: after the GitHub Release exists, the
+    # web client (Netlify) and the game server (Render) follow it.
+    #
+    # Deploy hooks instead of Git integration, because a tag is not a
+    # branch: Netlify and Render build the *branch* they are pointed at
+    # (main), and NEITHER Platform offers "deploy when a tag lands" as a
+    # trigger. The release cuts the tag on the main tip, so a hook — which
+    # rebuilds main's tip — deploys the tagged commit.
+    #
+    # Dispatches must not re-point production hosting: a tag-shaped `if`
+    # guards the job directly. `needs: publish` cannot do this alone — on
+    # a FULL dispatch (legs empty or "all") publish runs and succeeds, so
+    # needs alone would fire the hooks on a test run too.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [resolve-version, publish]
+    runs-on: ubuntu-24.04
+    # Job-level env rather than step `if` checks: GitHub rejects `secrets`
+    # inside step `if` outright ("Unrecognized named-value: 'secrets'",
+    # actions/runner#520) — same rationale as the ANDROID_* env above. An
+    # unset secret becomes an empty string, which the guard below tests.
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
+      NETLIFY_DEPLOY_HOOK_URL: ${{ secrets.NETLIFY_DEPLOY_HOOK_URL }}
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+    steps:
+      - name: Require both deploy hooks
+        # Both-or-none: the POSTs below are not transactional, and a run
+        # that updated one host and died before the other would leave
+        # clients talking to a server at a different version. Fail before
+        # anything is posted so re-running the job after adding the
+        # missing secret deploys both hosts in one pass.
+        if: env.NETLIFY_DEPLOY_HOOK_URL == '' || env.RENDER_DEPLOY_HOOK_URL == ''
+        run: |
+          echo '::error title=Deploy hooks missing::set both secrets on the repo (Settings > Secrets and variables > Actions).'
+          echo '::error::NETLIFY_DEPLOY_HOOK_URL — Site settings > Build & deploy > Build hooks > Add build hook (name it "v* release", scope Production).'
+          echo '::error::RENDER_DEPLOY_HOOK_URL — the service that runs the game server > Settings > Deploy hook > Add.'
+          env | grep -E 'NETLIFY_DEPLOY_HOOK_URL|RENDER_DEPLOY_HOOK_URL' | cut -d= -f1 \
+            | while read -r hook; do echo "::error::$hook is unset."; done
+          exit 1
+      - name: Deploy web client (Netlify)
+        # The hook asks Netlify to start its Production deploy of `main`;
+        # it does not carry an artifact, so GAME_SERVER_URL keeps coming
+        # from that site's own environment configuration (see netlify.toml).
+        # A 200 means the build is queued, not finished — netlify.toml's
+        # command does the real verification of the site it ships.
+        run: |
+          echo "Netlify: deploying $VERSION (main @ $GITHUB_SHA)"
+          curl -fsS --max-time 60 -X POST -d '{}' "$NETLIFY_DEPLOY_HOOK_URL" > /dev/null
+          echo 'Netlify build queued (hook accepted).'
+      - name: Deploy game server (Render)
+        run: |
+          echo "Render: deploying $VERSION (main @ $GITHUB_SHA)"
+          curl -fsS --max-time 60 -X POST "$RENDER_DEPLOY_HOOK_URL" > /dev/null
+          echo 'Render deploy queued (hook accepted).'
