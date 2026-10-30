@@ -7,6 +7,8 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 
 ## Unreleased
 ### Added
+- Feat(admin): /admin/login and /admin/signup as real URLs behind a status gate; eye icons on the DOM form
+- Feat(game): confirm before quitting a running match
 - Feat(persistence): store all server state in Turso
 ### Documentation
 - Docs(agents): require one database and one wiring factory
@@ -15,6 +17,11 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs(env): TRUSTED_PROXIES replaces the loopback default wholesale (CWE-307)
 - Docs: clarify authentication, media, voice, and automation contracts
 ### Fixed
+- Fix(admin): key each dashboard panel so a tab switch never paints the error widget
+- Fix(chat): Enter sends the reply on desktop, tap-to-copy room code chips, chime on confirmed friend sends
+- Fix(admin): serve the auth page URLs to browsers so a refresh or deep link opens the app
+- Fix(admin): render credentials as a real DOM form and validate setup
+- Fix(release): bump the snap version with the other declarations
 - Fix(admin): remove the sign-in server URL and repair autofill
 - Fix(auth): spend password work on absent-email logins
 - Fix(auth): reserve login capacity before credential verification
@@ -40,6 +47,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Fix(friends): require a device credential on every friends endpoint
 - Fix(server): require a seat-bound credential to replace a seat claim
 ### Other
+- Ci(deps): audit pubspec.lock on every pull request
 - Refactor(persistence): centralize store wiring behind a guarded factory
 - Ci(review): run the OpenCode review only on manual dispatch
 - Ci(review): refuse checkout symlinks that leave the workspace
