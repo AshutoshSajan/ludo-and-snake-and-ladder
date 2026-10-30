@@ -45,7 +45,7 @@ dependencies:
   shelf_static: ^1.2.0
   shelf_web_socket: ^3.0.0
   web_socket_channel: ^3.0.0
-  sqlite3: ^3.5.2
+  sqlite3: ^3.8.0
   http: ^1.6.0
   crypto: ^3.0.8
   # Table voice chat: WebRTC peer-to-peer audio, signalled over the game's
