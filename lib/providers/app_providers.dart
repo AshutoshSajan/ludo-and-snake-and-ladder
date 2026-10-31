@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/core/player_profiles.dart';
+import '../services/admin_client.dart';
+import '../services/server_url.dart';
 import '../services/sound_service.dart';
 import '../services/storage_service.dart';
 
@@ -12,18 +16,21 @@ final storageProvider = Provider<StorageService>((ref) => StorageService());
 /// The admin session, when signed in at /admin.
 ///
 /// The session's credential is the browser's HttpOnly cookie and never
-/// lives here — this provider holds only the account snapshot the login
-/// response carried. Watched by the home screen to keep the admin door
-/// beside Settings for signed-in admins, and by the dashboard to end the
-/// session when the server stops accepting the cookie (any 401 evades to
-/// the login screen through [AdminSessionNotifier.signOut]).
+/// lives here — this provider holds only the account snapshot that names
+/// the operator. Watched by the home screen to keep the admin door beside
+/// Settings for signed-in admins, and by the dashboard to end the session
+/// when the server stops accepting the cookie (any 401 evades to the login
+/// screen through [AdminSessionNotifier.signOut]).
 ///
-/// There is no persistent restore: a page refresh re-enters the dashboard
-/// with the cookie it kept, and the dashboard's first authenticated read
-/// (its death watch on `/admin/me`) both proves the cookie and names the
-/// operator. A momentary `null` state is therefore signed-nobody, and not
-/// a signal to bounce anybody — the screens that care about identity read
-/// it off the /admin/me response.
+/// A cold load starts null and asks the cookie, because the snapshot is
+/// memory-only and a refresh would otherwise hide the admin door from the
+/// very operator the cookie still admits: the browser kept the credential,
+/// so `/admin/me` is asked once on first read and the answer lands here.
+/// A 401/403 (no cookie, expired, revoked) or an unreachable server leaves
+/// the state null — the door is a shortcut, and a session that cannot be
+/// proven is not shown. Nothing here grants access: the dashboard still
+/// proves the cookie on its own first read, so the worst a wrong answer can
+/// do is hide a door.
 class AdminSession {
   const AdminSession({required this.email, required this.name});
 
@@ -31,19 +38,60 @@ class AdminSession {
   final String name;
 }
 
-final adminSessionProvider =
-    NotifierProvider<AdminSessionNotifier, AdminSession?>(
-  AdminSessionNotifier.new,
+/// Builds the client the cold-load restore asks `/admin/me` with.
+///
+/// Null where there is no cookie lane: the credential is the browser's, and
+/// native builds hold the session token in memory only, so a native restart
+/// is signed out by definition. Also the test seam — overriding this keeps
+/// the probe off the real socket.
+final adminRestoreClientProvider = Provider<AdminClient Function()?>(
+  (ref) => kIsWeb ? () => AdminClient(serverUrl: defaultServerUrl()) : null,
 );
 
+final adminSessionProvider =
+    NotifierProvider<AdminSessionNotifier, AdminSession?>(
+      AdminSessionNotifier.new,
+    );
+
 class AdminSessionNotifier extends Notifier<AdminSession?> {
+  /// Set once this notifier is torn down, so a probe still in flight cannot
+  /// write to a disposed state.
+  bool _disposed = false;
+
   @override
   AdminSession? build() {
-    // No restore stage: the cookie the browser kept IS the restored
-    // session, and the dashboard proves it on its first read. This build
-    // answers null every fresh process — the only consumers that persist
-    // a session are its screens via the server's Set-Cookie.
+    ref.onDispose(() => _disposed = true);
+    // Deliberately unawaited: build must answer synchronously, and a cold
+    // load is legitimately signed-nobody until the server says otherwise.
+    // Home rebuilds when the answer lands.
+    unawaited(_restoreFromCookie());
     return null;
+  }
+
+  /// Asks the one question a page without a readable credential can ask.
+  ///
+  /// Silent by design: a signed-out browser is the ordinary case, not an
+  /// error worth surfacing, and the screens that need identity read it off
+  /// their own `/admin/me` response.
+  Future<void> _restoreFromCookie() async {
+    final buildClient = ref.read(adminRestoreClientProvider);
+    if (buildClient == null) return;
+    final client = buildClient();
+    try {
+      final me = await client.me();
+      final user = me['user'];
+      if (_disposed || state != null || user is! Map) return;
+      final email = '${user['email'] ?? ''}';
+      if (email.isEmpty) return;
+      state = AdminSession(email: email, name: '${user['name'] ?? ''}');
+    } on AdminException {
+      // 401/403 is a dead cookie; anything else is an unreachable server.
+      // Both answer the same: no door, no bounce.
+    } catch (_) {
+      // Transport failures are the same story as an unreachable server.
+    } finally {
+      client.close();
+    }
   }
 
   void signIn(AdminSession session) => state = session;
@@ -51,8 +99,9 @@ class AdminSessionNotifier extends Notifier<AdminSession?> {
   void signOut() => state = null;
 }
 
-final soundEnabledProvider =
-    NotifierProvider<SoundToggle, bool>(SoundToggle.new);
+final soundEnabledProvider = NotifierProvider<SoundToggle, bool>(
+  SoundToggle.new,
+);
 
 class SoundToggle extends Notifier<bool> {
   @override
@@ -76,8 +125,9 @@ class SoundToggle extends Notifier<bool> {
   }
 }
 
-final hapticsEnabledProvider =
-    NotifierProvider<HapticsToggle, bool>(HapticsToggle.new);
+final hapticsEnabledProvider = NotifierProvider<HapticsToggle, bool>(
+  HapticsToggle.new,
+);
 
 class HapticsToggle extends Notifier<bool> {
   @override
@@ -101,8 +151,9 @@ class HapticsToggle extends Notifier<bool> {
 /// Battery saver: off disables the continuous board effects (breathing turn
 /// glow, spinning selection rings). One-shot feedback like the dice tumble
 /// and token hops still play — they stop by themselves in under a second.
-final animationsEnabledProvider =
-    NotifierProvider<AnimationsToggle, bool>(AnimationsToggle.new);
+final animationsEnabledProvider = NotifierProvider<AnimationsToggle, bool>(
+  AnimationsToggle.new,
+);
 
 class AnimationsToggle extends Notifier<bool> {
   @override
@@ -129,7 +180,8 @@ final soundServiceProvider = Provider<SoundService>((ref) {
 
 final profilesProvider =
     NotifierProvider<ProfilesNotifier, List<PlayerProfile>>(
-        ProfilesNotifier.new);
+      ProfilesNotifier.new,
+    );
 
 class ProfilesNotifier extends Notifier<List<PlayerProfile>> {
   PlayerRegistry _registry = PlayerRegistry();

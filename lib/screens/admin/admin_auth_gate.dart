@@ -16,10 +16,14 @@
 ///
 /// There is deliberately no client-side restore arm here anymore: the
 /// session credential is the browser's HttpOnly cookie, kept and re-presented
-/// by the browser itself, so `/admin/dashboard` cold loads mount the
-/// dashboard directly (see `app_router.dart`) and the dashboard's first
-/// authenticated read is the proof — a dead cookie 401s immediately and the
-/// death watch lands the login form.
+/// by the browser itself. The gate still cannot see that cookie — only the
+/// server can — so once `/admin/status` says an account exists, it asks one
+/// more question (`/admin/me`) before choosing a screen: a 200 hands off to
+/// the dashboard at `/admin/dashboard`, a 401/403 hands off to the sign-in
+/// form. Skipping that question is what made a reload look like a logout —
+/// the gate sent every cold load to the form whether or not the cookie was
+/// alive. A dashboard cold load proves the cookie again on its own first
+/// read, so an expired session still lands on the form without the gate.
 ///
 /// Compiled only on the web (`app_router.dart` conditional import); native
 /// builds get [admin_auth_gate_stub.dart]'s placeholder and the route arms
@@ -35,6 +39,7 @@ import '../../services/admin_client.dart';
 import '../../services/server_url.dart';
 import '../../ui/club_widgets.dart';
 import '../../ui/theme.dart';
+import 'admin_dashboard_screen.dart';
 import 'admin_login_screen.dart';
 
 class AdminAuthGate extends ConsumerStatefulWidget {
@@ -76,14 +81,29 @@ class _AdminAuthGateState extends ConsumerState<AdminAuthGate> {
         );
         return;
       }
-      // No setup pending: the URL and server truth agree by construction
-      // from here on — the replaced route names the mode, the screen mounts
-      // knowing it. Restore is the cookie's job, not the gate's.
+      // No setup pending, so an account exists. Whether *this* browser may
+      // skip the form is the server's call — the cookie is HttpOnly and the
+      // page cannot read it, so /admin/me is the only honest probe. A live
+      // session goes straight to the dashboard; its own death watch keeps
+      // watching from there.
+      try {
+        await client.me();
+      } on AdminException catch (e) {
+        if (e.statusCode != 401 && e.statusCode != 403) rethrow;
+        if (!mounted) return;
+        replaceAppScreen<void>(
+          context,
+          name: AppRoutes.adminLogin,
+          builder: (_) =>
+              AdminLoginScreen(mode: AdminAuthMode.login, clientFactory: clientFactory),
+        );
+        return;
+      }
+      if (!mounted) return;
       replaceAppScreen<void>(
         context,
-        name: AppRoutes.adminLogin,
-        builder: (_) =>
-            AdminLoginScreen(mode: AdminAuthMode.login, clientFactory: clientFactory),
+        name: AppRoutes.adminDashboard,
+        builder: (_) => AdminDashboardScreen(client: client),
       );
     } catch (e) {
       if (!mounted) return;
