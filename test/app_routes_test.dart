@@ -110,6 +110,16 @@ void main() {
       }
     });
 
+    test('the dashboard keeps its own URL', () {
+      // The gate lives at /admin. Collapsing the dashboard back onto that
+      // path made every reload re-enter the gate, which cannot see the
+      // HttpOnly cookie and sent signed-in operators to the login form.
+      expect(
+        const AdminDashboardRoute().location,
+        AppRoutes.adminDashboard,
+      );
+    });
+
     test('a chat path knows it is a cold-load parent route', () {
       final route = parseAppRoute(
         Uri.parse('/friends/chat/seat%201'),

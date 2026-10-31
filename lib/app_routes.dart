@@ -193,13 +193,20 @@ final class AdminSignupRoute extends AppRoute {
   String get location => AppRoutes.adminSignup;
 }
 
-/// The signed-in dashboard. It needs a live [AdminClient], so a cold load
-/// returns to the sign-in screen.
+/// The signed-in dashboard, at its own URL. The session credential is the
+/// browser's HttpOnly cookie, so a cold load here is not a guess: the
+/// dashboard rebuilds an [AdminClient] and its first authenticated read
+/// proves the cookie — a dead one lands the sign-in screen.
+///
+/// The URL must stay distinct from [AdminRoute]: the gate lives at
+/// `/admin`, and collapsing the dashboard back onto that path meant a
+/// reload re-ran the gate, which sent every operator to the sign-in form
+/// with a perfectly live cookie.
 final class AdminDashboardRoute extends AppRoute {
   const AdminDashboardRoute();
 
   @override
-  String get location => AppRoutes.admin;
+  String get location => AppRoutes.adminDashboard;
 }
 
 /// A path the table does not know. The navigator answers with home.
