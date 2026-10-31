@@ -1,10 +1,10 @@
-/// Auth tests: bcrypt password primitives, the users/sessions store, and
-/// the login / setup / session-gated HTTP surface. Bcrypt costs are
-/// threaded small (`rounds: 4`) for speed; production digests at
-/// [defaultBcryptRounds] = 12. The absent-email decoy ([absentEmailHash])
-/// is coupled to production verification and pays ~370ms per probe, so
-/// the tests that touch absent probes are the slow ones, on purpose:
-/// no test seam may ever cheapen what an attacker pays.
+/// Auth tests: bcrypt password primitives, the legacy PBKDF2 upgrade
+/// path, the users/sessions store, and the login / setup / session-gated
+/// HTTP surface. Bcrypt costs are threaded small (`rounds: 4`) for speed;
+/// production digests at [defaultBcryptRounds] = 12. The absent-email decoy
+/// ([absentEmailHash]) is coupled to production verification and pays
+/// ~370ms per probe, so the tests that touch absent probes are the slow
+/// ones, on purpose: no test seam may ever cheapen what an attacker pays.
 library;
 
 import 'dart:convert';
@@ -12,6 +12,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shelf/shelf.dart' as shelf;
+import 'package:sqlite3/sqlite3.dart';
 
 import 'package:game_club/server/admin_store.dart';
 import 'package:game_club/server/auth.dart';
@@ -141,6 +142,12 @@ Future<AdminStore> _missStore() async {
 
 const _loginMiss = '{"email":"ghost@x.io","password":"wrong-1"}';
 
+/// A digest from the retired PBKDF2 scheme, minted at 1,000 iterations so
+/// the compatibility tests stay fast. The preimage is [_legacyPassword].
+const _legacyPassword = 'legacy-correct-1';
+const _legacyHash =
+    r'pbkdf2$1000$MDEyMzQ1Njc4OWFiY2RlZg$CHCfN28uyTR0AhqLi35nELGFgp9EDagdwAfpP1JEsxo';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -160,6 +167,34 @@ void main() {
           reason: 'a truncated row must read as a miss, never a throw');
       expect(verifyPassword('x', r'$2a$10$not-a-valid-mime-b64-salt!!'), isFalse,
           reason: 'a corrupt salt must fail closed too');
+    });
+
+    test('a pre-bcrypt PBKDF2 row still verifies', () {
+      // Deployments upgraded past the bcrypt release still hold these rows;
+      // rejecting them is a lockout, not a security win. The format is the
+      // retired `pbkdf2$<iterations>$<salt>$<digest>` string.
+      expect(isLegacyPasswordHash(_legacyHash), isTrue);
+      expect(verifyPassword(_legacyPassword, _legacyHash), isTrue);
+      expect(verifyPassword('not-the-password', _legacyHash), isFalse);
+      expect(
+        isLegacyPasswordHash(hashPassword('same-password', rounds: 4)),
+        isFalse,
+        reason: 'new digests are bcrypt, never the legacy prefix',
+      );
+    });
+
+    test('malformed legacy rows fail closed', () {
+      expect(verifyPassword('x', 'pbkdf2'), isFalse);
+      expect(verifyPassword('x', r'pbkdf2$0$c2FsdA$aGFzaA'), isFalse,
+          reason: 'zero rounds is not a verification');
+      expect(verifyPassword('x', r'pbkdf2$1000001$c2FsdA$aGFzaA'), isFalse,
+          reason: 'a tampered work factor must not pin a worker isolate');
+      expect(
+        verifyPassword('x', r'pbkdf2$not-a-number$c2FsdA$aGFzaA'),
+        isFalse,
+      );
+      expect(verifyPassword('x', r'pbkdf2$1000$***$aGFzaA'), isFalse);
+      expect(verifyPassword('x', r'pbkdf2$1000$c2FsdA'), isFalse);
     });
 
     test('emails normalize', () {
@@ -458,6 +493,70 @@ void main() {
             .statusCode,
         401,
       );
+    });
+
+    test('a pre-bcrypt account logs in and upgrades to bcrypt', () async {
+      // Regression: the bcrypt migration shipped a verifier that rejected
+      // every row written by the old PBKDF2 scheme, locking existing
+      // operators out. The login path must accept the legacy digest once,
+      // then rewrite the row at the current bcrypt cost.
+      final savedStore = adminStore;
+      final db = sqlite3.openInMemory();
+      adminStore = AdminStore.fromDb(db, bcryptRounds: 4);
+      addTearDown(() {
+        adminStore = savedStore;
+        db.close();
+      });
+      resetLoginAttempts();
+
+      await adminStore.createUser(
+        email: 'legacy@x.io',
+        name: 'Legacy',
+        password: _legacyPassword,
+        role: 'admin',
+        by: 'test',
+      );
+      db.execute(
+        'UPDATE auth_users SET password_hash = ? WHERE email = ?',
+        [_legacyHash, 'legacy@x.io'],
+      );
+
+      final login = await adminLoginHandler(
+        _post('admin/login', {
+          'email': 'legacy@x.io',
+          'password': _legacyPassword,
+        }),
+      );
+      expect(login.statusCode, 200,
+          reason: 'the stored PBKDF2 row predates bcrypt; it must not '
+              'lock its account out of the deployment that migrated');
+      final cookie = _sessionCookiePair(
+        login,
+        maxAgeSeconds: adminStore.sessionTtl.inSeconds,
+      );
+      expect((await _json(login))['user']['email'], 'legacy@x.io');
+      expect(
+        (await adminMeHandler(_get('admin/me', cookie: cookie))).statusCode,
+        200,
+      );
+
+      final upgraded = db.select(
+        'SELECT password_hash FROM auth_users WHERE email = ?',
+        ['legacy@x.io'],
+      ).single['password_hash'] as String;
+      expect(upgraded, startsWith(r'$2a$04$'),
+          reason: 'the successful login rewrites the legacy row at the '
+              'current bcrypt cost — PBKDF2 is paid once, not forever');
+      expect(verifyPassword(_legacyPassword, upgraded), isTrue);
+
+      // A second login rides the upgraded row; the password still works.
+      final second = await adminLoginHandler(
+        _post('admin/login', {
+          'email': 'legacy@x.io',
+          'password': _legacyPassword,
+        }),
+      );
+      expect(second.statusCode, 200);
     });
 
     test('setup requires the setup secret when ADMIN_TOKEN is set', () async {

@@ -160,6 +160,8 @@ class SessionToken {
 
 /// Verifies [password] against a stored bcrypt [hash]. Injectable so a
 /// test can prove which hash a lookup verifies without paying the KDF.
+/// Legacy PBKDF2 rows take [verifyPasswordOffLoop] instead — they predate
+/// this seam and are upgraded in place on success.
 typedef PasswordVerifier = bool Function(String password, String hash);
 
 class AdminStore {
@@ -232,9 +234,10 @@ class AdminStore {
 
   /// This store's bcrypt cost for digesting NEW passwords: [defaultBcryptRounds]
   /// unless a test threads a small value — the same explicit-threading rule
-  /// the hash itself follows. One number for every consumer (there is no
-  /// rehash-on-login anymore: legacy rows re-hash whenever their operator
-  /// changes their password).
+  /// the hash itself follows. One number for every consumer. A legacy
+  /// PBKDF2 row is re-hashed at this cost on its first successful login,
+  /// which is the migration path — there is no separate "reset password"
+  /// endpoint to lean on.
   ///
   /// Production never passes this; tests that flip [adminStore] or use
   /// `inMemory()` with the real verifier do — the suite otherwise pays a
@@ -849,6 +852,17 @@ class AdminStore {
   /// The decoy verify rides the production bcrypt path directly rather than
   /// [_verifier], so a test's cheap injected verifier cannot quietly make
   /// the absent branch instantaneous while the real one pays.
+  ///
+  /// A row still holding the pre-bcrypt PBKDF2 form is verified off the
+  /// event loop and, on success, rewritten with a bcrypt digest at
+  /// [bcryptRounds]. That one-time upgrade is what lets an account created
+  /// before the bcrypt release log in at all; the legacy window is a single
+  /// successful login per row. Its wrong-password path costs the row's
+  /// stored PBKDF2 work rather than the bcrypt decoy, so legacy rows are not
+  /// timing-identical until upgraded — a bounded exception for accounts that
+  /// already existed, not the steady state. A failed upgrade write does not
+  /// deny the login (the password was already correct): the row stays
+  /// legacy and the next login retries.
   Future<AuthUser?> checkCredentials(String email, String password) async {
     await ensureSchema();
     final results = await _backend.run([
@@ -863,8 +877,27 @@ class AdminStore {
       verifyPassword(password, absentEmailHash);
       return null;
     }
-    final ok = _verifier(password, row['password_hash'] as String);
-    return ok ? _userFromRow(row) : null;
+    final stored = row['password_hash'] as String;
+    final legacy = isLegacyPasswordHash(stored);
+    final ok = legacy
+        ? await verifyPasswordOffLoop(password, stored)
+        : _verifier(password, stored);
+    if (!ok) return null;
+    if (legacy) {
+      try {
+        await _backend.run([
+          SqlStatement('UPDATE auth_users SET password_hash = ? WHERE id = ?', [
+            hashPassword(password, rounds: bcryptRounds),
+            row['id'],
+          ]),
+        ]);
+      } catch (_) {
+        // Correct password, failed upgrade: admit the operator and retry
+        // the rewrite on the next login rather than turning a credential
+        // that just verified into a 500.
+      }
+    }
+    return _userFromRow(row);
   }
 
   Future<List<AuthUser>> listUsers({int limit = 100}) async {
