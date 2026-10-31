@@ -25,7 +25,7 @@ final storageProvider = Provider<StorageService>((ref) => StorageService());
 /// A cold load starts null and asks the cookie, because the snapshot is
 /// memory-only and a refresh would otherwise hide the admin door from the
 /// very operator the cookie still admits: the browser kept the credential,
-/// so `/admin/me` is asked once on first read and the answer lands here.
+/// so `/admin/me` is asked on each build and the answer lands here.
 /// A 401/403 (no cookie, expired, revoked) or an unreachable server leaves
 /// the state null — the door is a shortcut, and a session that cannot be
 /// proven is not shown. Nothing here grants access: the dashboard still
@@ -34,8 +34,28 @@ final storageProvider = Provider<StorageService>((ref) => StorageService());
 class AdminSession {
   const AdminSession({required this.email, required this.name});
 
+  /// The account snapshot out of a `{ok, user: {...}}` answer, or null when
+  /// the body does not carry a usable one.
+  ///
+  /// Both call sites that read this body — the cold-load restore and the
+  /// `/admin` hand-off — must agree on what counts as signed in, so the
+  /// rule lives here once instead of being re-guessed per screen.
+  static AdminSession? fromUser(Object? user) {
+    if (user is! Map) return null;
+    final email = '${user['email'] ?? ''}';
+    if (email.isEmpty) return null;
+    return AdminSession(email: email, name: '${user['name'] ?? ''}');
+  }
+
   final String email;
   final String name;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AdminSession && other.email == email && other.name == name;
+
+  @override
+  int get hashCode => Object.hash(email, name);
 }
 
 /// Builds the client the cold-load restore asks `/admin/me` with.
@@ -54,13 +74,14 @@ final adminSessionProvider =
     );
 
 class AdminSessionNotifier extends Notifier<AdminSession?> {
-  /// Set once this notifier is torn down, so a probe still in flight cannot
-  /// write to a disposed state.
-  bool _disposed = false;
+  /// The most a probe may cost the door. Without one, a black-holed network
+  /// (captive portal, dropped packets) holds the request for the OS TCP
+  /// timeout and the door stays undecided for minutes — the one case the
+  /// "unreachable server shows no door" answer was supposed to cover.
+  static const _probeTimeout = Duration(seconds: 5);
 
   @override
   AdminSession? build() {
-    ref.onDispose(() => _disposed = true);
     // Deliberately unawaited: build must answer synchronously, and a cold
     // load is legitimately signed-nobody until the server says otherwise.
     // Home rebuilds when the answer lands.
@@ -78,17 +99,25 @@ class AdminSessionNotifier extends Notifier<AdminSession?> {
     if (buildClient == null) return;
     final client = buildClient();
     try {
-      final me = await client.me();
-      final user = me['user'];
-      if (_disposed || state != null || user is! Map) return;
-      final email = '${user['email'] ?? ''}';
-      if (email.isEmpty) return;
-      state = AdminSession(email: email, name: '${user['name'] ?? ''}');
+      final me = await client.me().timeout(_probeTimeout);
+      final session = AdminSession.fromUser(me['user']);
+      // Asked of the *current* ref, never a flag captured in build: a
+      // rebuild hands the notifier a fresh Ref and fires onDispose for the
+      // old one, so a "disposed" flag set there would drop every probe
+      // after the first. Only real disposal may silence a probe in flight.
+      if (session == null || !ref.mounted) return;
+      // A sign-in that landed while the answer was in flight is fresher
+      // than this probe, so it wins.
+      if (state != null) return;
+      state = session;
     } on AdminException {
       // 401/403 is a dead cookie; anything else is an unreachable server.
       // Both answer the same: no door, no bounce.
     } catch (_) {
-      // Transport failures are the same story as an unreachable server.
+      // Unreachable server, a timed-out probe, or a body that no longer
+      // matches the contract: a fire-and-forget probe may surface none of
+      // them, and an escaping error would become an unhandled async failure
+      // in the shell.
     } finally {
       client.close();
     }

@@ -35,6 +35,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_router.dart';
 import '../../app_routes.dart';
+import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
 import '../../services/server_url.dart';
 import '../../ui/club_widgets.dart';
@@ -85,9 +86,12 @@ class _AdminAuthGateState extends ConsumerState<AdminAuthGate> {
       // skip the form is the server's call — the cookie is HttpOnly and the
       // page cannot read it, so /admin/me is the only honest probe. A live
       // session goes straight to the dashboard; its own death watch keeps
-      // watching from there.
+      // watching from there. The answer also seeds the home door's snapshot,
+      // so a cold load straight into /admin does not ask the same question a
+      // second time.
+      final Map<String, dynamic> me;
       try {
-        await client.me();
+        me = await client.me();
       } on AdminException catch (e) {
         if (e.statusCode != 401 && e.statusCode != 403) rethrow;
         if (!mounted) return;
@@ -100,6 +104,10 @@ class _AdminAuthGateState extends ConsumerState<AdminAuthGate> {
         return;
       }
       if (!mounted) return;
+      final session = AdminSession.fromUser(me['user']);
+      if (session != null) {
+        ref.read(adminSessionProvider.notifier).signIn(session);
+      }
       replaceAppScreen<void>(
         context,
         name: AppRoutes.adminDashboard,
