@@ -74,14 +74,7 @@ void main() {
     );
     container
         .read(adminSessionProvider.notifier)
-        .signIn(
-          const AdminSession(
-            token: 't',
-            email: 'root@x.io',
-            name: 'Root',
-            expiresAt: 9876543210000,
-          ),
-        );
+        .signIn(const AdminSession(email: 'root@x.io', name: 'Root'));
     await tester.pumpAndSettle();
 
     expect(find.text('Admin'), findsOneWidget);
@@ -106,22 +99,16 @@ void main() {
     final ctx = tester.element(find.byType(PageAppBar));
     ProviderScope.containerOf(ctx)
         .read(adminSessionProvider.notifier)
-        .signIn(
-          const AdminSession(
-            token: 't',
-            email: 'root@x.io',
-            name: 'Root',
-            expiresAt: 9876543210000,
-          ),
-        );
+        .signIn(const AdminSession(email: 'root@x.io', name: 'Root'));
     await tester.pumpAndSettle();
 
     expect(find.text('Admin · root@x.io'), findsNothing);
     expect(find.byType(PageAppBar), findsOneWidget);
   });
 
-  testWidgets('a successful sign-in keeps the server-set expiry on the '
-      'session', (tester) async {
+  testWidgets('a successful sign-in seeds the account snapshot, not a token', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       ProviderScope(
@@ -140,12 +127,16 @@ void main() {
                 if (request.url.path == '/admin/login') {
                   return http.Response(
                     jsonEncode({
-                      'token': 'tok-123',
-                      'expiresAt': 1234567890123,
+                      'ok': true,
                       'user': {'email': 'root@x.io', 'name': 'Root'},
                     }),
                     200,
-                    headers: {'content-type': 'application/json'},
+                    headers: {
+                      'content-type': 'application/json',
+                      'set-cookie':
+                          'gc_admin_session=tok-123; HttpOnly; Secure; '
+                              'SameSite=Strict; Path=/; Max-Age=7200',
+                    },
                   );
                 }
                 return http.Response('{}', 404);
@@ -172,24 +163,24 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
+    // The provider holds only the account snapshot the login answered
+    // with: the credential itself is the HttpOnly cookie the client just
+    // captured — never a token field on this record, and the server owns
+    // the expiry entirely.
     final session = container.read(adminSessionProvider);
     expect(session, isNotNull);
-    expect(session!.token, 'tok-123');
-    expect(
-      session.expiresAt,
-      1234567890123,
-      reason: 'the persisted record must carry the server clock, not a '
-          'client guess — a rebuilt session later restores exactly this',
-    );
+    expect(session!.email, 'root@x.io');
+    expect(session.name, 'Root');
   });
 
   testWidgets('a dead session evicts the operator to a fresh login', (
     tester,
   ) async {
-    // Every dashboard read rides the one token. When the server refuses it
-    // outright (expired past the 12h window, revoked), a dashboard of
-    // failing buttons is not an operator experience: the session watch
-    // signs out and takes the stack back to a rooted login form.
+    // Every dashboard read rides the one session cookie. When the server
+    // refuses it outright (expired past the server's TTL window, revoked),
+    // a dashboard of failing buttons is not an operator experience: the
+    // session watch signs out and takes the stack back to a rooted login
+    // form.
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       ProviderScope(
@@ -233,8 +224,8 @@ void main() {
           'reach — the login form is the new root',
     );
     expect(container.read(adminSessionProvider), isNull,
-        reason: 'the eviction signs out: no usable token stays in storage '
-            'or the provider');
+        reason: 'the eviction signs out: no session snapshot stays in the '
+            'provider, and the cookie itself the server has revoked');
   });
 
   testWidgets('password field menu offers Paste and it fills the field', (
@@ -468,11 +459,16 @@ void main() {
                   posted = jsonDecode(request.body) as Map<String, dynamic>;
                   return http.Response(
                     jsonEncode({
-                      'token': 'tok',
+                      'ok': true,
                       'user': {'email': 'root@x.io', 'name': 'Root'},
                     }),
                     200,
-                    headers: {'content-type': 'application/json'},
+                    headers: {
+                      'content-type': 'application/json',
+                      'set-cookie':
+                          'gc_admin_session=tok; HttpOnly; Secure; '
+                              'SameSite=Strict; Path=/; Max-Age=7200',
+                    },
                   );
                 }
                 return http.Response('{}', 404);

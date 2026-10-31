@@ -22,6 +22,7 @@ import 'package:flutter/services.dart' show SystemNavigator;
 import 'app_routes.dart';
 import 'engine/core/player_profiles.dart';
 import 'screens/admin/admin_gate.dart';
+import 'screens/admin/admin_dashboard_screen.dart';
 import 'screens/admin/admin_login_screen.dart'
     if (dart.library.io) 'screens/admin/admin_login_stub.dart';
 // The gate replaces itself with the real auth screen, so it needs the
@@ -37,6 +38,7 @@ import 'screens/rules_screen.dart';
 import 'screens/scoreboard_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/setup_screen.dart';
+import 'services/admin_client.dart';
 import 'services/server_url.dart';
 
 /// The screen and the canonical URL for one parsed route.
@@ -480,11 +482,15 @@ _Target? _targetFor(AppRoute route) {
       const AdminLoginScreen(mode: AdminAuthMode.signup),
       AppRoutes.adminSignup,
     ),
-    // The dashboard needs the signed-in client; a reload restarts at the
-    // mode the server actually serves, through the same gate.
+    // A cold load of the dashboard mounts it directly: the session
+    // credential is the browser's HttpOnly cookie, re-presented by the
+    // browser on every request, so the dashboard's first authenticated read
+    // (/admin/me, its death watch) is both the proof and the eviction — a
+    // dead cookie 401s and the login form lands, with no client-side
+    // restore stage to fake a session it cannot prove.
     AdminDashboardRoute() => _adminTarget(
-      const AdminAuthGate(),
-      AppRoutes.admin,
+      AdminDashboardScreen(client: AdminClient(serverUrl: defaultServerUrl())),
+      AppRoutes.adminDashboard,
     ),
     UnknownRoute() => null,
   };

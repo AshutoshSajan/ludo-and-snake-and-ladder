@@ -869,7 +869,7 @@ Future<shelf.Response> leaderboardHandler(shelf.Request req) async {
 /// True when [req] carries the configured admin bearer token. An empty
 /// [adminToken] deny-alls THIS legacy path (and first-run setup), not
 /// the credential surface: admin users log in with email+password and
-/// their DB-backed sessions are independent of the token (see
+/// their DB-backed sessions ride the HttpOnly cookie (see
 /// ADMIN_TOKEN in .env.example). Clearing the token contains the token
 /// itself — it neither revokes live sessions nor disables interactive
 /// login; revocation is the logout/user-management path.
@@ -887,18 +887,50 @@ bool _legacyTokenMatch(shelf.Request req) {
   return diff == 0;
 }
 
-String? _presentedToken(shelf.Request req) {
-  final header = req.headers['authorization'] ?? '';
-  const prefix = 'Bearer ';
-  if (!header.startsWith(prefix)) return null;
-  final token = header.substring(prefix.length).trim();
-  return token.isEmpty ? null : token;
+/// Name of the cookie the admin session travels in. HttpOnly, so no script
+/// in the page can read or exfiltrate it; the browser manages the lifetime
+/// from here on and simply re-sends it.
+const adminSessionCookie = 'gc_admin_session';
+
+/// Extracts the session token from the `Cookie` header, or null when the
+/// request carries no (or another) session. Parsing stays minimal on
+/// purpose: the value is `name=value` pairs joined by `; `, and the token
+/// itself is base64url — letters, digits, `-`, `_` — so matching it through
+/// the end of the pair is exact.
+String? sessionTokenFromCookie(shelf.Request req) {
+  final header = req.headers['cookie'];
+  if (header == null) return null;
+  for (final piece in header.split(';')) {
+    final pair = piece.trim();
+    if (!pair.startsWith('$adminSessionCookie=')) continue;
+    final token = pair.substring(adminSessionCookie.length + 1).trim();
+    return token.isEmpty ? null : token;
+  }
+  return null;
 }
 
-/// The session's admin user, or null. Legacy ADMIN_TOKEN callers have no
+/// The Set-Cookie header that mints a session: the HttpOnly browser-managed
+/// credential plus its [maxAgeSeconds] lifetime, which
+/// [AdminStore.sessionTtl] derived — the same clock that stamped the row's
+/// `expires_at`, so the browser spending the cookie is the admission the
+/// row granted.
+String sessionCookieHeader(String token, {required int maxAgeSeconds}) =>
+    '$adminSessionCookie=$token; HttpOnly; Secure; SameSite=Strict; '
+    'Path=/; Max-Age=$maxAgeSeconds';
+
+/// The Set-Cookie header that empties the cookie in place (`Max-Age=0`):
+/// the browser deletes it immediately and the row was already deleted, so
+/// the pairing of the two deletion moments is exact.
+const expiredSessionCookieHeader =
+    '$adminSessionCookie=; HttpOnly; Secure; SameSite=Strict; '
+    'Path=/; Max-Age=0';
+
+/// The session's admin user, read from the cookie, or null — nothing about
+/// a candidate is trusted before the store answers, and the store deletes
+/// unknown-and-expired rows on sight. Legacy ADMIN_TOKEN callers have no
 /// identity — use 'admin-token' when auditing their actions.
 Future<AuthUser?> adminIdentity(shelf.Request req) async {
-  final token = _presentedToken(req);
+  final token = sessionTokenFromCookie(req);
   if (token == null) return null;
   try {
     final user = await adminStore.validateSession(token);
@@ -907,9 +939,10 @@ Future<AuthUser?> adminIdentity(shelf.Request req) async {
   return null;
 }
 
-/// Authorized when the request carries a live admin session OR the legacy
-/// ADMIN_TOKEN service token. The legacy path stays for automation and
-/// backwards compatibility; interactive logins use sessions.
+/// Authorized when the request presents a live admin session via its
+/// HttpOnly cookie OR the legacy ADMIN_TOKEN service token. The legacy
+/// path stays for automation and backwards compatibility; interactive
+/// logins mint the cookie.
 Future<bool> isAdminAuthorized(shelf.Request req) async {
   if (await adminIdentity(req) != null) return true;
   return _legacyTokenMatch(req);
@@ -1899,13 +1932,14 @@ Future<shelf.Response> adminSetupHandler(shelf.Request req) async {
     );
     final session = await adminStore.createSession(user.id);
     return shelf.Response.ok(
-      jsonEncode({
-        'ok': true,
-        'token': session.token,
-        'expiresAt': session.expiresAt,
-        'user': user.toJson(),
-      }),
-      headers: {'content-type': 'application/json'},
+      jsonEncode({'ok': true, 'user': user.toJson()}),
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': sessionCookieHeader(
+          session.token,
+          maxAgeSeconds: adminStore.sessionTtl.inSeconds,
+        ),
+      },
     );
   } on ArgumentError catch (e) {
     return shelf.Response(
@@ -1962,13 +1996,14 @@ Future<shelf.Response> adminLoginHandler(shelf.Request req) async {
     }
     final session = await adminStore.createSession(user.id);
     return shelf.Response.ok(
-      jsonEncode({
-        'ok': true,
-        'token': session.token,
-        'expiresAt': session.expiresAt,
-        'user': user.toJson(),
-      }),
-      headers: {'content-type': 'application/json'},
+      jsonEncode({'ok': true, 'user': user.toJson()}),
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': sessionCookieHeader(
+          session.token,
+          maxAgeSeconds: adminStore.sessionTtl.inSeconds,
+        ),
+      },
     );
   } finally {
     // Always give the capacity back: a rejected password spends its slot
@@ -1979,13 +2014,19 @@ Future<shelf.Response> adminLoginHandler(shelf.Request req) async {
 }
 
 Future<shelf.Response> adminLogoutHandler(shelf.Request req) async {
-  final token = _presentedToken(req);
+  final token = sessionTokenFromCookie(req);
   if (token != null) {
     await adminStore.revokeSession(token);
   }
+  // The cookie is emptied in place whether or not a row matched: a logout
+  // after a server-side expiry must still clean the browser as well as the
+  // database, so no half-dead credential lingers anywhere.
   return shelf.Response.ok(
     jsonEncode({'ok': true}),
-    headers: {'content-type': 'application/json'},
+    headers: {
+      'content-type': 'application/json',
+      'set-cookie': expiredSessionCookieHeader,
+    },
   );
 }
 
@@ -2719,6 +2760,24 @@ Future<void> main(List<String> args) async {
   // joins the chain.
   trustedProxies = trustedProxiesFromEnv(env['TRUSTED_PROXIES']);
 
+  // Admin session lifetime, parsed exactly once: every session row the
+  // server stamps and every cookie it mints derive from this one value.
+  // Unset is legal (2h default); a garbage value is not — the process
+  // refuses to start, because a typo like `ADMIN_SESSION_TTL_HOURS=2.5`
+  // silently stretching or shortening every admin's session is the failure
+  // mode parsing "later somewhere" invites.
+  final sessionTtl = AdminStore.adminSessionTtlFromEnv(
+    env['ADMIN_SESSION_TTL_HOURS'],
+  );
+  if (sessionTtl == null) {
+    stderr.writeln(
+      '!! ADMIN_SESSION_TTL_HOURS must be a positive whole number of '
+      'hours (got: ${env['ADMIN_SESSION_TTL_HOURS']}). Leaving it unset '
+      'runs the 2-hour default.',
+    );
+    exit(64);
+  }
+
   // GIF search for table chat: the provider layer picks Klipy or GIPHY
   // from the environment (GIF_PROVIDER pins one explicitly). Without
   // any key the picker degrades to paste-a-link (see lib/server/gif.dart).
@@ -2736,7 +2795,11 @@ Future<void> main(List<String> args) async {
   // every store falls back to one local SQLite file. Tests swap the
   // globals; test/persistence_test.dart proves both modes and fails if
   // this file starts constructing a store directly again.
-  final persistence = openPersistence(env: env, dbPath: dbPath);
+  final persistence = openPersistence(
+    env: env,
+    dbPath: dbPath,
+    sessionTtl: sessionTtl,
+  );
 
   try {
     adminStore.close();
@@ -2849,7 +2912,8 @@ Future<void> main(List<String> args) async {
     'data: ${persistence.usesTurso ? 'Turso (all stores)' : dbPath}, '
     'room registry: '
     '${persistence.registryTtl != null ? 'Turso' : 'in-memory'}, '
-    'web UI: ${webDir != null ? 'served from $webDir' : 'not found'})',
+    'web UI: ${webDir != null ? 'served from $webDir' : 'not found'}, '
+    'admin sessions: ${sessionTtl.inHours}h',
   );
 
   // Prove the store is actually reachable, and say so out loud. The deployed

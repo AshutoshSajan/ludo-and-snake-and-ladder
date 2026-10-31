@@ -208,7 +208,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       // and nothing changes for anyone else. The badge that
                       // used to sit under the header carried the same rule;
                       // a door in the same row as its friends is the shorter
-                      // trip back to the dashboard.
+                      // trip back to the dashboard. The client itself needs
+                      // no credential: the browser's HttpOnly cookie rides
+                      // on every /admin request already.
                       if (admin != null) ...[
                         const SizedBox(width: 10),
                         Expanded(
@@ -223,7 +225,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               builder: (_) => AdminDashboardScreen(
                                 client: AdminClient(
                                   serverUrl: defaultServerUrl(),
-                                  token: admin.token,
                                 ),
                               ),
                             ),
