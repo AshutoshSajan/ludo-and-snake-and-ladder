@@ -255,9 +255,13 @@ void main() {
     // amo.metadata.json by convention - amoMetadata is only populated when the
     // --amo-metadata option names a path (web-ext src/cmd/sign.js). Without this
     // flag the job uploads successfully and AMO rejects it with a 400 about a
-    // field nobody in the repository ever mentions.
-    final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+    // field nobody in the repository ever mentions. The publishing job lives
+    // in release.yaml (publish-amo) since the ext-v lane moved there.
+    final workflow = File('.github/workflows/release.yaml').readAsStringSync();
     expect(workflow, contains('--amo-metadata extension/amo.metadata.json'));
+    expect(File('.github/workflows/ci.yml').readAsStringSync(),
+        isNot(contains('--amo-metadata')),
+        reason: 'ci.yml no longer submits to AMO; only release.yaml does');
   });
 
   test('the Firefox manifest declares data collection, which AMO requires', () {

@@ -143,22 +143,6 @@ jobs:
           chmod +x /usr/local/bin/git-cliff
           git-cliff --version
 
-      - name: Verify the version matches the tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          # The tag is what users see and what AMO records. If the declared
-          # version disagrees with it, the release notes, the store listing and
-          # the uploaded package would all name different versions. Fail here,
-          # before credentials are used.
-          tagged="${GITHUB_REF_NAME#v}"
-          declared=$(tool/version.sh)
-          if [ "$tagged" != "$declared" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match the declared version $declared"
-            echo "  fix: tool/version.sh --set $tagged && git commit -am 'chore: set version to $tagged'"
-            exit 1
-          fi
-          echo "tag $GITHUB_REF_NAME matches the declared version"
-
       # "Regenerate and commit" used to live here, gated on staging/dev pushes.
       # Those branches no longer trigger the workflow, so the step could never
       # fire — it would have been a job that looked like it maintained the
@@ -252,7 +236,7 @@ jobs:
           # YAML block scalar an unindented continuation is parsed as a new key
           # - which silently corrupts the workflow file instead of failing loudly.
           # One line, \n escapes, no indentation to get wrong.
-          body=$'Automated: regenerates `CHANGELOG.md` for the current history. The release version is '"$target"$'.\n\nOpened by the `release-prep` job. It commits through a PR because `guard-main` requires the head of main to be a merge commit, and a bot push is not one.\n\nMerge to apply. `verify-release` and `publish-firefox` run on the merge, not on this PR.'
+          body=$'Automated: regenerates `CHANGELOG.md` for the current history. The release version is '"$target"$'.\n\nOpened by the `release-prep` job. It commits through a PR because `guard-main` requires the head of main to be a merge commit, and a bot push is not one.\n\nMerge to apply. `verify-release` runs on the merge, not on this PR.'
           if ! gh pr create --base main --head "chore/release-prep-$target" \
                --title "chore: release prep $target" \
                --body "$body"; then
@@ -278,27 +262,26 @@ jobs:
   # forbids.
 
 
-  # ---------------------------------------------------------------------------
-  # Store publishing
-  #
-  # Both jobs live here so the Chrome path is not lost while it is switched
-  # off. Uncommenting the Chrome job is a one-step change; rediscovering the
-  # whole thing is not.
-  #
-  # Both need credentials in repository secrets, which are NOT in the repo:
-  #   AMO_API_KEY, AMO_API_SECRET            (addons.mozilla.org API credentials)
-  #   CHROME_CLIENT_ID, CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN
-  #
-  # They run on a tag so a release is a deliberate act rather than something
-  # that happens whenever main moves.
-  # ---------------------------------------------------------------------------
+  # Store publishing lives in release.yaml now, driven by the same v* release
+  # tags as every other channel:
+  #   - publish-amo submits the Firefox add-on (web-ext sign; loud-skipped
+  #     while both AMO secrets are unset).
+  #   - publish-chrome sits beside it, commented out on purpose until the paid
+  #     Chrome Web Store developer account exists (CHROME_CLIENT_ID,
+  #     CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN when it does).
+  # This file cannot carry those jobs: `on:` covers main pushes and PRs only,
+  # so a tag-shaped `if` here never matched — which is exactly what the
+  # ext-v* lane was, an unreachable job behind a trigger that cannot fire.
 
   verify-release:
-    # The gate between a merge and a store upload. Runs on a main push as well as
-    # on a tag, because publishing is driven by main now rather than by a tag.
+    # The post-promotion gate: this workflow fires only on a push to main (a
+    # dev->main promotion or a release-prep merge), so analyze+test run again
+    # on exactly what became live. It is not a publishing gate anymore — store
+    # uploads and hosting deploys ride v* tags via release.yaml, whose
+    # full-run `verify` job runs the same suite before anything ships.
     # `test` cannot serve here: it is pull-request-scoped, and a skipped job's
-    # dependent never starts — which is what left publishing stuck.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    # dependent never starts.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -319,101 +302,3 @@ jobs:
 
       - name: Test
         run: flutter test
-
-  publish-firefox:
-    # Builds the signed-package-ready .xpi and hands it to addons.mozilla.org,
-    # which does the signing. AMO rejects an unsigned upload, so this is the
-    # only route; there is no local equivalent worth automating.
-    #
-    # Driven by an ext-v* tag (extension release), not a main push.
-    # This matches the Sudoku workflow pattern where extension releases
-    # are driven by ext-v* tags.
-    if: startsWith(github.ref, 'refs/tags/ext-v')
-    runs-on: ubuntu-24.04
-    # Needs BOTH. `release-prep` performs the version bump and changelog
-    # regeneration this upload has to reflect, and `verify-release` is the only
-    # test gate on this path - `test` is pull-request-scoped, so on a push it is
-    # skipped, and a job whose dependency was skipped never starts. That is what
-    # left publishing stuck rather than running.
-    #
-    # NOTE: This job now runs on ext-v* tags (extension releases), not on main push.
-    # The release-prep and verify-release jobs will run on the tag push as well
-    # because the workflow triggers on tags via the main workflow.
-    needs: [release-prep, verify-release]
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-
-      # Without this the job's very first command is `flutter pub get`, and a
-      # GitHub runner has no Flutter on PATH: `flutter: command not found`,
-      # exit 127, before any credential is touched. Both other jobs that build
-      # (test, verify-release) install it here, and publish-firefox was the one
-      # that did not - it is the only job whose failure was invisible, because
-      # its trigger had never fired.
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Build the web bundle
-        # The extension bundles the whole Flutter payload; there is no dart-define
-        # for the server here, so an add-on build needs no configuration.
-        run: |
-          flutter pub get
-          flutter build web --release
-
-      - name: Package the add-on
-        run: ./tools/build_extension.sh --firefox --zip
-
-      - name: Submit to addons.mozilla.org
-        env:
-          AMO_API_KEY: ${{ secrets.AMO_API_KEY }}
-          AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
-        run: |
-          # `sign`, not `publish`: web-ext has no `publish` subcommand. The
-          # commands are build, sign, run, lint, docs, dump-config. Passing
-          # `publish` fails on argument parsing before it ever reaches AMO, so
-          # the job could not have worked however long it was left running.
-          #
-          # AMO does the signing; there is no unsigned upload route. `listed`
-          # publishes to the public channel, `unlisted` self-signs only.
-          #
-          # --approval-timeout 0 disables the wait for AMO's automatic
-          # approval. Without it `sign` blocks for the default 5 minutes on
-          # every submission, which on a runner is five minutes of doing
-          # nothing and then a timeout - the job hangs rather than finishing.
-          # New add-ons are held for human review regardless, so waiting buys
-          # nothing; the upload itself has already been accepted by then.
-          npx --yes web-ext@10.7.0 sign \
-            --source-dir build/extension-firefox \
-            --channel listed \
-            --amo-metadata extension/amo.metadata.json \
-            --api-key "$AMO_API_KEY" \
-            --api-secret "$AMO_API_SECRET" \
-            --approval-timeout 0
-
-  # publish-chrome:
-  #   COMMENTED OUT ON PURPOSE. The Chrome Web Store path needs a paid developer
-  #   account ($5 one-off, then a 5% cut), which is not set up, and a publish
-  #   job that fails on every tag is worse than no job. The build and upload
-  #   steps are kept so enabling it is a review, not a rewrite.
-  #
-  #   To enable: uncomment, and add the three CHROME_* secrets.
-  #
-  # if: startsWith(github.ref, 'refs/tags/v')
-  # runs-on: ubuntu-24.04
-  # needs: [release-prep, verify-release]
-  # permissions:
-  #   contents: read
-  # steps:
-  #   - uses: actions/checkout@v7
-  #   - run: flutter pub get
-  #   - run: flutter build web --release
-  #   - run: ./tools/build_extension.sh --chrome --zip
-  #   - uses: actions/upload-artifact@v4
-  #     with:
-  #       name: game-club-chrome
-  #       path: build/game-club-chrome.zip
-  #   # Uploading to the Web Store needs the Chrome Web Store API via a
-  #   # publisher service account; the credential names are in the README.
