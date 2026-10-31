@@ -9,16 +9,24 @@ import '../services/storage_service.dart';
 
 final storageProvider = Provider<StorageService>((ref) => StorageService());
 
-/// The admin session, when signed in at /admin. In-memory only: a refresh
-/// signs out. Watched by the home screen and [PageAppBar] to badge the UI.
+/// The admin session, when signed in at /admin.
+///
+/// The session's credential is the browser's HttpOnly cookie and never
+/// lives here — this provider holds only the account snapshot the login
+/// response carried. Watched by the home screen to keep the admin door
+/// beside Settings for signed-in admins, and by the dashboard to end the
+/// session when the server stops accepting the cookie (any 401 evades to
+/// the login screen through [AdminSessionNotifier.signOut]).
+///
+/// There is no persistent restore: a page refresh re-enters the dashboard
+/// with the cookie it kept, and the dashboard's first authenticated read
+/// (its death watch on `/admin/me`) both proves the cookie and names the
+/// operator. A momentary `null` state is therefore signed-nobody, and not
+/// a signal to bounce anybody — the screens that care about identity read
+/// it off the /admin/me response.
 class AdminSession {
-  const AdminSession({
-    required this.token,
-    required this.email,
-    required this.name,
-  });
+  const AdminSession({required this.email, required this.name});
 
-  final String token;
   final String email;
   final String name;
 }
@@ -30,7 +38,13 @@ final adminSessionProvider =
 
 class AdminSessionNotifier extends Notifier<AdminSession?> {
   @override
-  AdminSession? build() => null;
+  AdminSession? build() {
+    // No restore stage: the cookie the browser kept IS the restored
+    // session, and the dashboard proves it on its first read. This build
+    // answers null every fresh process — the only consumers that persist
+    // a session are its screens via the server's Set-Cookie.
+    return null;
+  }
 
   void signIn(AdminSession session) => state = session;
 

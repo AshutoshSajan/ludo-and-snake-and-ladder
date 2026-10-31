@@ -20,8 +20,11 @@ import 'admin_native_form.dart';
 export 'admin_auth_mode.dart';
 
 /// Admin sign-in at /admin: email + password (or the first-run setup that
-/// creates the account, when the server says none exists). The session
-/// token lives in memory only and rides as a Bearer header.
+/// creates the account, when the server says none exists). On success the
+/// server attaches the session as an HttpOnly cookie that the browser
+/// stores, re-sends and expires itself — no token is readable or persisted
+/// by this screen — and a refresh (or a reopen) re-enters the dashboard
+/// through the cookie the browser kept.
 class AdminLoginScreen extends ConsumerStatefulWidget {
   const AdminLoginScreen({
     super.key,
@@ -261,7 +264,6 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
         .read(adminSessionProvider.notifier)
         .signIn(
           AdminSession(
-            token: client.token ?? '',
             email: '${user['email'] ?? email}',
             name: '${user['name'] ?? ''}',
           ),
@@ -640,8 +642,11 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              'Sessions stay in memory. Closing this tab signs '
-                              'you out.',
+                              'Your sign-in rides a secure browser cookie '
+                              'and expires on its own (2 hours by '
+                              'default, the server’s configured window). '
+                              'Clearing the browser’s cookies signs you '
+                              'out.',
                               textAlign: TextAlign.center,
                               style: const TextStyle(
                                 fontFamily: AppFonts.body,

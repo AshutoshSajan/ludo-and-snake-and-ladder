@@ -22,7 +22,12 @@ services:
     plan: free
     # Cheap, local-only gauges: instance id + connection/room/spectator counts.
     healthCheckPath: /stats
-    autoDeploy: true
+    # Deploys ride release tags, not merges. Render's Git integration used to
+    # redeploy on every push to main — including the dev->main promotion —
+    # which bounced players off the server mid-session for work they never
+    # chose to ship. Now ONLY release.yaml fires this service's deploy hook
+    # (RENDER_DEPLOY_HOOK_URL secret) when a `v*` tag's GitHub Release lands.
+    autoDeploy: false
     envVars:
       - key: TURSO_DATABASE_URL
         sync: false # your libsql://... URL

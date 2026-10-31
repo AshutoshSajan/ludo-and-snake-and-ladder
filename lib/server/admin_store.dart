@@ -148,8 +148,9 @@ class AuthUser {
   };
 }
 
-/// A freshly minted session: the raw token goes to the client once and
-/// is never stored; only its hash lives in the DB.
+/// A freshly minted session: the raw token goes to the browser once,
+/// inside the HttpOnly session cookie, and is never stored in the
+/// database; only its hash lives there.
 class SessionToken {
   SessionToken({required this.token, required this.expiresAt});
 
@@ -157,44 +158,96 @@ class SessionToken {
   final int expiresAt;
 }
 
-/// Verifies [password] against a stored PBKDF2 [hash]. Injectable so a
+/// Verifies [password] against a stored bcrypt [hash]. Injectable so a
 /// test can prove which hash a lookup verifies without paying the KDF.
 typedef PasswordVerifier = bool Function(String password, String hash);
 
-/// A hash of a random password that is never revealed: the absent-email
-/// path verifies against it so a missing account spends the same PBKDF2
-/// work as a populated one (CWE-208). Lazy, so the first miss after boot
-/// also pays the one-time cost of minting it; its work factor follows
-/// [defaultPbkdf2Iterations], tracking the production setting rather than
-/// pinning a stale constant.
-final String _absentAccountHash = hashPassword(
-  randomToken(),
-  iterations: defaultPbkdf2Iterations,
-);
-
 class AdminStore {
-  AdminStore._(this._backend, this._ownsBackend, {PasswordVerifier? verifier})
-    : _verifier = verifier ?? verifyPassword;
+  AdminStore._(
+    this._backend,
+    this._ownsBackend, {
+    PasswordVerifier? verifier,
+    int? bcryptRounds,
+    Duration? sessionTtl,
+  }) : _verifier = verifier ?? verifyPassword,
+       bcryptRounds = bcryptRounds ?? defaultBcryptRounds,
+       sessionTtl = sessionTtl ?? defaultSessionTtl;
 
-  factory AdminStore.inMemory({PasswordVerifier? verifier}) =>
-      AdminStore._(SqliteBackend.inMemory(), true, verifier: verifier);
+  factory AdminStore.inMemory({
+    PasswordVerifier? verifier,
+    int? bcryptRounds,
+    Duration? sessionTtl,
+  }) => AdminStore._(
+    SqliteBackend.inMemory(),
+    true,
+    verifier: verifier,
+    bcryptRounds: bcryptRounds,
+    sessionTtl: sessionTtl,
+  );
 
-  factory AdminStore(String path, {PasswordVerifier? verifier}) =>
-      AdminStore._(SqliteBackend.open(path), true, verifier: verifier);
+  factory AdminStore(
+    String path, {
+    PasswordVerifier? verifier,
+    int? bcryptRounds,
+    Duration? sessionTtl,
+  }) => AdminStore._(
+    SqliteBackend.open(path),
+    true,
+    verifier: verifier,
+    bcryptRounds: bcryptRounds,
+    sessionTtl: sessionTtl,
+  );
 
-  factory AdminStore.fromDb(Database db, {PasswordVerifier? verifier}) =>
-      AdminStore._(SqliteBackend.fromDb(db), false, verifier: verifier);
+  factory AdminStore.fromDb(
+    Database db, {
+    PasswordVerifier? verifier,
+    int? bcryptRounds,
+    Duration? sessionTtl,
+  }) => AdminStore._(
+    SqliteBackend.fromDb(db),
+    false,
+    verifier: verifier,
+    bcryptRounds: bcryptRounds,
+    sessionTtl: sessionTtl,
+  );
 
   /// Wraps any [SqlBackend] (the caller keeps ownership) — this is how a
   /// Turso-backed deployment gets the same admin surface as SQLite.
   factory AdminStore.fromBackend(
     SqlBackend backend, {
     PasswordVerifier? verifier,
-  }) => AdminStore._(backend, false, verifier: verifier);
+    int? bcryptRounds,
+    Duration? sessionTtl,
+  }) => AdminStore._(
+    backend,
+    false,
+    verifier: verifier,
+    bcryptRounds: bcryptRounds,
+    sessionTtl: sessionTtl,
+  );
 
   final SqlBackend _backend;
   final bool _ownsBackend;
   final PasswordVerifier _verifier;
+
+  /// This store's bcrypt cost for digesting NEW passwords: [defaultBcryptRounds]
+  /// unless a test threads a small value — the same explicit-threading rule
+  /// the hash itself follows. One number for every consumer (there is no
+  /// rehash-on-login anymore: legacy rows re-hash whenever their operator
+  /// changes their password).
+  ///
+  /// Production never passes this; tests that flip [adminStore] or use
+  /// `inMemory()` with the real verifier do — the suite otherwise pays a
+  /// ~370ms bcrypt per password the store hashes.
+  final int bcryptRounds;
+
+  /// The one session clock this store serves. [createSession] stamps row
+  /// expiries from it and the login/setup handlers read it back to set the
+  /// cookie's Max-Age, so a response can never advertise a lifetime that
+  /// disagrees with what the row actually got. Set from
+  /// ADMIN_SESSION_TTL_HOURS at boot (see [adminSessionTtlFromEnv]); tests
+  /// thread small values directly.
+  final Duration sessionTtl;
 
   /// Schema is created lazily and memoized: a Turso deployment cannot run
   /// migrations in a constructor. A failed attempt is cleared so the next
@@ -724,7 +777,6 @@ class AdminStore {
     required String password,
     String role = 'user',
     String? seatId,
-    int iterations = defaultPbkdf2Iterations,
     String by = 'system',
   }) async {
     await ensureSchema();
@@ -753,7 +805,10 @@ class AdminStore {
         [
           normalized,
           name.trim().isEmpty ? normalized : name.trim(),
-          hashPassword(password, iterations: iterations),
+          // Bcrypt is deliberately slow and this store hashes at
+          // [bcryptRounds] — ~370ms per password in production, paid inline
+          // on the login/create path itself.
+          hashPassword(password, rounds: bcryptRounds),
           role,
           seatId,
           now,
@@ -787,10 +842,13 @@ class AdminStore {
 
   /// Null on unknown email OR wrong password — callers must not
   /// distinguish the two (no account enumeration), and the two paths must
-  /// not be distinguishable by *timing* either: an absent email still
-  /// runs the password KDF against [_absentAccountHash], so a probe of an
-  /// unregistered address costs the same PBKDF2 work as a wrong password
-  /// on a real one (CWE-208).
+  /// not be distinguishable by *timing* either: an absent email still runs
+  /// a full bcrypt verification against [absentEmailHash] — a cost-12 hash
+  /// of a preimage nobody has — so a probe of an unregistered address
+  /// costs the same work as a wrong password on a real one (CWE-208).
+  /// The decoy verify rides the production bcrypt path directly rather than
+  /// [_verifier], so a test's cheap injected verifier cannot quietly make
+  /// the absent branch instantaneous while the real one pays.
   Future<AuthUser?> checkCredentials(String email, String password) async {
     await ensureSchema();
     final results = await _backend.run([
@@ -802,12 +860,11 @@ class AdminStore {
     if (row == null) {
       // Spend the verification work anyway; its result is discarded
       // because there is no account to admit.
-      _verifier(password, _absentAccountHash);
+      verifyPassword(password, absentEmailHash);
       return null;
     }
-    final hash = row['password_hash'] as String;
-    if (!_verifier(password, hash)) return null;
-    return _userFromRow(row);
+    final ok = _verifier(password, row['password_hash'] as String);
+    return ok ? _userFromRow(row) : null;
   }
 
   Future<List<AuthUser>> listUsers({int limit = 100}) async {
@@ -840,23 +897,49 @@ class AdminStore {
     );
   }
 
-  static const defaultSessionTtl = Duration(days: 7);
+  /// A two-hour window measured from session creation: the operator's whole
+  /// shift fits, and an unattended tab is stale within half an afternoon.
+  /// The window is this store's [sessionTtl] — ADMIN_SESSION_TTL_HOURS may
+  /// raise or lower it at boot, but every stamp comes from that one clock
+  /// and every cookie lifetime mirrors the row, so there is nowhere for
+  static const defaultSessionTtl = Duration(hours: 2);
 
-  Future<SessionToken> createSession(
-    int userId, {
-    Duration ttl = defaultSessionTtl,
-  }) async {
+  /// Parses the boot knob. Unset or empty = [defaultSessionTtl]; a positive
+  /// integer is hours; anything else (zero, negative, decimal, text) is
+  /// invalid and the caller must refuse to start — a typo in the
+  /// environment must not silently shorten or stretch every admin's
+  /// session. Returns null exactly when the value is garbage so `main()`'s
+  /// boot check and this parser stay a single readable contract.
+  static Duration? adminSessionTtlFromEnv(String? raw) {
+    final text = raw?.trim() ?? '';
+    if (text.isEmpty) return defaultSessionTtl;
+    final hours = int.tryParse(text);
+    if (hours == null || hours <= 0) return null;
+    return Duration(hours: hours);
+  }
+
+  Future<SessionToken> createSession(int userId) => createSessionAt(
+    userId,
+    DateTime.now().millisecondsSinceEpoch,
+  );
+
+  /// [atMs] is injectable so tests can pin the instant the row is stamped.
+  Future<SessionToken> createSessionAt(int userId, int atMs) async {
     await ensureSchema();
     final token = randomToken();
-    final now = DateTime.now().millisecondsSinceEpoch;
     await _backend.run([
       SqlStatement(
         'INSERT INTO auth_sessions '
         '(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
-        [hashToken(token), userId, now, now + ttl.inMilliseconds],
+        [
+          hashToken(token),
+          userId,
+          atMs,
+          atMs + sessionTtl.inMilliseconds,
+        ],
       ),
     ]);
-    return SessionToken(token: token, expiresAt: now + ttl.inMilliseconds);
+    return SessionToken(token: token, expiresAt: atMs + sessionTtl.inMilliseconds);
   }
 
   /// The session's user, or null when unknown/expired. Expired rows are

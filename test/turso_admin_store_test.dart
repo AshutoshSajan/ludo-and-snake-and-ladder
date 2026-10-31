@@ -17,6 +17,10 @@ AdminStore _store(FakeTursoPipeline fake) => AdminStore.fromBackend(
     authToken: 'test-token',
     client: fake.client,
   ),
+  // Every credential in this file digests at a small local cost (the
+  // store threads bcryptRounds itself), so these Turso-pipeline tests
+  // never pay the ~370ms production cost their SQL shapes exist to prove.
+  bcryptRounds: 4,
 );
 
 void main() {
@@ -127,7 +131,6 @@ void main() {
       name: 'Admin',
       password: 'hunter2hunter2',
       role: 'admin',
-      iterations: 1000,
     );
     expect(await store.needsSetup, isFalse);
 

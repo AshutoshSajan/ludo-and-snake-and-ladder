@@ -22,26 +22,26 @@
 # look like it did not ship, and the shell names are not content-hashed.
 
 [build]
-  # THE DEPLOY GATE: only main builds. Netlify's GitHub app proposes a run
-  # for every push to every tracked branch (branch deploys) and every PR head
-  # (deploy previews). Left to that default, merging into `dev` — the
-  # integration trunk, promoted to `main` wholesale — redelivered the whole
-  # site: a dev merge is a step on the way to a release, not a release. The
-  # `ignore` command runs before anything is cloned or built, and when it
-  # exits 0 the run is skipped, so this is the whole policy in one line:
-  # exit 1 (build) on main, exit 0 (skip) on every other branch and preview.
+  # THE DEPLOY GATE: no Git event deploys — release tags do. Netlify's GitHub
+  # app proposes a run for every push to every tracked branch and every PR
+  # head; used to be that the `ignore` command let only main through, which
+  # made the dev->main promotion the web release whether the team wanted one
+  # or not. Hosting now rides release.yaml on a pushed `v*` tag instead: a
+  # tag is not a branch, so Netlify can't trigger off it itself — release.yaml
+  # fires this site's Build Hook (NETLIFY_DEPLOY_HOOK_URL secret) once the
+  # GitHub Release is out.
   #
-  # Two dashboard settings belong with it — Site settings → Build & deploy →
-  # Continuous deployment:
-  #   1. "Production branch" must be `main`, so a main push lands on the
-  #      production URL rather than on a branch alias.
-  #   2. Leave "Additional branch deploys" empty — the gate below makes them
-  #      moot, but the dashboard setting keeps pending builds out of the list
-  #      in the first place.
+  # A hook-triggered build ignores the ignore command entirely (it is only
+  # evaluated for Git-event builds), so `bash -c 'exit 0'` below — skip
+  # everything Git can cause — does not break the hook path. The hook
+  # deploys the production branch (main), which is the commit the tag was
+  # cut on; keep "Production branch" pointed at `main` in the dashboard so
+  # the hook lands on the production URL and the Production variable
+  # context (GAME_SERVER_URL) applies.
   #
   # $BRANCH is always set in the build environment (the branch the run is
   # for, whether branch deploy, preview, or production).
-  ignore = "bash -c 'if [ \"$BRANCH\" = \"main\" ]; then exit 1; else exit 0; fi'"
+  ignore = "bash -c 'exit 0'"
 
   # Netlify's stock image has no Flutter, and the obvious fix does not work
   # here: the cirruslabs/flutter images froze at 3.44.0 / Dart 3.12 and cannot

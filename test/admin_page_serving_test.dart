@@ -48,7 +48,7 @@ void main() {
     final savedStore = adminStore;
     final savedToken = adminToken;
     final savedEnv = serverEnv;
-    adminStore = AdminStore.inMemory();
+    adminStore = AdminStore.inMemory(bcryptRounds: 4);
     adminToken = '';
     serverEnv = {'WEB_DIR': stubWeb.path};
     addTearDown(() {

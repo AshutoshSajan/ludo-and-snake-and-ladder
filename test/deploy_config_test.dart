@@ -117,6 +117,86 @@ void main() {
       expect(release, contains('sha256sum -- * > SHA256SUMS.txt'));
       expect(release, contains('files: dist/*'));
     });
+
+    test('production hosting follows release tags, not every main push', () {
+      // deploy-hosting is the job that tells Netlify and Render to ship.
+      // Its tag guard must sit at the JOB level: a full-dispatch test run
+      // walks the same publish job a real tag does, so a step-level guard
+      // (or none) would redeploy production hosting from a dry run.
+      final job = release.substring(release.indexOf('  deploy-hosting:'));
+      expect(job, contains("if: startsWith(github.ref, 'refs/tags/v')"),
+          reason: 'workflow_dispatch runs build artifacts but must never '
+              're-point production hosting');
+      expect(
+        job,
+        contains('needs: [resolve-version, publish]'),
+        reason: 'the GitHub Release exists before the hosts learn of it',
+      );
+      for (final secret in const [
+        'NETLIFY_DEPLOY_HOOK_URL',
+        'RENDER_DEPLOY_HOOK_URL',
+      ]) {
+        expect(release, contains(secret),
+            reason: 'the deploy hooks are repo secrets the workflow '
+                'requires — a release without them fails, never silently '
+                'skips');
+      }
+    });
+
+    test('publish-amo submits the add-on after verify, publish, tag-guarded', () {
+      // The store upload rides the same v* tag as the artifacts it lists:
+      // verify first (a listing is the most public, least-revocable channel
+      // this repo ships to), then the Release must exist, then the submit.
+      // The Chrome scaffold stays commented beside it until the paid store
+      // account exists — failing every tag on an unfinishable step is worse
+      // than no job. The slice stops at the scaffold: it is commented text
+      // that repeats the same needs — a whole-tail `contains` would pass on
+      // a comment after the real job dropped the line.
+      final amo = release.substring(release.indexOf('  publish-amo:'),
+          release.indexOf('  # publish-chrome:'));
+      expect(amo, contains("if: startsWith(github.ref, 'refs/tags/v')"),
+          reason: 'a dispatch test run must never submit a listing update');
+      expect(amo, contains('needs: [verify, resolve-version, publish]'),
+          reason: 'verify is the quality gate, and the GitHub Release must '
+              'exist before addons.mozilla.org learns of the version');
+      for (final secret in const ['AMO_API_KEY', 'AMO_API_SECRET']) {
+        expect(amo, contains(secret),
+            reason: 'the submit is credential-driven; job-level env, since '
+                'secrets cannot appear in a step if (runner#520)');
+      }
+      expect(amo, contains('web-ext@10.7.0 sign'),
+          reason: 'the submission tool is pinned; the verb is sign — web-ext '
+              'has no publish subcommand');
+      expect(amo, contains('--channel listed'),
+          reason: 'the public listing channel, not an unlisted self-sign');
+      expect(amo, contains('--approval-timeout 0'),
+          reason: 'without it sign hangs the runner for AMO review');
+      expect(amo, contains('::warning title=AMO publish skipped'),
+          reason: 'both credentials unset = loud skip: the GitHub Release '
+              'ships correctly without the listing update');
+      expect(amo, contains('AMO secrets half-configured'),
+          reason: 'exactly one credential = fail fast, before minutes of '
+              'building toward a submit that cannot succeed');
+      expect(release, contains('# publish-chrome:'),
+          reason: 'the scaffold is carried alongside publish-amo, commented');
+    });
+  });
+
+  group('render.yaml', () {
+    late String render;
+    setUpAll(() {
+      render = File('render.yaml').readAsStringSync();
+    });
+
+    test('the service does not auto-deploy on pushes', () {
+      // Render's Git integration used to redeploy the game server on every
+      // push to main — every dev->main promotion bounced live player
+      // sockets mid-session. Deploys now originate from release.yaml's
+      // Render deploy hook when the GitHub Release ships, and from nowhere
+      // else.
+      expect(render, contains('autoDeploy: false'),
+          reason: 'a promotion merge must not restart a running game server');
+    });
   });
 
   group('netlify.toml', () {
@@ -137,6 +217,19 @@ void main() {
 
     test('publishes the Flutter web output', () {
       expect(toml, contains('publish = "build/web"'));
+    });
+
+    test('no Git-triggered build deploys — hosting rides release tags', () {
+      // The ignore command is the whole gate: Netlify evaluates it on every
+      // Git-event build (branch deploys, PR previews, production pushes) and
+      // skips the run when it exits 0. The flat `exit 0` below skips ALL of
+      // them — merging into dev and promoting dev->main both become invisible
+      // to the site. Production deploys instead come from release.yaml's
+      // Build Hook (`NETLIFY_DEPLOY_HOOK_URL`) when a `v*` tag ships, which
+      // is not subject to the ignore command — exactly why a flat skip
+      // breaks nothing.
+      expect(toml, contains("ignore = \"bash -c 'exit 0'\""),
+          reason: 'a merge can no longer be a web release, visibly or not');
     });
 
     test('passes GAME_SERVER_URL through, since the socket is not on Netlify',
@@ -330,14 +423,16 @@ void main() {
       expect(toml, isNot(contains('force = true')));
     });
 
-    test('only main may build: the gate decides at the branch, not the UI', () {
+    test('no Git event may build: the release tag is the deploy gate', () {
       // Netlify's GitHub app proposes a run for every push to every branch
-      // and every PR head. This repo promotes dev into main, so a dev merge
-      // deploying the whole site was both a surprise rebuild and Netlify's
-      // build minutes on a step that is not a release. The `ignore` command
-      // is the gate, and it is PINNED by running it: exiting 0 tells
-      // Netlify to skip the run, so main must be the only branch that
-      // keeps it alive.
+      // and every PR head. Hosting deploys now ride release tags: when a
+      // `v*` tag publishes its GitHub Release, release.yaml's deploy-hosting
+      // job fires this site's Build Hook — a tag is not a branch, so Git
+      // alone can never express "release". The ignore command therefore
+      // skips EVERY branch, and hook-triggered builds are not subject to
+      // it, which is why a flat skip breaks nothing. Still pinned by
+      // running it: exiting 0 tells Netlify to skip the run, so for any
+      // branch name the verdict must be skip.
       final m = RegExp(r'ignore = "((?:[^"\\]|\\.)+)"').firstMatch(toml);
       expect(m, isNotNull, reason: 'the deploy gate must be an ignore command');
       // TOML unescapes \" to " before the shell sees it; the regex above
@@ -349,8 +444,16 @@ void main() {
         environment: {'BRANCH': branch, 'PATH': '/usr/bin:/bin'},
         workingDirectory: Directory.current.path,
       ).exitCode;
-      expect(verdict('dev'), 0, reason: 'a dev merge must not build the site');
-      expect(verdict('main'), isNot(0), reason: 'main is the only deploy lane');
+      for (final branch in ['dev', 'main', 'release/v1.4.0', '']) {
+        expect(verdict(branch), 0,
+            reason: '"$branch" is a Git event; only a release tag may '
+                'deploy the site');
+      }
+      // The forbidden shape is a branch-shaped gate like the old
+      // "build on main": a branch comparison means a promotion merge is
+      // once again a web release.
+      expect(command.contains('main'), isFalse,
+          reason: 'no branch may ever be named as a build lane');
     }, skip: Platform.isWindows);
   });
 
@@ -414,31 +517,32 @@ void main() {
               'not just contents: write');
     });
 
-    test('an ext-v* tag push triggers the workflow, and publishing can run there', () {
-      // The release workflow is triggered by ext-v* tags (extension releases).
-      // The ci.yml workflow no longer runs on v* tags to avoid duplicate runs
-      // with release.yaml. The publish-firefox job now runs on ext-v* tags.
+    test('no store lane hides in ci.yml — it fires on main pushes and PRs only', () {
+      // publish-firefox was unreachable code: its ext-v* trigger could never
+      // fire inside a workflow whose `on:` covers only main pushes and PRs, so
+      // no tag ever reached the job. Store publishing moved to release.yaml
+      // (publish-amo, asserted in this file's release.yaml group), where a tag
+      // genuinely arrives.
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
-      expect(workflow, isNot(contains("tags: ['v*']")),
-          reason: 'v* tags no longer trigger ci.yml (release.yaml handles them)');
-      expect(workflow, contains('startsWith(github.ref, \'refs/tags/ext-v\')'),
-          reason: 'ext-v* tags must trigger the publish-firefox job');
-      expect(workflow, contains('needs: [release-prep, verify-release]'),
-          reason: 'publishing must wait on a job that runs on tags');
-      // Scoped to publish-firefox, not the whole file. `test` is legitimately
-      // dependable from anything else that runs on a pull request; only the
-      // tag path must never wait on it, because there it is skipped and the
-      // dependency leaves the job pending forever. Asserting over the whole
-      // file would forbid a future PR-path job from needing `test` - a correct
-      // change the test would report as a regression.
-      final fox = RegExp(r'  publish-firefox:[\s\S]*?(?=\n  [a-z-]+:|$)')
-          .firstMatch(workflow)
-          ?.group(0);
-      expect(fox, isNotNull, reason: 'the publish job must exist');
-      expect(fox, isNot(contains('needs: test')),
-          reason: 'publishing must not wait on the PR-only test job');
-      // The commented-out Chrome job had the same defect; keep it consistent.
-      expect(workflow, contains('# needs: [release-prep, verify-release]'));
+      expect(workflow, isNot(contains('publish-firefox')),
+          reason: 'the dead ext-v* lane is deleted, not just disabled');
+      expect(workflow, isNot(contains('AMO_API')),
+          reason: 'no AMO credential is named here after the move');
+      expect(workflow, contains("if: github.ref == 'refs/heads/main'"),
+          reason: 'verify-release continues to gate the promotion push');
+      // And nothing here may claim a tag: read every `if:` line — job-level
+      // and step-level — and forbid the tag-shaped dead branch that cost a
+      // release lane once. (Run-block lines like `if [ -z ... ]` never start
+      // with `if:` and are excluded by shape, not by intent.)
+      final ifs = workflow
+          .split('\n')
+          .map((line) => line.trim())
+          .where((line) => line.startsWith('if:'));
+      expect(ifs, isNotEmpty, reason: 'the ifs-read shape must see real ifs');
+      for (final line in ifs) {
+        expect(line, isNot(contains('refs/tags')),
+            reason: 'ci.yml never fires on tags; `$line` would be dead code');
+      }
     });
 
     test('the pre-push hook gates pushes and does not rewrite them', () {
@@ -494,10 +598,11 @@ void main() {
       // for the default 5 minutes on every submission waiting for AMO's
       // automatic approval, which is a runner doing nothing and then timing
       // out. New add-ons are held for human review regardless, so the wait
-      // never produces a publishable result.
-      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      // never produces a publishable result. Sliced on release.yaml, where
+      // the AMO job lives since the ext-v lane moved in with the release train.
+      final release = File('.github/workflows/release.yaml').readAsStringSync();
       final step = RegExp(r'npx --yes web-ext@[\d.]+ sign(?:[^\n]*\\\n)*[^\n]*')
-          .firstMatch(workflow)
+          .firstMatch(release)
           ?.group(0);
       expect(step, isNotNull, reason: 'the upload step must invoke web-ext sign');
       expect(step, isNot(contains('web-ext publish')));
@@ -560,19 +665,34 @@ void main() {
       expect(script, contains('--set'));
 
       final workflow = File('.github/workflows/ci.yml').readAsStringSync();
-      // A tag that disagrees with the declared version must fail before upload.
-      // This check is what replaced the automation: forgetting to bump stops the
-      // release here, with a message naming the command, rather than shipping
-      // drift that only fails once credentials are in hand.
-      expect(workflow, contains('does not match the declared version'));
-      // ...and the step must actually run on a tag, or it is decoration.
+      final release = File('.github/workflows/release.yaml').readAsStringSync();
+      // A tag that disagrees with the declared version must fail before
+      // upload. The check lives in release.yaml's `verify` — the place a tag
+      // actually reaches — not in ci.yml, whose release-prep runs on a main
+      // push where there is no tag to compare against. Forgetting to bump
+      // stops the release there, with a message naming the command, rather
+      // than shipping drift that only fails once credentials are in hand.
+      expect(release, contains('does not match the declared version'));
+      expect(workflow, isNot(contains('does not match the declared version')),
+          reason: 'the check moved with the tag path; ci.yml never receives '
+              'a tag to compare against');
+      // ...and the step must actually run on a tag, or it is decoration. On a
+      // legs-dispatch it skips, exactly like the publish steps do.
+      final verify = release
+          .split('\n')
+          .skipWhile((l) => l != '  verify:')
+          .skip(1)
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:').hasMatch(l))
+          .join('\n');
+      expect(verify, contains("if: startsWith(github.ref, 'refs/tags/v')"));
+      // release-prep still owns the bump staging on the main push, so the
+      // snapcraft file it commits is asserted on the ci.yml slice.
       final prep = workflow
           .split('\n')
           .skipWhile((l) => l != '  release-prep:')
           .skip(1)
           .takeWhile((l) => !RegExp(r'^  [a-z-]+:').hasMatch(l))
           .join('\n');
-      expect(prep, contains("startsWith(github.ref, 'refs/tags/v')"));
       // Writing the snap version is not enough: release-prep stages exactly the
       // files it commits. Without this path the script update would sit
       // uncommitted and the PR would still ship the previous snap version.
@@ -678,26 +798,45 @@ void main() {
       // `test` is pull-request-only, so the tag path had no test gate at all:
       // it verified the changelog and the version, built, and uploaded. A tag
       // must not ship code nothing has run.
-      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
-      expect(workflow, matches(RegExp(r'^  verify-release:', multiLine: true)),
-          reason: 'the tag path needs its own test gate');
+      final release = File('.github/workflows/release.yaml').readAsStringSync();
       // The body is sliced out line-by-line rather than by regex. A lookahead
       // would need [\s\S]*? plus an end anchor, and Dart's RegExp is
       // ECMAScript-based: it has no \Z, which there matches a literal "Z" and
       // silently finds nothing.
-      final body = workflow
+      final verify = release
+          .split('\n')
+          .skipWhile((l) => l != '  verify:')
+          .skip(1)
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:').hasMatch(l))
+          .join('\n');
+      expect(verify, isNotEmpty, reason: 'the tag path needs its own test gate');
+      expect(verify, contains('flutter test'));
+      expect(verify, contains('flutter analyze --fatal-infos'));
+      // Publishing must wait for it, or the gate is decorative: the AMO
+      // submit need-lists verify, so a red verify stops the upload. Sliced
+      // at the real job — the commented Chrome scaffold beside it repeats
+      // the same needs line, so a whole-file contains would keep passing
+      // after the live job drops the wire.
+      final amo = release.substring(release.indexOf('  publish-amo:'),
+          release.indexOf('  # publish-chrome:'));
+      expect(amo, contains('needs: [verify, resolve-version, publish]'),
+          reason: 'the store submit follows the gate rather than running '
+              'beside it');
+      // ci.yml keeps the promotion-side gate — a main push (the dev->main
+      // promotion) runs analyze+test on exactly what became live, tag or no
+      // tag. Old story: verify-release also claimed to gate tags, but ci.yml
+      // never fires on tags, so that arm was decoration on a path that could
+      // not run.
+      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
+      final vr = workflow
           .split('\n')
           .skipWhile((l) => l != '  verify-release:')
           .skip(1)
-          .takeWhile((l) => !RegExp(r'^  [a-z-]+:$').hasMatch(l))
+          .takeWhile((l) => !RegExp(r'^  [a-z-]+:').hasMatch(l))
           .join('\n');
-      expect(body, isNotEmpty, reason: 'the job body must be found');
-      expect(body, contains("startsWith(github.ref, 'refs/tags/v')"),
-          reason: 'it gates tags, not every push');
-      expect(body, contains('flutter test'));
-      expect(body, contains('flutter analyze --fatal-infos'));
-      // Publishing must wait for it, or the gate is decorative.
-      expect(workflow, contains('needs: [release-prep, verify-release]'));
+      expect(vr, contains("github.ref == 'refs/heads/main'"),
+          reason: 'the promotion push keeps its own quality gate');
+      expect(vr, contains('flutter test'));
     });
 
     test('the release bot bumps and regenerates on main, via a PR', () {
@@ -823,40 +962,6 @@ void main() {
       // The release script is not a place for malformed versions.
       r = run('1.3.x', '1.4.0');
       expect(r.exitCode, isNot(0));
-    });
-
-    test('publishing follows the bump on ext-v* tag, not on main push', () {
-      // The order: changelog + version bump, then the Firefox
-      // upload. `needs` enforces the order — release-prep bumps, verify-release
-      // is the only test gate on a push path, and publish runs after both.
-      // 
-      // IMPORTANT: Firefox publishing now runs on ext-v* tags (extension releases),
-      // NOT on main push. This matches the Sudoku workflow pattern.
-      final workflow = File('.github/workflows/ci.yml').readAsStringSync();
-      // Sliced line-by-line, not by regex. A lookahead like `(?=\n  [a-z-]+:|\Z)`
-      // matches the COMMENTED-OUT `publish-chrome` block, whose body is indented
-      // two spaces and whose keys are commented - so the match stops early and
-      // returns null. Slicing on real job headers cannot be fooled by a block
-      // that is not a job.
-      String jobBody(String name) => workflow
-          .split('\n')
-          .skipWhile((l) => l != '  $name:')
-          .skip(1)
-          .takeWhile((l) => !RegExp(r'^  [a-z-]+:\s*$').hasMatch(l))
-          .join('\n');
-
-      final fox = jobBody('publish-firefox');
-      expect(fox, contains("startsWith(github.ref, 'refs/tags/ext-v')"),
-          reason: 'an ext-v* tag carries the bump and must trigger the upload');
-      expect(fox, contains('needs: [release-prep, verify-release]'),
-          reason: 'publishing must wait for the bump and the test gate');
-
-      // verify-release has to run on main too. If it were tag-only it would be
-      // skipped on a push, and a job whose dependency was skipped never starts -
-      // which is precisely how publishing got stuck before.
-      final verify = jobBody('verify-release');
-      expect(verify, contains("github.ref == 'refs/heads/main'"),
-          reason: 'without a test gate on main, uploads ship untested');
     });
 
     test('nothing pushes on CI any more, so the race cannot recur', () {

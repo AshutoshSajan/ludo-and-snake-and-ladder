@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../providers/app_providers.dart';
-import 'admin_badge.dart';
 import 'shared/table_alert.dart';
 
 /// The reading-width column every full-screen page is laid out in.
@@ -86,7 +84,6 @@ class PageAppBar extends ConsumerWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final canPop = Navigator.of(context).canPop();
-    final admin = ref.watch(adminSessionProvider);
     return AppBar(
       automaticallyImplyLeading: false,
       backgroundColor: backgroundColor,
@@ -114,10 +111,6 @@ class PageAppBar extends ConsumerWidget implements PreferredSizeWidget {
                     : title as Widget,
               ),
               ...?actions,
-              // Visible only while signed in at /admin: every PageAppBar
-              // screen then carries the admin identity, and tapping it opens
-              // the dashboard. Game views skip this bar, so boards stay clean.
-              if (admin != null) AdminBadge(session: admin, compact: true),
             ],
           ),
         ),

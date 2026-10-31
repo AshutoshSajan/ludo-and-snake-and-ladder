@@ -7,10 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:game_club/main.dart';
 import 'package:game_club/providers/app_providers.dart';
 import 'package:game_club/screens/admin/admin_auth_gate.dart';
+import 'package:game_club/screens/admin/admin_dashboard_screen.dart';
 import 'package:game_club/screens/admin/admin_login_screen.dart';
 import 'package:game_club/services/admin_client.dart';
 import 'package:game_club/shared/admin_credentials.dart';
-import 'package:game_club/ui/admin_badge_web.dart';
 import 'package:game_club/ui/page_app_bar.dart';
 import 'package:game_club/ui/theme.dart';
 import 'package:http/http.dart' as http;
@@ -59,65 +59,173 @@ void main() {
     expect(find.text('Email'), findsNothing);
   });
 
-  testWidgets('web admin badge shows identity and opens the dashboard', (
+  testWidgets('a signed-in admin gets a door beside Settings, nobody else '
+      'does', (tester) async {
+    // The door exists only while a session is live: signed-out users see
+    // exactly the three doors they had before (the icon's absence is the
+    // first test in this file).
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: GameClubApp())),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.text('Game Club')),
+    );
+    container
+        .read(adminSessionProvider.notifier)
+        .signIn(const AdminSession(email: 'root@x.io', name: 'Root'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Admin'), findsOneWidget);
+    expect(find.text('Back office'), findsOneWidget);
+    expect(find.byIcon(Icons.admin_panel_settings_outlined), findsOneWidget);
+  });
+
+  testWidgets('the page bar carries no admin identity, signed in or out', (
     tester,
   ) async {
-    // The app shell resolves the stub on non-web builds, so the real badge
-    // is exercised directly: this is the widget the web build compiles in.
+    // The compact badge that every PageAppBar screen used to trail is gone;
+    // the home door is the one re-entry point now. A signed-in provider is
+    // the strongest form of this claim: nothing renders even then.
     SharedPreferences.setMockInitialValues({});
-    const session = AdminSession(token: 't', email: 'root@x.io', name: 'Root');
     await tester.pumpWidget(
       const ProviderScope(
         child: MaterialApp(
-          home: Scaffold(
-            body: Center(child: AdminBadge(session: session)),
-          ),
+          home: Scaffold(appBar: PageAppBar(title: 'T')),
         ),
       ),
     );
+    final ctx = tester.element(find.byType(PageAppBar));
+    ProviderScope.containerOf(ctx)
+        .read(adminSessionProvider.notifier)
+        .signIn(const AdminSession(email: 'root@x.io', name: 'Root'));
     await tester.pumpAndSettle();
-    expect(find.text('Admin · root@x.io'), findsOneWidget);
 
-    // Tapping it opens the dashboard (API errors render, no crash).
-    await tester.tap(find.text('Admin · root@x.io'));
-    await tester.pumpAndSettle();
-    expect(find.text('Admin dashboard'), findsOneWidget);
+    expect(find.text('Admin · root@x.io'), findsNothing);
+    expect(find.byType(PageAppBar), findsOneWidget);
   });
 
-  testWidgets('signing out removes the web badge', (tester) async {
+  testWidgets('a successful sign-in seeds the account snapshot, not a token', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       ProviderScope(
         child: MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: Consumer(
-                builder: (context, ref, _) {
-                  final session = ref.watch(adminSessionProvider);
-                  return session == null
-                      ? const Text('signed out')
-                      : AdminBadge(session: session);
-                },
-              ),
+          home: AdminLoginScreen(
+            clientFactory: () => AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': false}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                if (request.url.path == '/admin/login') {
+                  return http.Response(
+                    jsonEncode({
+                      'ok': true,
+                      'user': {'email': 'root@x.io', 'name': 'Root'},
+                    }),
+                    200,
+                    headers: {
+                      'content-type': 'application/json',
+                      'set-cookie':
+                          'gc_admin_session=tok-123; HttpOnly; Secure; '
+                              'SameSite=Strict; Path=/; Max-Age=7200',
+                    },
+                  );
+                }
+                return http.Response('{}', 404);
+              }),
             ),
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    final ctx = tester.element(find.text('signed out'));
-    final notifier = ProviderScope.containerOf(ctx)
-        .read(adminSessionProvider.notifier);
-    notifier.signIn(
-      const AdminSession(token: 't', email: 'root@x.io', name: 'Root'),
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AdminLoginScreen)),
+    );
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Email'),
+      'root@x.io',
+    );
+    await tester.enterText(find.widgetWithText(TextField, 'Password'), 's3cr3t-pass');
+    final submit = find.widgetWithText(FilledButton, 'Sign in');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    await tester.tap(submit);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // The provider holds only the account snapshot the login answered
+    // with: the credential itself is the HttpOnly cookie the client just
+    // captured — never a token field on this record, and the server owns
+    // the expiry entirely.
+    final session = container.read(adminSessionProvider);
+    expect(session, isNotNull);
+    expect(session!.email, 'root@x.io');
+    expect(session.name, 'Root');
+  });
+
+  testWidgets('a dead session evicts the operator to a fresh login', (
+    tester,
+  ) async {
+    // Every dashboard read rides the one session cookie. When the server
+    // refuses it outright (expired past the server's TTL window, revoked),
+    // a dashboard of failing buttons is not an operator experience: the
+    // session watch signs out and takes the stack back to a rooted login
+    // form.
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminDashboardScreen(
+            client: AdminClient(
+              serverUrl: 'ws://localhost:8080/ws',
+              httpClient: MockClient((request) async {
+                if (request.url.path == '/admin/status') {
+                  return http.Response(
+                    jsonEncode({'setupRequired': false}),
+                    200,
+                    headers: {'content-type': 'application/json'},
+                  );
+                }
+                // me(), overview(), rooms(): all the same dead token.
+                return http.Response(
+                  jsonEncode({'ok': false, 'text': 'invalid session'}),
+                  401,
+                  headers: {'content-type': 'application/json'},
+                );
+              }),
+            ),
+          ),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Admin · root@x.io'), findsOneWidget);
 
-    notifier.signOut();
-    await tester.pumpAndSettle();
-    expect(find.text('Admin · root@x.io'), findsNothing);
-    expect(find.text('signed out'), findsOneWidget);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AdminLoginScreen).last),
+    );
+    expect(find.text('Admin dashboard'), findsNothing);
+    expect(find.text('Admin sign in'), findsOneWidget);
+    expect(
+      ModalRoute.of(tester.element(find.byType(AdminLoginScreen).last))
+          ?.settings
+          .name,
+      '/admin',
+      reason: 'the dead dashboard is not kept in the stack for back to '
+          'reach — the login form is the new root',
+    );
+    expect(container.read(adminSessionProvider), isNull,
+        reason: 'the eviction signs out: no session snapshot stays in the '
+            'provider, and the cookie itself the server has revoked');
   });
 
   testWidgets('password field menu offers Paste and it fills the field', (
@@ -351,11 +459,16 @@ void main() {
                   posted = jsonDecode(request.body) as Map<String, dynamic>;
                   return http.Response(
                     jsonEncode({
-                      'token': 'tok',
+                      'ok': true,
                       'user': {'email': 'root@x.io', 'name': 'Root'},
                     }),
                     200,
-                    headers: {'content-type': 'application/json'},
+                    headers: {
+                      'content-type': 'application/json',
+                      'set-cookie':
+                          'gc_admin_session=tok; HttpOnly; Secure; '
+                              'SameSite=Strict; Path=/; Max-Age=7200',
+                    },
                   );
                 }
                 return http.Response('{}', 404);

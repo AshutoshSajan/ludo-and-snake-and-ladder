@@ -48,6 +48,12 @@ dependencies:
   sqlite3: ^3.8.0
   http: ^1.6.0
   crypto: ^3.0.8
+  # Password hashing for the admin accounts (lib/server/auth.dart): one
+  # password hash, adopted for its deliberate slowness — bcrypt's setup
+  # schedule is built to cost real time per password, which PBKDF2 in pure
+  # Dart made painful at OWASP-scale parameters. Pure Dart, so the server's
+  # Dart VM runs it with no native build.
+  bcrypt: ^1.2.0
   # Table voice chat: WebRTC peer-to-peer audio, signalled over the game's
   # WebSocket. dart_webrtc + web are the browser side of that glue
   # (MediaStreamWeb / HTMLAudioElement); both are direct deps because the
