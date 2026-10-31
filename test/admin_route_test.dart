@@ -727,6 +727,11 @@ void main() {
           'the dashboard instead of re-entering the gate',
     );
     expect(find.text('Admin sign in'), findsNothing);
+    // The gate already asked, so the answer seeds the home door's snapshot:
+    // a cold load straight into /admin must not make home ask /admin/me a
+    // second time when it is popped back to.
+    final container = ProviderScope.containerOf(ctx);
+    expect(container.read(adminSessionProvider)?.email, 'root@x.io');
   });
 
   testWidgets('a fresh server lands on /admin/signup from /admin', (

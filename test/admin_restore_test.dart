@@ -123,6 +123,90 @@ void main() {
     expect(container.read(adminSessionProvider)!.email, 'human@x.io');
   });
 
+  test('a rebuilt provider restores again, not just its first build', () async {
+    var asked = 0;
+    final container = _container(
+      _client((_) async {
+        asked++;
+        return _signedIn();
+      }),
+    );
+    // A listener keeps the provider alive across the invalidation, which is
+    // what any real refresh affordance would do.
+    container.listen(adminSessionProvider, (_, _) {});
+    await pumpEventQueue();
+    expect(asked, 1);
+    expect(container.read(adminSessionProvider), isNotNull);
+
+    container.invalidate(adminSessionProvider);
+    await pumpEventQueue();
+
+    expect(asked, 2, reason: 'the rebuild asks the cookie again');
+    expect(
+      container.read(adminSessionProvider),
+      isNotNull,
+      reason: 'the second answer must land too, not be dropped as stale',
+    );
+  });
+
+  test('a 403 on the probe is a dead cookie too', () async {
+    final container = _container(
+      _client(
+        (_) async => http.Response(
+          '{"ok":false,"text":"forbidden"}',
+          403,
+          headers: {'content-type': 'application/json'},
+        ),
+      ),
+    );
+
+    container.read(adminSessionProvider);
+    await pumpEventQueue();
+
+    expect(container.read(adminSessionProvider), isNull);
+  });
+
+  test('an answer without a usable user keeps the door shut', () async {
+    const bodies = [
+      '{"ok":true}', // no user at all
+      '{"ok":true,"user":"nope"}', // wrong shape
+      '{"ok":true,"user":{"name":"Root"}}', // no email to name the door with
+    ];
+    for (final body in bodies) {
+      final container = _container(
+        _client(
+          (_) async => http.Response(
+            body,
+            200,
+            headers: {'content-type': 'application/json'},
+          ),
+        ),
+      );
+      container.read(adminSessionProvider);
+      await pumpEventQueue();
+      expect(container.read(adminSessionProvider), isNull, reason: body);
+    }
+  });
+
+  testWidgets('a server that never answers times out into no door', (
+    tester,
+  ) async {
+    // A black-holed network answers nothing at all, which is neither a 401
+    // nor a connection refusal: without a deadline the door stays undecided
+    // for the OS TCP timeout.
+    final answer = Completer<http.Response>();
+    final container = _container(_client((_) => answer.future));
+
+    container.read(adminSessionProvider);
+    await tester.pump(const Duration(seconds: 6));
+
+    // The late answer must not resurrect the door: the probe already gave up.
+    answer.complete(_signedIn());
+    await tester.pump();
+
+    expect(container.read(adminSessionProvider), isNull);
+  });
+
   test('signing out clears the snapshot the door reads', () async {
     final container = _container(_client((_) async => _signedIn()));
     container.read(adminSessionProvider);
