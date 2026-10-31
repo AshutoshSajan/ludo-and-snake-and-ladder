@@ -14,7 +14,7 @@ const bool adminUiEnabledByBuild = bool.fromEnvironment(
 /// origin rather than http(s), and the flag above covers the rest.
 ///
 /// The sign-in session can only ever come from the gated /admin route, so
-/// this single check is the whole surface: no route, no session, no badges.
+/// this single check is the whole surface: no route, no session, no door.
 bool get isAdminUiAvailable {
   if (!kIsWeb || !adminUiEnabledByBuild) return false;
   final scheme = Uri.base.scheme;

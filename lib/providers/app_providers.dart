@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/core/player_profiles.dart';
+import '../services/admin_session_store.dart';
 import '../services/sound_service.dart';
 import '../services/storage_service.dart';
 
@@ -9,18 +10,31 @@ import '../services/storage_service.dart';
 
 final storageProvider = Provider<StorageService>((ref) => StorageService());
 
-/// The admin session, when signed in at /admin. In-memory only: a refresh
-/// signs out. Watched by the home screen and [PageAppBar] to badge the UI.
+/// The admin session, when signed in at /admin.
+///
+/// The token is what [AdminClient] rides as its Bearer header and what the
+/// /admin surfaces use to re-open the dashboard. It survives a page refresh:
+/// [AdminSessionNotifier] reads a persisted record at build time and writes
+/// through on sign-in/out, so a reload at /admin/dashboard restores the same
+/// operator rather than bouncing to the login form. Watched by the home
+/// screen to keep the admin door beside Settings for signed-in admins.
+///
+/// [expiresAt] is milliseconds-since-epoch, the server's session expiry
+/// reported at login. The server is the source of truth — the field lets the
+/// store drop a dead record without showing a dashboard whose first request
+/// would 401, and any 401 [AdminClient] returns ends the session here too.
 class AdminSession {
   const AdminSession({
     required this.token,
     required this.email,
     required this.name,
+    required this.expiresAt,
   });
 
   final String token;
   final String email;
   final String name;
+  final int expiresAt;
 }
 
 final adminSessionProvider =
@@ -30,11 +44,36 @@ final adminSessionProvider =
 
 class AdminSessionNotifier extends Notifier<AdminSession?> {
   @override
-  AdminSession? build() => null;
+  AdminSession? build() {
+    // A fresh load restores the persisted session (web: localStorage; the
+    // platform stub reads as signed out). An expired or corrupt record is
+    // dropped inside the store, so null here means "no usable session".
+    final record = restoreAdminSession();
+    if (record == null) return null;
+    return AdminSession(
+      token: record.token,
+      email: record.email,
+      name: record.name,
+      expiresAt: record.expiresAt,
+    );
+  }
 
-  void signIn(AdminSession session) => state = session;
+  void signIn(AdminSession session) {
+    state = session;
+    persistAdminSession(
+      AdminAuthRecord(
+        token: session.token,
+        email: session.email,
+        name: session.name,
+        expiresAt: session.expiresAt,
+      ),
+    );
+  }
 
-  void signOut() => state = null;
+  void signOut() {
+    state = null;
+    forgetAdminSession();
+  }
 }
 
 final soundEnabledProvider =

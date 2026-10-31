@@ -9,6 +9,8 @@
 /// room is appended here, so stats survive restarts.
 library;
 
+import 'dart:isolate';
+
 import 'package:sqlite3/sqlite3.dart';
 
 import 'admin_tables.dart';
@@ -161,40 +163,121 @@ class SessionToken {
 /// test can prove which hash a lookup verifies without paying the KDF.
 typedef PasswordVerifier = bool Function(String password, String hash);
 
-/// A hash of a random password that is never revealed: the absent-email
-/// path verifies against it so a missing account spends the same PBKDF2
-/// work as a populated one (CWE-208). Lazy, so the first miss after boot
-/// also pays the one-time cost of minting it; its work factor follows
-/// [defaultPbkdf2Iterations], tracking the production setting rather than
-/// pinning a stale constant.
-final String _absentAccountHash = hashPassword(
-  randomToken(),
-  iterations: defaultPbkdf2Iterations,
-);
+/// Whether [verifier] is the production KDF rather than an injected test
+/// seam. Only the production verifier understands the `pbkdf2$…` format, so
+/// only it gets the worker-isolate treatment and the current work factor;
+/// an injected closure is often cheap on purpose and may capture plain test
+/// state, so it stays inline.
+bool _isProductionVerifier(PasswordVerifier verifier) =>
+    identical(verifier, verifyPassword);
+
+/// The production verify, off the event loop. A [defaultPbkdf2Iterations]
+/// PBKDF2 runs ~4s on this hardware; on the run loop that would freeze
+/// every socket the server holds mid-handshake, so each spend moves to a
+/// short-lived worker isolate. The parameters are copied across, not a
+/// closure over wider state — `password` and `hash` are Strings, and
+/// `verifier` is the library's own top-level function the worker can
+/// reference directly.
+Future<bool> _verifyOffLoop(String password, String hash) =>
+    Isolate.run(() => verifyPassword(password, hash));
+
+/// The production hash, off the event loop, for the same reason.
+Future<String> _hashOffLoop(String password, int iterations) =>
+    Isolate.run(() => hashPassword(password, iterations: iterations));
+
+/// The iteration count recorded inside a stored hash
+/// (`pbkdf2$<iters>$<salt>$<hash>`), or null when the string does not
+/// declare one cleanly. Malformed rows get `null` and are simply never
+/// upgraded.
+int? _storedIterations(String stored) {
+  final parts = stored.split(r'$');
+  if (parts.length != 4 || parts[0] != 'pbkdf2') return null;
+  return int.tryParse(parts[1]);
+}
+
 
 class AdminStore {
-  AdminStore._(this._backend, this._ownsBackend, {PasswordVerifier? verifier})
-    : _verifier = verifier ?? verifyPassword;
+  AdminStore._(
+    this._backend,
+    this._ownsBackend, {
+    PasswordVerifier? verifier,
+    int? kdfIterations,
+  }) : _verifier = verifier ?? verifyPassword,
+       kdfIterations = kdfIterations ?? defaultPbkdf2Iterations;
 
-  factory AdminStore.inMemory({PasswordVerifier? verifier}) =>
-      AdminStore._(SqliteBackend.inMemory(), true, verifier: verifier);
+  factory AdminStore.inMemory({
+    PasswordVerifier? verifier,
+    int? kdfIterations,
+  }) => AdminStore._(SqliteBackend.inMemory(), true, verifier: verifier, kdfIterations: kdfIterations);
 
-  factory AdminStore(String path, {PasswordVerifier? verifier}) =>
-      AdminStore._(SqliteBackend.open(path), true, verifier: verifier);
+  factory AdminStore(String path, {PasswordVerifier? verifier, int? kdfIterations}) =>
+      AdminStore._(
+        SqliteBackend.open(path),
+        true,
+        verifier: verifier,
+        kdfIterations: kdfIterations,
+      );
 
-  factory AdminStore.fromDb(Database db, {PasswordVerifier? verifier}) =>
-      AdminStore._(SqliteBackend.fromDb(db), false, verifier: verifier);
+  factory AdminStore.fromDb(
+    Database db, {
+    PasswordVerifier? verifier,
+    int? kdfIterations,
+  }) => AdminStore._(
+    SqliteBackend.fromDb(db),
+    false,
+    verifier: verifier,
+    kdfIterations: kdfIterations,
+  );
 
   /// Wraps any [SqlBackend] (the caller keeps ownership) — this is how a
   /// Turso-backed deployment gets the same admin surface as SQLite.
   factory AdminStore.fromBackend(
     SqlBackend backend, {
     PasswordVerifier? verifier,
-  }) => AdminStore._(backend, false, verifier: verifier);
+    int? kdfIterations,
+  }) => AdminStore._(backend, false, verifier: verifier, kdfIterations: kdfIterations);
 
   final SqlBackend _backend;
   final bool _ownsBackend;
   final PasswordVerifier _verifier;
+
+  /// This store's password work factor: [defaultPbkdf2Iterations] unless a
+  /// test threads a small value — the same explicit-threading rule the KDF
+  /// itself follows. Three consumers draw from it so one store costs one
+  /// number everywhere: new-user hashes (when a createUser call site passes
+  /// no explicit `iterations`), the absent-email decoy (see [_absentHash]),
+  /// and the rehash-on-login upgrade target.
+  ///
+  /// Production never passes this; tests that flip [adminStore] or use
+  /// `inMemory()` with the real verifier do — the suite otherwise pays a
+  /// full second-scale PBKDF2 per login attempt.
+  final int kdfIterations;
+
+  String? _absentHashCache;
+  Future<String>? _absentHashMinting;
+
+  /// The absent-email decoy hash that [checkCredentials] verifies against
+  /// when no account exists — the countershape of CWE-208: an unregistered
+  /// address must cost the same PBKDF2 work as a wrong password on a real
+  /// one, so the decoy is a hash of a random token nobody stores.
+  ///
+  /// Minted once per store, lazily, inside a worker isolate: before the
+  /// isolate move this was an eagerly-computed top-level final, which
+  /// charged the server boot (and every test that imported the file) the
+  /// full KDF whether or not anyone ever missed an email. With a test
+  /// verifier injected the format is unreadable anyway, so the mint runs at
+  /// one iteration and stays instant.
+  Future<String> get _absentHash {
+    final cached = _absentHashCache;
+    if (cached != null) return Future.value(cached);
+    return _absentHashMinting ??= _hashOffLoop(
+      randomToken(),
+      _isProductionVerifier(_verifier) ? kdfIterations : 1,
+    ).then((hash) {
+      _absentHashCache = hash;
+      return hash;
+    });
+  }
 
   /// Schema is created lazily and memoized: a Turso deployment cannot run
   /// migrations in a constructor. A failed attempt is cleared so the next
@@ -724,7 +807,7 @@ class AdminStore {
     required String password,
     String role = 'user',
     String? seatId,
-    int iterations = defaultPbkdf2Iterations,
+    int? iterations,
     String by = 'system',
   }) async {
     await ensureSchema();
@@ -753,7 +836,10 @@ class AdminStore {
         [
           normalized,
           name.trim().isEmpty ? normalized : name.trim(),
-          hashPassword(password, iterations: iterations),
+          // Off the event loop: with no explicit call-site value this is
+          // [kdfIterations] (the OWASP-floor default in production), a
+          // multi-second spend the server cannot afford on its run loop.
+          await _hashOffLoop(password, iterations ?? kdfIterations),
           role,
           seatId,
           now,
@@ -785,12 +871,43 @@ class AdminStore {
     return row == null ? null : _userFromRow(row);
   }
 
+  /// The stored hash for one account, or null when unknown. A test seam —
+  /// [AuthUser] deliberately carries no hash, and production sees hashes
+  /// only through the verifier — but the work-factor upgrade tests must
+  /// observe what landed in the row: the old rehash-contract bug class
+  /// (password rewritten, format regressions) hides behind a passing
+  /// login otherwise.
+  Future<String?> debugPasswordHash(int userId) async {
+    await ensureSchema();
+    final results = await _backend.run([
+      SqlStatement('SELECT password_hash FROM auth_users WHERE id = ?', [
+        userId,
+      ]),
+    ]);
+    final row = results.first.firstRow;
+    return row?['password_hash'] as String?;
+  }
+
+  /// The absent-email decoy used by [checkCredentials] (test seam, same
+  /// rationale as [debugPasswordHash]): a mint is invisible until a miss
+  /// happens, and the CWE-208 contract — the decoy carries the store's
+  /// work factor — must be observable, not trusted.
+  Future<String> debugAbsentHash() => _absentHash;
+
   /// Null on unknown email OR wrong password — callers must not
   /// distinguish the two (no account enumeration), and the two paths must
   /// not be distinguishable by *timing* either: an absent email still
-  /// runs the password KDF against [_absentAccountHash], so a probe of an
+  /// runs the password KDF against [_absentHash], so a probe of an
   /// unregistered address costs the same PBKDF2 work as a wrong password
   /// on a real one (CWE-208).
+  ///
+  /// Both verification spends run inside a worker isolate when the store
+  /// has the production verifier — a ~4s KDF on the run loop starves every
+  /// live socket the server serves. A successful login against a hash built
+  /// at a lower work factor is opportunistically upgraded (rehashed) to
+  /// [kdfIterations], so legacy rows from the 100k era (and anything the
+  /// store's factor has since risen above) earn the current floor the next
+  /// time the right operator signs in.
   Future<AuthUser?> checkCredentials(String email, String password) async {
     await ensureSchema();
     final results = await _backend.run([
@@ -802,12 +919,43 @@ class AdminStore {
     if (row == null) {
       // Spend the verification work anyway; its result is discarded
       // because there is no account to admit.
-      _verifier(password, _absentAccountHash);
+      if (_isProductionVerifier(_verifier)) {
+        await _verifyOffLoop(password, await _absentHash);
+      } else {
+        _verifier(password, await _absentHash);
+      }
       return null;
     }
     final hash = row['password_hash'] as String;
-    if (!_verifier(password, hash)) return null;
-    return _userFromRow(row);
+    final ok = _isProductionVerifier(_verifier)
+        ? await _verifyOffLoop(password, hash)
+        : _verifier(password, hash);
+    if (!ok) return null;
+    final user = _userFromRow(row);
+    final stored = _storedIterations(hash);
+    if (_isProductionVerifier(_verifier) &&
+        stored != null &&
+        stored < kdfIterations) {
+      // One background-grade spend per operator, the first time they sign
+      // in after a work-factor bump. Awaited, not fire-and-forget: the
+      // login's rate-limit slot is already held for the KDF, and an
+      // unawaited write to auth_users on a busy loop is heads-down the
+      // same failure mode the isolate move exists to avoid.
+      final upgraded = await _hashOffLoop(password, kdfIterations);
+      await _backend.run([
+        SqlStatement(
+          'UPDATE auth_users SET password_hash = ? WHERE id = ?',
+          [upgraded, user.id],
+        ),
+      ]);
+      await _audit(
+        action: 'passwordRehash',
+        seatId: user.email,
+        by: 'login',
+        detail: '$stored -> $kdfIterations',
+      );
+    }
+    return user;
   }
 
   Future<List<AuthUser>> listUsers({int limit = 100}) async {
@@ -840,7 +988,13 @@ class AdminStore {
     );
   }
 
-  static const defaultSessionTtl = Duration(days: 7);
+  /// A fixed 12-hour window measured from session creation: no sliding
+  /// renewal on activity, so an unattended browser loses access within half
+  /// a day at most. The client persists the expiry alongside the token
+  /// (services/admin_session_store.dart) and drops its own copy at the same
+  /// moment; the server stays the source of truth through the lazy expiry
+  /// delete below.
+  static const defaultSessionTtl = Duration(hours: 12);
 
   Future<SessionToken> createSession(
     int userId, {

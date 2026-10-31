@@ -16,9 +16,18 @@ import 'package:crypto/crypto.dart';
 
 import '../shared/admin_credentials.dart';
 
-/// Production work factor. Tests pass a small value explicitly — never
-/// mutate this global from tests; thread the parameter instead.
-const defaultPbkdf2Iterations = 100000;
+/// Production work factor: PBKDF2-HMAC-SHA256 at 600,000 iterations —
+/// OWASP's recommended floor for this primitive. Measured on this repo's
+/// server hardware with a one-off `dart run` bench: a 100k hash cost ~0.7s
+/// and a 600k hash ~4s on the VM toolchain, which is exactly why every
+/// production hashing/verification runs through `Isolate.run` (see
+/// admin_store.dart) instead of the event loop — a 4-second login KDF on
+/// the main isolate would freeze every live player socket the server is
+/// serving.
+///
+/// Tests pass a small value explicitly — never mutate this global from
+/// tests; thread the parameter instead.
+const defaultPbkdf2Iterations = 600000;
 
 /// Minimum accepted password length for new users / resets. The admin form
 /// uses the same constant through `shared/admin_credentials.dart`.

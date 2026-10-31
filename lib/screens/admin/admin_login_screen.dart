@@ -20,8 +20,10 @@ import 'admin_native_form.dart';
 export 'admin_auth_mode.dart';
 
 /// Admin sign-in at /admin: email + password (or the first-run setup that
-/// creates the account, when the server says none exists). The session
-/// token lives in memory only and rides as a Bearer header.
+/// creates the account, when the server says none exists). The session token
+/// rides as a Bearer header and persists through the session store, so a
+/// page refresh (or a reopen) lands the operator back on the dashboard
+/// instead of this form — see `services/admin_session_store.dart`.
 class AdminLoginScreen extends ConsumerStatefulWidget {
   const AdminLoginScreen({
     super.key,
@@ -42,6 +44,12 @@ class AdminLoginScreen extends ConsumerStatefulWidget {
 }
 
 class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
+  // A session without the server's expiresAt (very old server) still gets a
+  // persisted record — mirroring AdminStore.defaultSessionTtl server-side.
+  // The server remains the source of truth; a longer real session that gets
+  // stored shorter just means one earlier re-login, never a security slip.
+  static const _fallbackSessionTtl = Duration(hours: 12);
+
   final _emailCtrl = TextEditingController();  final _nameCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
@@ -264,6 +272,12 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
             token: client.token ?? '',
             email: '${user['email'] ?? email}',
             name: '${user['name'] ?? ''}',
+            // The server reports its session expiry at login; the persisted
+            // record carries the same value, so a restored session keeps the
+            // clock the server set rather than one the client guessed.
+            expiresAt: (authed['expiresAt'] as num?)?.toInt() ??
+                DateTime.now().millisecondsSinceEpoch +
+                    _fallbackSessionTtl.inMilliseconds,
           ),
         );
     replaceAppScreen<void>(
