@@ -157,7 +157,6 @@ void main() {
       final seen = <Uri>[];
       final client = AdminClient(
         serverUrl: 'wss://game.example/ws',
-        token: 't',
         httpClient: MockClient((req) async {
           seen.add(req.url);
           if (req.url.path == '/admin/feedback') {

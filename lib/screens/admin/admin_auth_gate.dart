@@ -1,14 +1,12 @@
 /// The /admin front door that knows nothing yet.
 ///
-/// Deep links to `/admin` (and cold loads of `/admin/dashboard`, whose live
-/// client died with the tab that owned it) arrive before the app knows which
-/// auth story is true: has the club's first admin been created or not?
-/// Instead of guessing — a wrong guess paints a New Password form on a
-/// server that wants just email+password, or asks a stranger to create the
-/// first admin — this gate asks the server one question (`/admin/status`)
-/// and hands the tab to the URL that matches: `/admin/login` when an
-/// account exists, `/admin/signup` when the first one is still to be
-/// created.
+/// Deep links to `/admin` arrive before the app knows which auth story is
+/// true: has the club's first admin been created or not? Instead of
+/// guessing — a wrong guess paints a New Password form on a server that
+/// wants just email+password, or asks a stranger to create the first
+/// admin — this gate asks the server one question (`/admin/status`) and
+/// hands the tab to the URL that matches: `/admin/login` when an account
+/// exists, `/admin/signup` when the first one is still to be created.
 ///
 /// The handoff happens through [replaceAppScreen], so the browser URL lands
 /// on the real auth page (deep-linkable, refreshable) and "back" skips the
@@ -16,13 +14,12 @@
 /// card, worded like one, because a dead API is a service problem, not a
 /// credentials problem.
 ///
-/// A cold load of `/admin/dashboard` skips that story entirely when a
-/// persisted session still validates client-side (see
-/// `services/admin_session_store.dart`): the stored token is re-entered into
-/// a client and the provider, and the operator is back where they were.
-/// The server is the source of truth on top of that — a token the server has
-/// revoked or expired 401s on the dashboard's first read and the dashboard
-/// throws the operator back to the login form itself.
+/// There is deliberately no client-side restore arm here anymore: the
+/// session credential is the browser's HttpOnly cookie, kept and re-presented
+/// by the browser itself, so `/admin/dashboard` cold loads mount the
+/// dashboard directly (see `app_router.dart`) and the dashboard's first
+/// authenticated read is the proof — a dead cookie 401s immediately and the
+/// death watch lands the login form.
 ///
 /// Compiled only on the web (`app_router.dart` conditional import); native
 /// builds get [admin_auth_gate_stub.dart]'s placeholder and the route arms
@@ -34,13 +31,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_router.dart';
 import '../../app_routes.dart';
-import '../../providers/app_providers.dart';
 import '../../services/admin_client.dart';
-import '../../services/admin_session_store.dart';
 import '../../services/server_url.dart';
 import '../../ui/club_widgets.dart';
 import '../../ui/theme.dart';
-import 'admin_dashboard_screen.dart';
 import 'admin_login_screen.dart';
 
 class AdminAuthGate extends ConsumerStatefulWidget {
@@ -82,36 +76,9 @@ class _AdminAuthGateState extends ConsumerState<AdminAuthGate> {
         );
         return;
       }
-      final restored = restoreAdminSession();
-      if (restored != null) {
-        // The persisted session outlives the tab this client belonged to:
-        // re-seat the token into a fresh client and the provider, then put
-        // the operator back on the dashboard at the same URL. A dead token
-        // (revoked server-side, clock drifted) cannot be told apart from a
-        // live one here without an extra request — the dashboard's first
-        // read is that request, and a 401 there ends the session and lands
-        // the login form, so no second status round-trip is spent.
-        final dashClient = widget.clientFactory?.call() ?? _client;
-        dashClient.token = restored.token;
-        ref.read(adminSessionProvider.notifier).signIn(
-          AdminSession(
-            token: restored.token,
-            email: restored.email,
-            name: restored.name,
-            expiresAt: restored.expiresAt,
-          ),
-        );
-        replaceAppScreen<void>(
-          context,
-          name: AppRoutes.adminDashboard,
-          builder: (_) =>
-              AdminDashboardScreen(client: dashClient),
-        );
-        return;
-      }
-      // No usable session: the URL and server truth agree by construction
+      // No setup pending: the URL and server truth agree by construction
       // from here on — the replaced route names the mode, the screen mounts
-      // knowing it.
+      // knowing it. Restore is the cookie's job, not the gate's.
       replaceAppScreen<void>(
         context,
         name: AppRoutes.adminLogin,

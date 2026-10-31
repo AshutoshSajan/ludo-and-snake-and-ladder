@@ -94,6 +94,7 @@ ServerPersistence openPersistence({
   required Map<String, String> env,
   required String dbPath,
   http.Client? tursoClient,
+  Duration? sessionTtl,
 }) {
   // Presence of the leaderboard credentials is the single mode switch:
   // every other Turso store reads the same two variables, so this one
@@ -103,15 +104,16 @@ ServerPersistence openPersistence({
     client: tursoClient,
   );
   if (leaderboard != null) {
-    return _openTurso(env, leaderboard, tursoClient);
+    return _openTurso(env, leaderboard, tursoClient, sessionTtl);
   }
-  return _openLocal(dbPath);
+  return _openLocal(dbPath, sessionTtl);
 }
 
 ServerPersistence _openTurso(
   Map<String, String> env,
   LeaderboardStore leaderboard,
   http.Client? tursoClient,
+  Duration? sessionTtl,
 ) {
   final client = tursoClient ?? http.Client();
   final ownsClient = tursoClient == null;
@@ -131,7 +133,7 @@ ServerPersistence _openTurso(
     return ServerPersistence._(
       usesTurso: true,
       leaderboard: leaderboard,
-      admin: AdminStore.fromBackend(backend),
+      admin: AdminStore.fromBackend(backend, sessionTtl: sessionTtl),
       reports: ReportStore.fromBackend(backend),
       friends: friends,
       rooms: rooms,
@@ -150,7 +152,7 @@ ServerPersistence _openTurso(
   }
 }
 
-ServerPersistence _openLocal(String dbPath) {
+ServerPersistence _openLocal(String dbPath, Duration? sessionTtl) {
   // One connection for admin, feedback and friends; the leaderboard store
   // keeps its own handle exactly as it did before the factory existed.
   final db = sqlite3.open(dbPath);
@@ -159,7 +161,7 @@ ServerPersistence _openLocal(String dbPath) {
     return ServerPersistence._(
       usesTurso: false,
       leaderboard: leaderboard,
-      admin: AdminStore.fromDb(db),
+      admin: AdminStore.fromDb(db, sessionTtl: sessionTtl),
       reports: ReportStore.fromDb(db),
       friends: SqliteFriendStore.fromDb(db),
       rooms: InMemoryRoomRegistry(),

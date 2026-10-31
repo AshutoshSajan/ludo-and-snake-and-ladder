@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../engine/core/player_profiles.dart';
-import '../services/admin_session_store.dart';
 import '../services/sound_service.dart';
 import '../services/storage_service.dart';
 
@@ -12,29 +11,24 @@ final storageProvider = Provider<StorageService>((ref) => StorageService());
 
 /// The admin session, when signed in at /admin.
 ///
-/// The token is what [AdminClient] rides as its Bearer header and what the
-/// /admin surfaces use to re-open the dashboard. It survives a page refresh:
-/// [AdminSessionNotifier] reads a persisted record at build time and writes
-/// through on sign-in/out, so a reload at /admin/dashboard restores the same
-/// operator rather than bouncing to the login form. Watched by the home
-/// screen to keep the admin door beside Settings for signed-in admins.
+/// The session's credential is the browser's HttpOnly cookie and never
+/// lives here — this provider holds only the account snapshot the login
+/// response carried. Watched by the home screen to keep the admin door
+/// beside Settings for signed-in admins, and by the dashboard to end the
+/// session when the server stops accepting the cookie (any 401 evades to
+/// the login screen through [AdminSessionNotifier.signOut]).
 ///
-/// [expiresAt] is milliseconds-since-epoch, the server's session expiry
-/// reported at login. The server is the source of truth — the field lets the
-/// store drop a dead record without showing a dashboard whose first request
-/// would 401, and any 401 [AdminClient] returns ends the session here too.
+/// There is no persistent restore: a page refresh re-enters the dashboard
+/// with the cookie it kept, and the dashboard's first authenticated read
+/// (its death watch on `/admin/me`) both proves the cookie and names the
+/// operator. A momentary `null` state is therefore signed-nobody, and not
+/// a signal to bounce anybody — the screens that care about identity read
+/// it off the /admin/me response.
 class AdminSession {
-  const AdminSession({
-    required this.token,
-    required this.email,
-    required this.name,
-    required this.expiresAt,
-  });
+  const AdminSession({required this.email, required this.name});
 
-  final String token;
   final String email;
   final String name;
-  final int expiresAt;
 }
 
 final adminSessionProvider =
@@ -45,35 +39,16 @@ final adminSessionProvider =
 class AdminSessionNotifier extends Notifier<AdminSession?> {
   @override
   AdminSession? build() {
-    // A fresh load restores the persisted session (web: localStorage; the
-    // platform stub reads as signed out). An expired or corrupt record is
-    // dropped inside the store, so null here means "no usable session".
-    final record = restoreAdminSession();
-    if (record == null) return null;
-    return AdminSession(
-      token: record.token,
-      email: record.email,
-      name: record.name,
-      expiresAt: record.expiresAt,
-    );
+    // No restore stage: the cookie the browser kept IS the restored
+    // session, and the dashboard proves it on its first read. This build
+    // answers null every fresh process — the only consumers that persist
+    // a session are its screens via the server's Set-Cookie.
+    return null;
   }
 
-  void signIn(AdminSession session) {
-    state = session;
-    persistAdminSession(
-      AdminAuthRecord(
-        token: session.token,
-        email: session.email,
-        name: session.name,
-        expiresAt: session.expiresAt,
-      ),
-    );
-  }
+  void signIn(AdminSession session) => state = session;
 
-  void signOut() {
-    state = null;
-    forgetAdminSession();
-  }
+  void signOut() => state = null;
 }
 
 final soundEnabledProvider =

@@ -20,10 +20,11 @@ import 'admin_native_form.dart';
 export 'admin_auth_mode.dart';
 
 /// Admin sign-in at /admin: email + password (or the first-run setup that
-/// creates the account, when the server says none exists). The session token
-/// rides as a Bearer header and persists through the session store, so a
-/// page refresh (or a reopen) lands the operator back on the dashboard
-/// instead of this form — see `services/admin_session_store.dart`.
+/// creates the account, when the server says none exists). On success the
+/// server attaches the session as an HttpOnly cookie that the browser
+/// stores, re-sends and expires itself — no token is readable or persisted
+/// by this screen — and a refresh (or a reopen) re-enters the dashboard
+/// through the cookie the browser kept.
 class AdminLoginScreen extends ConsumerStatefulWidget {
   const AdminLoginScreen({
     super.key,
@@ -44,12 +45,6 @@ class AdminLoginScreen extends ConsumerStatefulWidget {
 }
 
 class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
-  // A session without the server's expiresAt (very old server) still gets a
-  // persisted record — mirroring AdminStore.defaultSessionTtl server-side.
-  // The server remains the source of truth; a longer real session that gets
-  // stored shorter just means one earlier re-login, never a security slip.
-  static const _fallbackSessionTtl = Duration(hours: 12);
-
   final _emailCtrl = TextEditingController();  final _nameCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
@@ -269,15 +264,8 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
         .read(adminSessionProvider.notifier)
         .signIn(
           AdminSession(
-            token: client.token ?? '',
             email: '${user['email'] ?? email}',
             name: '${user['name'] ?? ''}',
-            // The server reports its session expiry at login; the persisted
-            // record carries the same value, so a restored session keeps the
-            // clock the server set rather than one the client guessed.
-            expiresAt: (authed['expiresAt'] as num?)?.toInt() ??
-                DateTime.now().millisecondsSinceEpoch +
-                    _fallbackSessionTtl.inMilliseconds,
           ),
         );
     replaceAppScreen<void>(
@@ -654,8 +642,11 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              'Sessions stay in memory. Closing this tab signs '
-                              'you out.',
+                              'Your sign-in rides a secure browser cookie '
+                              'and expires on its own (2 hours by '
+                              'default, the server’s configured window). '
+                              'Clearing the browser’s cookies signs you '
+                              'out.',
                               textAlign: TextAlign.center,
                               style: const TextStyle(
                                 fontFamily: AppFonts.body,
