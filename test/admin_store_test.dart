@@ -104,95 +104,126 @@ void main() {
     });
   });
 
-  group('AdminStore: sessions & KDF hardening', () {
-    test('a default session lives one fixed 12-hour window', () async {
-      // The window the client's persisted record trusts as its worst case —
-      // "few hours" per the product ask. Fixed from creation, no renewal.
-      final store = AdminStore.inMemory(kdfIterations: 10);
+  group('AdminStore: credentials at rest (bcrypt)', () {
+    test('new passwords are digested at the store cost', () async {
+      // The stored row is the bcrypt string itself: salt AND cost are
+      // self-declared in it, so verification needs nothing fetched beside
+      // it. The recording seam receives the stored hash on a real
+      // account's verification — the `04` is bcrypt's two-digit rendering
+      // of log-rounds 4 (the value threaded for speed; production uses 12
+      // through [defaultBcryptRounds]).
+      final hashesSeen = <String>[];
+      final store = AdminStore.inMemory(
+        bcryptRounds: 4,
+        verifier: (password, hash) {
+          hashesSeen.add(hash);
+          return true;
+        },
+      );
+      addTearDown(store.close);
+      await store.createUser(
+        email: 'root@x.io',
+        name: 'Root',
+        password: 'long-enough-1',
+        role: 'admin',
+      );
+      expect(await store.checkCredentials('root@x.io', 'long-enough-1'),
+          isNotNull);
+      expect(hashesSeen.single, startsWith(r'$2a$04$'));
+    });
+
+    test('same password, two accounts, two different salts', () async {
+      final hashesSeen = <String>[];
+      final store = AdminStore.inMemory(
+        bcryptRounds: 4,
+        verifier: (password, hash) {
+          hashesSeen.add(hash);
+          return true;
+        },
+      );
+      addTearDown(store.close);
+      await store.createUser(
+          email: 'a@x.io', name: 'A', password: 'long-enough-1');
+      await store.createUser(
+          email: 'b@x.io', name: 'B', password: 'long-enough-1');
+      await store.checkCredentials('a@x.io', 'long-enough-1');
+      await store.checkCredentials('b@x.io', 'long-enough-1');
+      expect(hashesSeen, hasLength(2));
+      expect(hashesSeen[0], isNot(equals(hashesSeen[1])),
+          reason: 'a fresh random salt per digest: identical passwords '
+              'must not share a stored string');
+    });
+  });
+
+  group('AdminStore: the session TTL knob', () {
+    test('a default store sessions for the two-hour window', () async {
+      // The window the login cookie's Max-Age mirrors — set from
+      // ADMIN_SESSION_TTL_HOURS at boot, 2h when the environment is quiet.
+      final store = AdminStore.inMemory(bcryptRounds: 4);
+      addTearDown(store.close);
+      expect(AdminStore.defaultSessionTtl, const Duration(hours: 2));
+      expect(store.sessionTtl, AdminStore.defaultSessionTtl);
+    });
+
+    test('createSessionAt stamps every row from the one store clock', () async {
+      // [atMs] is injectable so the stamp is pinned, not flaky with real
+      // time: expiresAt = at + store.sessionTtl, exactly what the cookie
+      // handler mirrors as Max-Age.
+      final store = AdminStore.inMemory(
+        bcryptRounds: 4,
+        sessionTtl: const Duration(hours: 3),
+      );
+      addTearDown(store.close);
       final user = await store.createUser(
         email: 'root@x.io',
         name: 'Root',
         password: 'long-enough-1',
         role: 'admin',
-        iterations: 10,
       );
-      final before = DateTime.now().millisecondsSinceEpoch;
+      final atMs = DateTime.now().millisecondsSinceEpoch;
+      final session = await store.createSessionAt(user.id, atMs);
+      expect(
+        session.expiresAt,
+        atMs + const Duration(hours: 3).inMilliseconds,
+      );
+      expect((await store.validateSession(session.token))?.id, user.id);
+    });
+
+    test('adminSessionTtlFromEnv: unset equals 2h, whole hours only', () {
+      final twoHours = const Duration(hours: 2);
+      expect(AdminStore.adminSessionTtlFromEnv(null), twoHours);
+      expect(AdminStore.adminSessionTtlFromEnv(''), twoHours);
+      expect(AdminStore.adminSessionTtlFromEnv('   '), twoHours);
+      expect(AdminStore.adminSessionTtlFromEnv('2'), twoHours);
+      expect(AdminStore.adminSessionTtlFromEnv(' 2 '), twoHours,
+          reason: 'the deployment layer will hand over spaces some day');
+      expect(AdminStore.adminSessionTtlFromEnv('24'), const Duration(hours: 24));
+
+      // Everything else refuses to boot in main(): a silent misread would
+      // stretch or shorten every admin's window at once.
+      expect(AdminStore.adminSessionTtlFromEnv('2.5'), isNull);
+      expect(AdminStore.adminSessionTtlFromEnv('0'), isNull);
+      expect(AdminStore.adminSessionTtlFromEnv('-1'), isNull);
+      expect(AdminStore.adminSessionTtlFromEnv('abc'), isNull);
+      expect(AdminStore.adminSessionTtlFromEnv('2h'), isNull);
+    });
+
+    test('a session dies when its store window says so', () async {
+      final store = AdminStore.inMemory(
+        bcryptRounds: 4,
+        sessionTtl: const Duration(milliseconds: 1),
+      );
+      addTearDown(store.close);
+      final user = await store.createUser(
+        email: 'short@x.io',
+        name: 'S',
+        password: 'long-enough-1',
+      );
       final session = await store.createSession(user.id);
-      final expected = before + const Duration(hours: 12).inMilliseconds;
-      // Sequence + clock jitter inside a couple seconds is fine; a 7-day
-      // or renewal-on-read window would blow far past it.
-      expect(
-        (session.expiresAt - expected).abs(),
-        lessThan(5000),
-      );
-    });
-
-    test('a user created without an explicit work factor gets the store '
-        'factor', () async {
-      final store = AdminStore.inMemory(kdfIterations: 1000);
-      await store.createUser(
-        email: 'isolate@x.io',
-        name: 'Iso',
-        password: 'long-enough-1',
-      );
-      final user = (await store.findUserByEmail('isolate@x.io'))!;
-      expect(
-        await store.debugPasswordHash(user.id),
-        startsWith('pbkdf2\$1000\$'),
-        reason: 'no call-site iteration = kdfIterations, whatever worker '
-            'computed it',
-      );
-    });
-
-    test('signing in upgrades a hash minted below the store factor', () async {
-      final store = AdminStore.inMemory(kdfIterations: 1000);
-      final original = await store.createUser(
-        email: 'old@x.io',
-        name: 'Old',
-        password: 'long-enough-1',
-        // A row from a lower-work-factor era.
-        iterations: 500,
-      );
-      expect(
-        await store.debugPasswordHash(original.id),
-        startsWith('pbkdf2\$500\$'),
-      );
-
-      final user = await store.checkCredentials('old@x.io', 'long-enough-1');
-      expect(user, isNotNull);
-      final upgraded = await store.debugPasswordHash(user!.id);
-      expect(upgraded, startsWith('pbkdf2\$1000\$'),
-          reason: 'the first credential check rewrites the row at the '
-              'store factor — the password itself is unchanged');
-      // ...and the rewritten row still verifies the same password.
-      expect(
-        await store.checkCredentials('old@x.io', 'long-enough-1'),
-        isNotNull,
-      );
-      expect(
-        await store.checkCredentials('old@x.io', 'nope-nope-1'),
-        isNull,
-      );
-    });
-
-    test('signing in never rewrites a hash already at the store factor',
-        () async {
-      final store = AdminStore.inMemory(kdfIterations: 1000);
-      final seeded = await store.createUser(
-        email: 'current@x.io',
-        name: 'Cur',
-        password: 'long-enough-1',
-      );
-      final before = await store.debugPasswordHash(seeded.id);
-      expect(
-        await store.checkCredentials('current@x.io', 'long-enough-1'),
-        isNotNull,
-      );
-      expect(
-        await store.debugPasswordHash(seeded.id),
-        before,
-        reason: 'no churn per login: same factor = no write',
-      );
+      await Future<void>.delayed(const Duration(milliseconds: 15));
+      expect(await store.validateSession(session.token), isNull,
+          reason: 'expiry is enforced on read, and the dead row is deleted '
+              'in the same sight');
     });
   });
 }
