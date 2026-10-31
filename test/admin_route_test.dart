@@ -696,6 +696,39 @@ void main() {
     );
   });
 
+  testWidgets('a live cookie resumes the dashboard from /admin', (
+    tester,
+  ) async {
+    // The reload regression: the cookie is HttpOnly, so the page cannot
+    // read it — and the gate used to decide from /admin/status alone, which
+    // says an account exists, not whether this browser holds a live
+    // session. Every refresh landed on the sign-in form while the server
+    // still honored the cookie. The gate must ask /admin/me.
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: AdminAuthGate(clientFactory: _goodApi(false, signedIn: true)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Admin dashboard'),
+      findsOneWidget,
+      reason: 'a valid session cookie must not be asked to sign in again',
+    );
+    final ctx = tester.element(find.text('Admin dashboard'));
+    expect(
+      ModalRoute.of(ctx)?.settings.name,
+      '/admin/dashboard',
+      reason: 'the dashboard keeps its own URL so the next refresh resumes '
+          'the dashboard instead of re-entering the gate',
+    );
+    expect(find.text('Admin sign in'), findsNothing);
+  });
+
   testWidgets('a fresh server lands on /admin/signup from /admin', (
     tester,
   ) async {
@@ -721,6 +754,15 @@ void main() {
       serverUrl: 'ws://localhost:8080/ws',
       httpClient: MockClient((request) async {
         if (!healthy) return http.Response('unavailable', 503);
+        if (request.url.path == '/admin/me') {
+          // Reachable, but this browser holds no session: the retry lands
+          // on the sign-in form, not the dashboard.
+          return http.Response(
+            jsonEncode({'ok': false, 'text': 'session required'}),
+            401,
+            headers: {'content-type': 'application/json'},
+          );
+        }
         return http.Response(
           jsonEncode({'setupRequired': false}),
           200,
@@ -795,17 +837,43 @@ String _currentRouteName(WidgetTester tester) {
   return ModalRoute.of(ctx)?.settings.name ?? 'none';
 }
 
-/// The status half of the fake API, shared by the gate tests.
-AdminClient Function() _goodApi(bool setupRequired) {
+/// The status + session half of the fake API, shared by the gate tests.
+/// [signedIn] is the browser's cookie in server terms: `/admin/me` answers
+/// 200 with the account a live session resolves to, while `false` answers
+/// 401 the way an expired or revoked session does.
+AdminClient Function() _goodApi(bool setupRequired, {bool signedIn = false}) {
   return () => AdminClient(
     serverUrl: 'ws://localhost:8080/ws',
     httpClient: MockClient((request) async {
-      if (request.url.path == '/admin/status') {
-        return http.Response(
-          jsonEncode({'setupRequired': setupRequired}),
-          200,
-          headers: {'content-type': 'application/json'},
-        );
+      switch (request.url.path) {
+        case '/admin/status':
+          return http.Response(
+            jsonEncode({'setupRequired': setupRequired}),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        case '/admin/me':
+          if (!signedIn) {
+            return http.Response(
+              jsonEncode({'ok': false, 'text': 'session required'}),
+              401,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'ok': true,
+              'user': {'email': 'root@x.io', 'name': 'Root'},
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        case '/admin/overview':
+          return http.Response(
+            jsonEncode({'ok': true}),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
       }
       return http.Response('{}', 404);
     }),
