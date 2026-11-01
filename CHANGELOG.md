@@ -20,6 +20,7 @@ and this project is maintained with [git-cliff](https://git-cliff.org).
 - Docs(env): TRUSTED_PROXIES replaces the loopback default wholesale (CWE-307)
 - Docs: clarify authentication, media, voice, and automation contracts
 ### Fixed
+- Fix(admin): keep the door probe alive across rebuilds
 - Fix(admin): restore the home admin door after a refresh
 - Fix(admin): keep the session across a reload
 - Fix(admin): PBKDF2 at the OWASP floor on worker isolates; 12h fixed sessions
